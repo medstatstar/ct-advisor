@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1 (2026-08-02) — README anglicization
+
+- Anglicized the English README (`README.md`): removed all residual Chinese text (example trigger phrases, the Chinese dialogue in the language-switch demo, the `⚠️ 官方核实` marker, and the bilingual author byline) so the English page is English-only. The Chinese README (`README_zh-CN.md`) remains the Chinese counterpart.
+- Aligned the README version badge to `0.8.0`.
+- No logic / workflow changes.
+
 ## 0.8.0 (2026-08-02) — init version
 
 - Initial public release of **ct-advisor**, the unified conversation entry point for the `ct-*` clinical-trial skill family.

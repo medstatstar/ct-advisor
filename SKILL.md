@@ -3,7 +3,7 @@ displayName: 临床试验顾问 / Clinical Trial Advisor
 name: ct-advisor
 cn_name: 临床试验顾问
 slug: ct-advisor
-version: 0.8.0
+version: 0.8.1
 triggers:
   - "ct console"
   - "ct 控制台"
