@@ -1,6 +1,6 @@
 # Clinical Trial Advisor (ct-advisor)
 
-[🇨🇳 中文 (Chinese)](./README_zh-CN.md) | [🇺🇸 English (Current)](#)
+[🇨🇳 Chinese](./README_zh-CN.md) | [🇺🇸 English (Current)](#)
 
 <div align="center">
 <img src="assets/icon.svg" width="240" height="240" alt="ct-advisor logo"/>
@@ -36,7 +36,7 @@ Below are 6 real conversational examples ordered from simple to advanced. Each s
 
 **Assistant replies (sketch):** > Routing you to **ct-registry** (CT.gov + WHO ICTRP + CDE + EU-CTR + ChiCTR + ISRCTN + DRKS). Here is the normalized landscape — N trials, phase mix, region mix, top sponsors — with each row labeled "Data source: ct-registry on <date>".
 
-**📌 Get the real data:** By default the advisor shows the **search plan** (which sources, which keywords) and asks you to confirm. Say **"please fetch the data now"** (or "请直接检索") and it actually calls the sibling skill and returns the live landscape.
+**📌 Get the real data:** By default the advisor shows the **search plan** (which sources, which keywords) and asks you to confirm. Say **"please fetch the data now"** and it actually calls the sibling skill and returns the live landscape.
 
 ### Example 3 · A broad competitive-intel ask (three sources stitched in-house ⭐) **You say:** > Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature.
 
@@ -76,9 +76,9 @@ Below are 6 real conversational examples ordered from simple to advanced. Each s
 
 **📌 Note:** When you say "not sure what I want", the advisor uses **branch-by-branch probing (grill-me)** instead of guessing or dumping a menu. Once clarified, it routes to the right workflow or data skill.
 
-### Example 6 · Switch the output language **You say:** > 用中文回复。
+### Example 6 · Switch the output language **You say:** > Reply in English.
 
-**Assistant replies (sketch):** > 好的，后续用中文作答。（输出语言默认跟随系统：中文系统→中文，其他→英文；随时可用一句话强制切换。）
+**Assistant replies (sketch):** > Sure, I'll answer in English from now on. (Output language follows your OS by default — Chinese OS → Chinese, otherwise English — and you can force-switch anytime with one sentence.)
 
 **📌 Note:** Output language follows your OS setting by default; force-switch anytime with one sentence.
 
@@ -123,13 +123,13 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 ## 3. First-Time FAQ
 
-**Q: I only gave a partial description — will it still help?** A: Yes. For methodology it answers from the knowledge pack with whatever you provide, and flags anything it can't verify as `⚠️ 官方核实` (officially verify). For data asks it confirms the search scope with you before fetching.
+**Q: I only gave a partial description — will it still help?** A: Yes. For methodology it answers from the knowledge pack with whatever you provide, and flags anything it can't verify as `⚠️ needs official verification`. For data asks it confirms the search scope with you before fetching.
 
 **Q: How are data sources labeled in the answer?** A: Every data-grounded claim carries a "Data source: ct-xxx on <date>" label, so you can trace each number back to the sibling skill that produced it.
 
-**Q: It only shows a plan, not the live data. How do I get the actual results?** A: By default the advisor shows the **routing / search plan** first (which skill, which sources, which keywords) and asks you to confirm. Say **"please fetch the data now"** (or "请直接检索") and it actually calls the sibling skill and returns the live results. This is the safe default — see the plan, then run once you're confident.
+**Q: It only shows a plan, not the live data. How do I get the actual results?** A: By default the advisor shows the **routing / search plan** first (which skill, which sources, which keywords) and asks you to confirm. Say **"please fetch the data now"** and it actually calls the sibling skill and returns the live results. This is the safe default — see the plan, then run once you're confident.
 
-**Q: On a Chinese system, is the output in Chinese?** A: Yes. Output language follows your OS setting by default (Chinese on a Chinese-OS, English otherwise), and you can force-switch anytime with one sentence (e.g. "用中文回复" / "switch to English").
+**Q: On a Chinese system, is the output in Chinese?** A: Yes. Output language follows your OS setting by default (Chinese on a Chinese-OS, English otherwise), and you can force-switch anytime with one sentence (e.g. "switch to English").
 
 **Q: How is the full competitive-intel brief generated now?** A: The advisor calls **ct-registry + ct-safety + ct-literature** once each and **stitches the Strategic Brief itself** — no separate `ct-pipeline` orchestrator. This keeps the same three-source coverage while removing the extra dependency.
 
@@ -139,9 +139,9 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 ## 4. Safety & Preview
 
-- **What is Safe Preview:** By default the advisor only **shows the plan** (which workflow / which sibling skill / which sources) and answers methodology from its knowledge pack — it does **not** auto-fire the sibling-data retrieval. Say **"please fetch the data now"** (or "请直接检索") to trigger the real call; say **"just show the plan"** to keep previewing.
+- **What is Safe Preview:** By default the advisor only **shows the plan** (which workflow / which sibling skill / which sources) and answers methodology from its knowledge pack — it does **not** auto-fire the sibling-data retrieval. Say **"please fetch the data now"** to trigger the real call; say **"just show the plan"** to keep previewing.
 - **No secrets, local-first:** The advisor never exposes personal info, subject data, unpublished project data, private paths, or credentials. Methodology runs with zero outbound traffic.
-- **Traceable, not fabricated:** Every factual / normative claim carries a source citation or an `⚠️ 官方核实` marker; it never fills factual gaps with fluent prose.
+- **Traceable, not fabricated:** Every factual / normative claim carries a source citation or an `⚠️ needs official verification` marker; it never fills factual gaps with fluent prose.
 - Outputs are for reference only; validate against official sources before regulatory submissions.
 
 ---
@@ -194,9 +194,9 @@ python3 scripts/menu.py --tier data_skill --human --lang zh   # preview one tier
 
 ---
 
-**Version**: v0.7.12 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.8.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
-For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang / 张文彤).
+For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang).
 
 ---
 
@@ -209,4 +209,4 @@ For feature requests, bug reports, or other feedback, please contact the author 
 
 > If you do have a genuine need for these confidential skills, please contact the author to request custom installation.
 
-> 📧 Contact: medstatstar@gmail.com (Wintone Zhang / 张文彤)
+> 📧 Contact: medstatstar@gmail.com (Wintone Zhang)
