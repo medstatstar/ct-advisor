@@ -1,8 +1,9 @@
 """QASessionStore 适配层（seam）：沉淀问答，供后续检索/复盘/训练。
 
-- JsonlStore：本地模式，追加写 data/qa_log.jsonl（开发/自测用，含引用与反馈）。
+- 默认 NoOpStore：**不写任何文件**（隐私优先，零本地残留）。
+- JsonlStore：需显式配置 qa_store.mode=local 才启用，追加写 data/qa_log.jsonl（开发/自测用，含引用与反馈）。
 - RemoteDbStore：未来模式，写远端 DB（问答沉淀 + 更多数据参考）。当前为桩。
-每次回答都 emit 一条结构化 QARecord，与 backend 实现无关。
+emit 一条结构化 QARecord 与 backend 实现无关；但除非显式开启，否则不会被持久化。
 """
 from __future__ import annotations
 
@@ -60,3 +61,9 @@ class RemoteDbStore(QASessionStore):
 
     def log(self, record: QARecord) -> None:
         raise NotImplementedError("RemoteDbStore 尚未接入：配置 config.json 的 qa_store.remote_dsn 并实现 _insert()。")
+
+
+class NoOpStore(QASessionStore):
+    """隐私默认模式：丢弃所有记录，不写磁盘、不外发。"""
+    def log(self, record: QARecord) -> None:
+        return None

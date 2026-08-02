@@ -22,7 +22,7 @@ ct-advisor is built for three groups:
 
 ## 1. How to Use It in a Chat (the Core)
 
-ct-advisor is a **conversational skill**: you simply tell the assistant what you're working on — no commands, no parameter names to remember. As a WorkBuddy skill it **auto-loads with no extra installation**.
+ct-advisor is a **conversational skill**: you simply tell the assistant what you're working on — no commands, no parameter names to remember. Once installed as a WorkBuddy skill, you invoke it in a chat via the Skill tool; there is no extra setup, but it activates only when you call it — not automatically in the background.
 
 Below are 6 real conversational examples ordered from simple to advanced. Each shows **"You say"** and a sketch of **"The assistant replies"**, plus how to get the actual data / computation.
 
@@ -140,9 +140,21 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 ## 4. Safety & Preview
 
 - **What is Safe Preview:** By default the advisor only **shows the plan** (which workflow / which sibling skill / which sources) and answers methodology from its knowledge pack — it does **not** auto-fire the sibling-data retrieval. Say **"please fetch the data now"** to trigger the real call; say **"just show the plan"** to keep previewing.
-- **No secrets, local-first:** The advisor never exposes personal info, subject data, unpublished project data, private paths, or credentials. Methodology runs with zero outbound traffic.
+- **No secrets, local-first:** The advisor never exposes personal info, subject data, unpublished project data, private paths, or credentials. Methodology runs with zero outbound traffic, and by default it writes **nothing** to local disk — Q&A logging is off unless you explicitly enable it in `config.json` (see §5).
 - **Traceable, not fabricated:** Every factual / normative claim carries a source citation or an `⚠️ needs official verification` marker; it never fills factual gaps with fluent prose.
 - Outputs are for reference only; validate against official sources before regulatory submissions.
+
+---
+
+## 5. Data Retention & Privacy
+
+ct-advisor is built privacy-first:
+
+- **Zero outbound by default.** Methodology (workflows A–J) runs fully offline; data / intel routing only contacts the sibling skills you approve, and only after you confirm the plan.
+- **Nothing written to disk by default.** Q&A logging is **off** unless you explicitly set `qa_store.mode: local` in `config.json`. With the default config the advisor keeps no local record of your questions or answers.
+- **Optional local Q&A log.** If you enable `qa_store.mode: local`, full Q&A records (question, answer, citations, grounded data, feedback) are appended to `data/qa_log.jsonl` on your machine — unencrypted, so treat that file as sensitive and add it to `.gitignore`. Remote Q&A storage (`qa_store.mode: remote`) is not yet implemented.
+- **Coze mode is opt-in and inactive.** `CozeBackend` (and its `_post()`) is a stub that raises `NotImplementedError`; it reads no token and makes no HTTP request unless you explicitly implement and enable it. The default `LocalBackend` never touches the network.
+- **Don't paste confidential trial / patient / sponsor data** into any prompt unless you have confirmed logging is disabled in your runtime.
 
 ---
 
@@ -190,11 +202,11 @@ python3 scripts/menu.py --all     # dump the clarification menu as JSON
 python3 scripts/menu.py --tier data_skill --human --lang zh   # preview one tier
 ```
 
-### Security scanner false positives Some automated scanners flag `adapters/` because it contains strings that look network- or credential-related. **These are inert stubs and are never executed in the default (local) mode** — `CozeBackend._post()` is only reached when `config.json` sets `backend: coze` and `coze.bot_id` is configured; `import requests` is lazy; no secrets are in the repo (the Coze token is read from the `COZE_TOKEN` env var at call time). Run the skill as shipped and it stays zero-outbound.
+### Security scanner false positives Some automated scanners flag `adapters/` because it contains strings that look network- or credential-related. **These are inert stubs and are never executed in the default (local) mode** — both `CozeBackend.advise()` and `CozeBackend._post()` raise `NotImplementedError`, so no token is read and no HTTP request is made unless you explicitly implement and enable Coze in `config.json`; `import requests` is lazy and lives only inside that inactive path; no secrets are in the repo (the Coze token would be read from the `COZE_TOKEN` env var, and only if Coze is enabled). Run the skill as shipped and it stays zero-outbound.
 
 ---
 
-**Version**: v0.8.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.8.2 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang).
 

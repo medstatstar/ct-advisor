@@ -1,7 +1,9 @@
 """ct-advisor 适配层统一出口 + 后端工厂。
 
-本地默认零出站：build_backend() 在未配置 Coze 时回退 LocalBackend。
-切换后端只需改 config.json 的 backend 字段 + 填 coze.bot_id。
+默认零出站 + 零本地残留：
+- build_backend() 在未配置 Coze 时回退 LocalBackend（不读 token、不发请求）。
+- build_qa_store() 在未显式配置 qa_store.mode=local/remote 时返回 NoOpStore（不写任何文件）。
+切换后端只需改 config.json 的 backend 字段 + 填 coze.bot_id；启用 QA 日志同理需显式开启。
 """
 from __future__ import annotations
 
@@ -21,13 +23,13 @@ from .data_context import (
     DataRef,
     LocalDiskDataContext,
 )
-from .qa_store import JsonlStore, QARecord, QASessionStore, RemoteDbStore
+from .qa_store import JsonlStore, NoOpStore, QARecord, QASessionStore, RemoteDbStore
 from .sanitize import sanitize
 
 __all__ = [
     "AdvisorBackend", "AdvisorRequest", "AdvisorResponse", "LocalBackend", "CozeBackend",
     "DataContextProvider", "DataRef", "LocalDiskDataContext", "CozeApiDataContext",
-    "QASessionStore", "QARecord", "JsonlStore", "RemoteDbStore", "sanitize",
+    "QASessionStore", "QARecord", "JsonlStore", "NoOpStore", "RemoteDbStore", "sanitize",
     "build_backend", "build_data_context", "build_qa_store",
 ]
 
@@ -68,6 +70,10 @@ def build_data_context(config_path: str = "config.json") -> DataContextProvider:
 def build_qa_store(config_path: str = "config.json") -> QASessionStore:
     cfg = _load_config(config_path)
     qs = cfg.get("qa_store", {}) or {}
-    if qs.get("mode") == "remote" and qs.get("remote_dsn"):
+    mode = qs.get("mode")
+    # 隐私默认：未显式开启则不持久化任何内容（NoOpStore）。
+    if mode == "remote" and qs.get("remote_dsn"):
         return RemoteDbStore(dsn=qs.get("remote_dsn", ""))
-    return JsonlStore(path=qs.get("local_path", "data/qa_log.jsonl"))
+    if mode == "local":
+        return JsonlStore(path=qs.get("local_path", "data/qa_log.jsonl"))
+    return NoOpStore()

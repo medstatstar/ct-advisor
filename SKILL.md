@@ -3,7 +3,7 @@ displayName: 临床试验顾问 / Clinical Trial Advisor
 name: ct-advisor
 cn_name: 临床试验顾问
 slug: ct-advisor
-version: 0.8.1
+version: 0.8.2
 triggers:
   - "ct console"
   - "ct 控制台"
@@ -19,8 +19,8 @@ dependencies:
   - {slug: ct-safety,     tier: B, purpose: "Safety signals (FAERS PRR / ROR / IC)"}
   - {slug: ct-literature, tier: B, purpose: "Published literature (OpenAlex / Europe PMC / Semantic Scholar)"}
   - {slug: ct-samplesize, tier: A, purpose: "Sample-size & power computation (handoff from workflow C)"}
-summary: 面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。所有回答均经双大模型交叉核查，确保结论正确可靠。
-description: "面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据与实操细节的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize；原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。所有回答均经双大模型交叉核查，确保结论正确可靠。 / The ct-series TOTAL ENTRY POINT across the full clinical-development lifecycle — your overall advisor for methodology, regulatory evidence, and hands-on operational detail. Methodology / design / compliance / QC / tone questions are answered in-house through workflows A–J; sample-size computation is handed to ct-samplesize; raw-data and competitive-intel needs are routed via the Skill tool to the three sibling data skills (ct-registry / ct-safety / ct-literature); the full competitive-intel picture is stitched in-house from those three sources. Every answer is cross-checked by a dual-model review to ensure correctness and reliability."
+summary: 面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。方法学默认基于本地知识包作答，双模型交叉验证列入后续路线图（详见 README 后续发布计划）。
+description: "面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据与实操细节的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize；原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。方法学默认基于本地知识包作答，双模型交叉验证列入后续路线图。 / The ct-series TOTAL ENTRY POINT across the full clinical-development lifecycle — your overall advisor for methodology, regulatory evidence, and hands-on operational detail. Methodology / design / compliance / QC / tone questions are answered in-house through workflows A–J; sample-size computation is handed to ct-samplesize; raw-data and competitive-intel needs are routed via the Skill tool to the three sibling data skills (ct-registry / ct-safety / ct-literature); the full competitive-intel picture is stitched in-house from those three sources. Methodology runs on the local knowledge pack by default; dual-model cross-validation is on the roadmap."
 license: MIT
 tier: B
 metadata:

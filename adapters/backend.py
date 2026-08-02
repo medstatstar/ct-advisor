@@ -3,7 +3,8 @@
 - LocalBackend：本地模式。返回可移植知识包（system_prompt + workflows + references），
   由 agent 结合本文件作答；本类不自行做 LLM 推理（agent 即后端）。
 - CozeBackend：未来模式。把同一知识包 + 结构化 payload 发到 Coze Bot，返回结构化响应。
-  当前为桩实现，配置就绪后补 _post() 即可切换，无需重写方法学内容。
+  当前为桩实现，advise() 与 _post() 均抛 NotImplementedError，**未激活、不读 token、不出站**；
+  配置就绪并显式实现后切换，无需重写方法学内容。
 """
 from __future__ import annotations
 
@@ -82,14 +83,8 @@ class CozeBackend(AdvisorBackend):
         )
 
     def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """未来实现：延迟导入 requests，读 os.environ[self.token_env]，POST self.endpoint。"""
-        import os
-        import requests  # 延迟导入：本地模式不依赖 requests
-        token = os.environ.get(self.token_env, "")
-        resp = requests.post(
-            self.endpoint,
-            json=payload,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=30,
+        """未激活：Coze 后端尚未接入，禁止任何真实出站。启用前需显式实现并移除本异常。"""
+        raise NotImplementedError(
+            "CozeBackend._post 尚未激活：在 config.json 配置 coze.bot_id/endpoint 并实现本方法前，"
+            "不会读取 token 或发起任何 HTTP 请求。当前默认走 LocalBackend，零出站。"
         )
-        return resp.json()
