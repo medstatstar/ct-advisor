@@ -1,0 +1,20 @@
+# .clawhubignore — files excluded from the ClawHub package
+# (ClawHub already drops *.yaml / *.yml / *.sh / root-level non-md; this file
+#  removes dev artifacts and Python caches so the published bundle stays lean
+#  and scanner-clean.)
+
+# Python caches (never ship)
+__pycache__/
+*.pyc
+
+# assets/: keep only the canonical SVG icon; drop build scripts, internal
+# notes, PNG exports and variant SVGs (PNG is also filtered by ClawHub).
+assets/*
+!assets/icon.svg
+
+# Dev / working logs (not part of the skill's runtime or knowledge)
+auto_loop_rounds.md
+knowledge/survey_external_projects.md
+
+# Empty runtime output dir (created on first Q&A persist)
+data/

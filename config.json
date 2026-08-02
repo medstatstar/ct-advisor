@@ -1,0 +1,21 @@
+{
+  "backend": "local",
+  "coze": {
+    "bot_id": "",
+    "endpoint": "https://api.coze.cn/v1/chat",
+    "token_env": "COZE_TOKEN"
+  },
+  "data_context": {
+    "mode": "local",
+    "sibling_outputs": {
+      "ct-registry": "ct-registry/out_live",
+      "ct-safety": "ct-safety/out_live",
+      "ct-literature": "ct-literature/out_live"
+    }
+  },
+  "qa_store": {
+    "mode": "local",
+    "local_path": "data/qa_log.jsonl",
+    "remote_dsn": ""
+  }
+}

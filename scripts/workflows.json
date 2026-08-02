@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "gate": {
+    "id": "0",
+    "name_zh": "澄清到可判断",
+    "name_en": "Clarify to decidable",
+    "trigger": "问题含糊、存在两种以上会导向不同结论/合规路径/统计方案/行动建议的解释，或缺少会改变结论的信息",
+    "reads": [
+      "ref-interaction-style.md"
+    ],
+    "deliverable": "分轮高价值追问、问题画像和确认摘要",
+    "local_tool": "AskUserQuestion",
+    "rule": "每轮只问 1–3 个会改变结论的高价值问题，持续到问题画像完整；高风险问题进入正式回答前用一句话确认画像"
+  },
+  "workflows": [
+    {
+      "id": "A",
+      "name_zh": "解释与证据定位",
+      "name_en": "Explain & locate evidence",
+      "trigger": [
+        "解释概念、辨析术语或回答'为什么'",
+        "查找最新或中国监管要求（当前/是否实施/时限/依据）"
+      ],
+      "reads": [
+        "ref-clinical-operations.md",
+        "ref-regulatory-statistical.md",
+        "ref-regulatory-versions.md"
+      ],
+      "deliverable": "结论、边界、例子、误区、依据；涉及最新/中国要求时给官网溯源卡",
+      "official_verify": true
+    },
+    {
+      "id": "B",
+      "name_zh": "试验设计",
+      "name_en": "Trial design",
+      "trigger": [
+        "设计试验、选择人群/终点/对照/盲法",
+        "BA/BE、食物影响、FIH、剂量递增、PopPK 或 DDI"
+      ],
+      "reads": [
+        "ref-regulatory-statistical.md",
+        "ref-clinical-operations.md"
+      ],
+      "deliverable": "设计链、选项权衡、推荐、假设与风险",
+      "design_chain": "目标决策 → 临床问题 → 估计目标 → 人群 → 干预与对照 → 终点 → 随机/盲法 → 数据采集 → 分析 → 可行性 → 可解释结论"
+    },
+    {
+      "id": "C",
+      "name_zh": "统计与估计目标",
+      "name_en": "Statistics & estimands",
+      "trigger": "估计目标、样本量、分析集、缺失、多重性、非劣效",
+      "reads": [
+        "ref-regulatory-statistical.md"
+      ],
+      "downstream": "ct-samplesize",
+      "deliverable": "方法框架、参数缺口、分析影响；参数齐全时由 ct-samplesize 实算",
+      "sample_size_params": [
+        "研究假设",
+        "效应量",
+        "变异/事件率",
+        "alpha",
+        "多重性",
+        "把握度",
+        "分配比",
+        "失访/不可评价假设"
+      ]
+    },
+    {
+      "id": "D",
+      "name_zh": "GCP 与质量",
+      "name_en": "GCP & quality",
+      "trigger": "GCP、伦理、偏差、CAPA、监查、数据质量或临床运营中的质量问题",
+      "reads": [
+        "ref-clinical-operations.md"
+      ],
+      "deliverable": "影响判断、责任、控制、升级和 CAPA",
+      "chain": "关键质量因素 → 风险 → 控制 → 监测 → 升级 → CAPA → 有效性检查"
+    },
+    {
+      "id": "E",
+      "name_zh": "临床运营",
+      "name_en": "Clinical operations",
+      "trigger": "中心、供应商、RBM、招募、试验用药、数据、随机化、锁库或关闭",
+      "reads": [
+        "ref-clinical-operations.md"
+      ],
+      "deliverable": "依赖、职责、风险触发器和闭环"
+    },
+    {
+      "id": "F",
+      "name_zh": "安全性与 DSUR",
+      "name_en": "Safety & DSUR",
+      "trigger": "AE/SAE/SUSAR、信号、RSI、获益风险；首份或年度 DSUR",
+      "reads": [
+        "ref-regulatory-statistical.md",
+        "ref-clinical-operations.md"
+      ],
+      "deliverable": "分类、RSI 版本、报告路径、汇总分析、行动与依据",
+      "chain": "个例 → 汇总 → 信号 → 风险表征 → 获益风险 → 行动"
+    },
+    {
+      "id": "G",
+      "name_zh": "文件与报告",
+      "name_en": "Documents & reports",
+      "trigger": "CSR 规划、撰写输入或一致性审查",
+      "reads": [
+        "ref-regulatory-statistical.md",
+        "ref-clinical-operations.md"
+      ],
+      "deliverable": "资料依赖、一致性链、问题优先级和修正建议",
+      "chain": "方案/修订 → SAP → 数据审核 → 数据库 → TFL → 正文 → 附录"
+    },
+    {
+      "id": "H",
+      "name_zh": "方法学 QC",
+      "name_en": "Methodology QC",
+      "trigger": "审查方案、统计策略、资料包或工作流",
+      "reads": [
+        "target workflow modules"
+      ],
+      "deliverable": "总体判定、问题清单、修正方案、资料缺口、下一质量门",
+      "output_shape": [
+        "总体判定(可接受/有条件可接受/不可接受)",
+        "问题清单(证据/影响/优先级)",
+        "修正方案",
+        "资料缺口",
+        "下一质量门"
+      ]
+    },
+    {
+      "id": "I",
+      "name_zh": "用户语气写作",
+      "name_en": "User tone writing",
+      "trigger": "提供本人文章/邮件/样本，要求同语气回复或生成新稿",
+      "reads": [
+        "ref-interaction-style.md"
+      ],
+      "deliverable": "风格画像、同语气回复或新稿、事实边界",
+      "rule": "只学表达特征不复制原句；临床/医学/监管事实仍需证据链核验"
+    },
+    {
+      "id": "J",
+      "name_zh": "用户本地记忆",
+      "name_en": "Local user memory",
+      "trigger": "明确要求记住偏好、决定或保存到用户侧 MEMORY",
+      "reads": [
+        "ref-interaction-style.md"
+      ],
+      "deliverable": "最小化、可复核、可删除的本地记忆条目",
+      "local_rule": "走 WorkBuddy 既有记忆机制(~/.workbuddy/MEMORY.md 与项目 .workbuddy/memory/)，不新建文件；写入前需明确授权"
+    }
+  ],
+  "composite_routes": [
+    {
+      "name": "确证性试验设计",
+      "sequence": [
+        "0",
+        "B",
+        "C",
+        "D",
+        "E"
+      ]
+    },
+    {
+      "name": "全生命周期综合 / 培训框架 / 全面 QC",
+      "sequence": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H"
+      ]
+    },
+    {
+      "name": "注册策略与中国申报",
+      "sequence": [
+        "A",
+        "B"
+      ],
+      "reads": [
+        "ref-regulatory-statistical.md",
+        "ref-regulatory-versions.md"
+      ]
+    },
+    {
+      "name": "安全性汇总(DSUR)",
+      "sequence": [
+        "F"
+      ]
+    },
+    {
+      "name": "方法学 QC 消费兄弟技能产出",
+      "sequence": [
+        "H"
+      ],
+      "reads_sibling": true
+    }
+  ],
+  "integration": {
+    "data_grounding": {
+      "description": "本技能不检索真实试验数据；读兄弟技能真实产出锚定建议",
+      "sources": [
+        {
+          "skill": "ct-registry",
+          "outputs": "ct-registry/out_live/*.json",
+          "use": "用真实试验数/阶段/状态/地域论证设计差异化与可行性"
+        },
+        {
+          "skill": "ct-safety",
+          "outputs": "ct-safety/out_live/faers_fetch.json, disproportionality.json, multi_event_disp.json",
+          "use": "用真实 FAERS 信号(ROR/PRR)支撑 AE 监测/RSI 写入判断"
+        },
+        {
+          "skill": "ct-literature",
+          "outputs": "ct-literature/out_live/merged.json",
+          "use": "用真实已发表证据支撑终点/人群方法学先例"
+        },
+        {
+          "skill": "ct-competitive-stitched",
+          "outputs": "in-house synthesis of ct-registry + ct-safety + ct-literature",
+          "use": "用竞品格局简报（本技能缝合三源）支撑注册策略/差异化定位"
+        }
+      ]
+    },
+    "sample_size_handoff": "ct-samplesize",
+    "china_regulatory": {
+      "cta_ind_60day tacit_approval": true,
+      "communication_meeting": true,
+      "registration_vs_tacit": "登记≠默示许可，二者独立",
+      "snapshot_ref": "ref-regulatory-versions.md"
+    },
+    "sibling_boundaries": {
+      "ct-registry": "它找试验；本技能解释/设计/合规，读其产出做数据接地，不重复检索",
+      "ct-safety": "它算信号；本技能做定性分类与报告路径判断，读其信号支撑监测",
+      "ct-literature": "它找文献；本技能读其产出论证方法学先例，不重复检索",
+      "ct-samplesize": "它算 n；本技能给参数框架，参数齐则转交实算",
+      "ct-base": "内部底座(D 档)；本技能复用其 i18n/excel 配色，A 档发布"
+    },
+    "routing_principle": "数据类问题→对应数据技能；方法学/设计/合规/QC/语气类问题→本技能"
+  }
+}

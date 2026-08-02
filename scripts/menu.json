@@ -1,0 +1,367 @@
+{
+  "version": 2,
+  "skill_routes": {
+    "ct_registry": "ct-registry",
+    "ct_safety": "ct-safety",
+    "ct_literature": "ct-literature"
+  },
+  "flows": {
+    "methodology": [
+      "ground",
+      "capability",
+      "intent_area",
+      "intent_workflow",
+      "subintent",
+      "output"
+    ],
+    "data_intel": [
+      "ground",
+      "capability",
+      "data_skill",
+      "data_subintent",
+      "output"
+    ],
+    "clarify": [
+      "ground",
+      "capability"
+    ]
+  },
+  "tiers": [
+    {
+      "id": "ground",
+      "title_key": "menu.ground.title",
+      "type": "multi",
+      "questions": [
+        {
+          "id": "role",
+          "q_key": "ground.role.q",
+          "header": "Role",
+          "options": [
+            {
+              "id": "sponsor",
+              "label_key": "ground.role.sponsor"
+            },
+            {
+              "id": "cro",
+              "label_key": "ground.role.cro"
+            },
+            {
+              "id": "investigator",
+              "label_key": "ground.role.investigator"
+            },
+            {
+              "id": "reg",
+              "label_key": "ground.role.reg"
+            },
+            {
+              "id": "other",
+              "label_key": "ground.role.other"
+            }
+          ]
+        },
+        {
+          "id": "stage",
+          "q_key": "ground.stage.q",
+          "header": "Stage",
+          "options": [
+            {
+              "id": "preind",
+              "label_key": "ground.stage.preind"
+            },
+            {
+              "id": "ph1",
+              "label_key": "ground.stage.ph1"
+            },
+            {
+              "id": "ph2",
+              "label_key": "ground.stage.ph2"
+            },
+            {
+              "id": "ph3",
+              "label_key": "ground.stage.ph3"
+            },
+            {
+              "id": "ph4",
+              "label_key": "ground.stage.ph4"
+            },
+            {
+              "id": "postmarket",
+              "label_key": "ground.stage.postmarket"
+            },
+            {
+              "id": "nda",
+              "label_key": "ground.stage.nda"
+            },
+            {
+              "id": "unsure",
+              "label_key": "ground.stage.unsure"
+            }
+          ]
+        },
+        {
+          "id": "input",
+          "q_key": "ground.input.q",
+          "header": "Input",
+          "options": [
+            {
+              "id": "question",
+              "label_key": "ground.input.question"
+            },
+            {
+              "id": "protocol",
+              "label_key": "ground.input.protocol"
+            },
+            {
+              "id": "sap",
+              "label_key": "ground.input.sap"
+            },
+            {
+              "id": "csr",
+              "label_key": "ground.input.csr"
+            },
+            {
+              "id": "safetydb",
+              "label_key": "ground.input.safetydb"
+            },
+            {
+              "id": "otherdoc",
+              "label_key": "ground.input.otherdoc"
+            },
+            {
+              "id": "none",
+              "label_key": "ground.input.none"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "capability",
+      "title_key": "menu.cap.title",
+      "q_key": "menu.cap.q",
+      "header": "Capability",
+      "type": "single",
+      "options": [
+        {
+          "id": "clarify",
+          "label_key": "menu.cap.clarify"
+        },
+        {
+          "id": "methodology",
+          "label_key": "menu.cap.methodology"
+        },
+        {
+          "id": "data_intel",
+          "label_key": "menu.cap.data_intel"
+        }
+      ]
+    },
+    {
+      "id": "intent_area",
+      "title_key": "menu.intent.title",
+      "q_key": "menu.intent.q",
+      "header": "Area",
+      "type": "single",
+      "options": [
+        {
+          "id": "design_stats",
+          "label_key": "menu.area.design_stats",
+          "workflows": [
+            "B",
+            "C"
+          ]
+        },
+        {
+          "id": "safety_ops",
+          "label_key": "menu.area.safety_ops",
+          "workflows": [
+            "E",
+            "F"
+          ]
+        },
+        {
+          "id": "docs_qc",
+          "label_key": "menu.area.docs_qc",
+          "workflows": [
+            "G",
+            "H"
+          ]
+        },
+        {
+          "id": "explain_other",
+          "label_key": "menu.area.explain_other",
+          "workflows": [
+            "A",
+            "D",
+            "I",
+            "J"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "intent_workflow",
+      "title_key": "menu.workflow.title",
+      "q_key": "menu.workflow.q",
+      "header": "Workflow",
+      "type": "branch",
+      "depends_on": "intent_area",
+      "branches": {
+        "design_stats": [
+          "B",
+          "C"
+        ],
+        "safety_ops": [
+          "E",
+          "F"
+        ],
+        "docs_qc": [
+          "G",
+          "H"
+        ],
+        "explain_other": [
+          "A",
+          "D",
+          "I",
+          "J"
+        ]
+      }
+    },
+    {
+      "id": "subintent",
+      "title_key": "menu.sub.title",
+      "q_key": "menu.sub.q",
+      "header": "Sub-intent",
+      "type": "branch",
+      "depends_on": "intent_workflow",
+      "branches": {
+        "A": [
+          "define_term",
+          "find_basis",
+          "compare_guide"
+        ],
+        "B": [
+          "design_new",
+          "critique",
+          "endpoints_estimand",
+          "adaptive"
+        ],
+        "C": [
+          "estimand_setup",
+          "samplesize",
+          "missing_data",
+          "ni_eq"
+        ],
+        "D": [
+          "deviation_capa",
+          "audit_ready",
+          "consent_irb"
+        ],
+        "E": [
+          "enroll_feas",
+          "monitoring_vendor",
+          "dblock_ready",
+          "reg_path"
+        ],
+        "F": [
+          "susar",
+          "dsur",
+          "signal",
+          "benefit_risk"
+        ],
+        "G": [
+          "csr_review",
+          "protocol_review",
+          "sap_review",
+          "draft_section"
+        ],
+        "H": [
+          "design_qc",
+          "document_qc",
+          "crossfile",
+          "submission_ready"
+        ],
+        "I": [
+          "reply_tone",
+          "rewrite"
+        ],
+        "J": [
+          "recall",
+          "save_pref"
+        ]
+      }
+    },
+    {
+      "id": "data_skill",
+      "title_key": "menu.data_skill.title",
+      "q_key": "menu.data_skill.q",
+      "header": "Data skill",
+      "type": "single",
+      "options": [
+        {
+          "id": "ct_registry",
+          "label_key": "menu.ct_registry",
+          "trigger_skill": "ct-registry"
+        },
+        {
+          "id": "ct_safety",
+          "label_key": "menu.ct_safety",
+          "trigger_skill": "ct-safety"
+        },
+        {
+          "id": "ct_literature",
+          "label_key": "menu.ct_literature",
+          "trigger_skill": "ct-literature"
+        },
+        {
+          "id": "ct_competitive",
+          "label_key": "menu.ct_competitive",
+          "trigger_skill": null
+        }
+      ]
+    },
+    {
+      "id": "data_subintent",
+      "title_key": "menu.data_subintent.title",
+      "q_key": "menu.data_subintent.q",
+      "header": "Data sub-intent",
+      "type": "single",
+      "options": [
+        {
+          "id": "run",
+          "label_key": "menu.data_subintent.run"
+        },
+        {
+          "id": "focus",
+          "label_key": "menu.data_subintent.focus"
+        }
+      ]
+    },
+    {
+      "id": "output",
+      "title_key": "menu.out.title",
+      "q_key": "menu.out.q",
+      "header": "Output",
+      "type": "single",
+      "optional": true,
+      "options": [
+        {
+          "id": "advisory_memo",
+          "label_key": "out.format.advisory_memo"
+        },
+        {
+          "id": "checklist",
+          "label_key": "out.format.checklist"
+        },
+        {
+          "id": "redline_review",
+          "label_key": "out.format.redline_review"
+        },
+        {
+          "id": "option_compare",
+          "label_key": "out.format.option_compare"
+        }
+      ]
+    }
+  ]
+}
