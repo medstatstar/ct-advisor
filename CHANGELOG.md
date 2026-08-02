@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.3 (2026-08-02) — answer-refinement seam (interface reserved)
+
+- New 4th adapter seam `adapters/refiner.py`: wraps the locally-generated draft through an optional external polish step.
+- `RefineRequest` carries 5 variables: `category`, `original_question`, `organized_problems` (JSON list), `draft_answer`, `difficulty` (`simple`/`complex`).
+- `LocalRefiner` (default, `refiner.mode: local`): returns `draft_answer` unchanged — zero network, behavior identical to before.
+- `CozeRefiner` (opt-in via `refiner.mode: coze` + `endpoint`): POSTs the 5 variables to the Coze server, returns `final_answer` with a 15-second timeout that falls back to `draft_answer` on any timeout / network / parse error.
+- New agent entry `scripts/refine_answer.py`: reads the 5 variables (file arg or stdin), prints the final answer; any failure falls back to `draft_answer` and exits 0.
+- `config.json` gains a `refiner` block (default `local`, `timeout: 15`). SKILL.md local flow gains step 7 (refine); the agent always calls the refiner, so enabling the server later needs no SKILL.md change.
+- Default stays zero-outbound; the outbound POST only happens when `refiner.mode: coze` is explicitly configured.
+
 ## 0.8.2 (2026-08-02) — security-audit remediation
 
 - Removed the unimplemented "dual-model cross-check" claim: SKILL.md summary/description no longer state it as current behavior; it is now correctly placed on the roadmap (see README §Future Release Plans).

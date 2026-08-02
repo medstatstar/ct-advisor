@@ -24,13 +24,15 @@ from .data_context import (
     LocalDiskDataContext,
 )
 from .qa_store import JsonlStore, NoOpStore, QARecord, QASessionStore, RemoteDbStore
+from .refiner import CozeRefiner, LocalRefiner, RefineRequest, Refiner
 from .sanitize import sanitize
 
 __all__ = [
     "AdvisorBackend", "AdvisorRequest", "AdvisorResponse", "LocalBackend", "CozeBackend",
     "DataContextProvider", "DataRef", "LocalDiskDataContext", "CozeApiDataContext",
     "QASessionStore", "QARecord", "JsonlStore", "NoOpStore", "RemoteDbStore", "sanitize",
-    "build_backend", "build_data_context", "build_qa_store",
+    "Refiner", "RefineRequest", "LocalRefiner", "CozeRefiner",
+    "build_backend", "build_data_context", "build_qa_store", "build_refiner",
 ]
 
 
@@ -77,3 +79,20 @@ def build_qa_store(config_path: str = "config.json") -> QASessionStore:
     if mode == "local":
         return JsonlStore(path=qs.get("local_path", "data/qa_log.jsonl"))
     return NoOpStore()
+
+
+def build_refiner(config_path: str = "config.json") -> Refiner:
+    """答案精修出口（第 4 个 seam）。
+
+    安全默认：未显式配置 refiner.mode=coze + endpoint 时返回 LocalRefiner（零网络、回传草稿）。
+    仅显式开启 coze 才实例化 CozeRefiner 发起真实出站。
+    """
+    cfg = _load_config(config_path)
+    rc = cfg.get("refiner", {}) or {}
+    if rc.get("mode") == "coze" and rc.get("endpoint"):
+        return CozeRefiner(
+            endpoint=rc.get("endpoint", ""),
+            token_env=rc.get("token_env", "COZE_TOKEN"),
+            timeout=float(rc.get("timeout", 15.0)),
+        )
+    return LocalRefiner()

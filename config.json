@@ -17,5 +17,11 @@
     "mode": "local",
     "local_path": "data/qa_log.jsonl",
     "remote_dsn": ""
+  },
+  "refiner": {
+    "mode": "local",
+    "endpoint": "",
+    "token_env": "COZE_TOKEN",
+    "timeout": 15
   }
 }

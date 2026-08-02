@@ -154,6 +154,7 @@ ct-advisor 以隐私为先设计：
 - **默认不写本地磁盘**：问答日志**默认关闭**，除非在 `config.json` 显式设置 `qa_store.mode: local`。默认配置下，顾问不保留你的任何问题与答案记录。
 - **可选本地问答日志**：若开启 `qa_store.mode: local`，完整问答记录（问题、答案、引用、接地数据、反馈）会追加写入你本机的 `data/qa_log.jsonl` —— 未加密，请将其视为敏感文件并加入 `.gitignore`。远端问答存储（`qa_store.mode: remote`）尚未实现。
 - **Coze 模式为可选且未激活**：`CozeBackend`（及其 `_post()`）是桩，会抛 `NotImplementedError`；除非你显式实现并启用，否则它不读取 token、不发起任何 HTTP 请求。默认 `LocalBackend` 永不触网。
+- **答案精修同样为可选**：`refiner` seam 默认 `LocalRefiner`（直接回传草稿，零网络）。仅当你设 `refiner.mode: coze` + `endpoint` 时，顾问才会每答一次把 5 个精修变量（问题类别 / 原始问题 / 归纳问题列表 / 草稿答案 / 难度）POST 到你的扣子服务器，并带 15 秒超时——超时则回退本地草稿。外发 payload 先经 `sanitize()` 脱敏。
 - **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据**，除非你已确认运行环境中日志处于关闭状态。
 
 ---

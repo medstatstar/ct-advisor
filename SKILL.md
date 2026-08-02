@@ -3,7 +3,7 @@ displayName: 临床试验顾问 / Clinical Trial Advisor
 name: ct-advisor
 cn_name: 临床试验顾问
 slug: ct-advisor
-version: 0.8.2
+version: 0.8.3
 triggers:
   - "ct console"
   - "ct 控制台"
@@ -59,6 +59,7 @@ Seams pre-split for a future Coze endpoint (swappable adapter layers):
 | Reasoning exit | `adapters/backend.py` | local mode **does not** go through this layer: the agent reads `knowledge/` directly to answer; this module is only for the Coze backend | `CozeBackend` (HTTP → bot, stub implemented) |
 | Data grounding | `adapters/data_context.py` | `LocalDiskDataContext` (scans sibling-skill outputs) | `CozeApiDataContext` (stub) |
 | Q&A persistence | `adapters/qa_store.py` | `JsonlStore` (local JSONL) | `RemoteDbStore` (stub) |
+| Answer refinement | `adapters/refiner.py` | `LocalRefiner` (pass-through, zero network; returns draft unchanged) | `CozeRefiner` (HTTP → Coze server; stub, opt-in via `refiner.mode: coze`) |
 | Outbound sanitization | `adapters/sanitize.py` | always on | always on |
 | Runtime selection | `config.json` | `backend: local` (zero outbound) | `backend: coze` + `coze.bot_id` |
 
@@ -77,7 +78,16 @@ Seams pre-split for a future Coze endpoint (swappable adapter layers):
 - Effect size: continuous → Δ + pooled SD; binary → two-group rates; survival → HR
 - Add: dropout / unevaluable rate `dropout` → `n_adj = n / (1 − dropout)`
 - computed by `ct-samplesize`; **this skill does not compute n in-house**.
-7. **Persist (workflow J)**: when the user explicitly asks to remember a preference / decision → use the existing WorkBuddy memory mechanism (explicit authorization required), do not create files and do not call `qa_store.py`.
+7. **Refine (optional external polish, default pass-through)**: once you have the complete draft answer (including any data grounding from step 5 and the sample-size handoff result above), wrap it through the refiner before presenting:
+   - Construct a JSON object with 5 variables:
+     - `category`: the problem's category (e.g. `methodology:B`, `design`, `compliance:D`, or the matched A–J workflow)
+     - `original_question`: the user's verbatim question
+     - `organized_problems`: a JSON array breaking the question into structured sub-problems, e.g. `[{"aspect": "...", "sub_question": "..."}]`
+     - `draft_answer`: the complete draft you produced above
+     - `difficulty`: `simple` | `complex` (your gate-0 triage; use `vague` only if still undecided after clarification)
+   - Call `python3 scripts/refine_answer.py` with this JSON (write it to a temp file and pass the path, or pipe via stdin). The script's **stdout is the final answer** — present exactly that.
+   - **Default behavior**: `refiner.mode` is `local`, so the script returns `draft_answer` unchanged (zero network, identical to before this step existed). When the Coze server is later enabled (`config.json` `refiner.mode: coze` + `endpoint`), the same call automatically POSTs the 5 variables and returns the server-polished answer, with a 15-second timeout that falls back to `draft_answer`. **No change to this step is needed** when the server goes live.
+8. **Persist (workflow J)**: when the user explicitly asks to remember a preference / decision → use the existing WorkBuddy memory mechanism (explicit authorization required), do not create files and do not call `qa_store.py`.
 
 ## Boundaries with other ct skills
 

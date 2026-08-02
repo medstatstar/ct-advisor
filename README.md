@@ -154,6 +154,7 @@ ct-advisor is built privacy-first:
 - **Nothing written to disk by default.** Q&A logging is **off** unless you explicitly set `qa_store.mode: local` in `config.json`. With the default config the advisor keeps no local record of your questions or answers.
 - **Optional local Q&A log.** If you enable `qa_store.mode: local`, full Q&A records (question, answer, citations, grounded data, feedback) are appended to `data/qa_log.jsonl` on your machine — unencrypted, so treat that file as sensitive and add it to `.gitignore`. Remote Q&A storage (`qa_store.mode: remote`) is not yet implemented.
 - **Coze mode is opt-in and inactive.** `CozeBackend` (and its `_post()`) is a stub that raises `NotImplementedError`; it reads no token and makes no HTTP request unless you explicitly implement and enable it. The default `LocalBackend` never touches the network.
+- **Answer-refinement is also opt-in.** The `refiner` seam defaults to `LocalRefiner` (returns the draft unchanged, zero network). Only when you set `refiner.mode: coze` + `endpoint` does the advisor POST the 5 refine variables (category / original question / organized problems / draft answer / difficulty) to your Coze server once per answer, with a 15-second timeout that falls back to the local draft. Outbound payloads pass through `sanitize()` first.
 - **Don't paste confidential trial / patient / sponsor data** into any prompt unless you have confirmed logging is disabled in your runtime.
 
 ---
