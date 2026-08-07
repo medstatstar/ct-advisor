@@ -15,19 +15,32 @@ In LOCAL mode the methodology agent reads `knowledge/system_prompt.md` +
 mirror of the key table below and MUST stay in sync with this file.
 
 Rules (per ct-base/references/language_policy.md + ~/.workbuddy/MEMORY.md):
-  - Default: English
-  - Auto-switch to Chinese when OS locale contains zh/CN (set_lang overrides)
+  - Default: auto-detect from OS locale; switch to Chinese when OS locale contains zh/CN
+  - One-sentence switch: `set_lang()` (process) / `set_lang_session()` (this conversation)
+    / `set_lang_permanent()` (writes config.json `language`); see scripts/switch_lang.py
   - Code output (R/Python) is NOT affected by this policy
   - In bilingual docs join EN/ZH on one line with " / " (spaces both sides)
 
 Usage:
-  from i18n import t, set_lang, is_chinese_os
+  from i18n import t, set_lang, set_lang_session, set_lang_permanent, is_chinese_os
   print(t("clarify.understand_as", profile="海外II期、单臂、肿瘤"))
-  set_lang("zh"); print(t("menu.A"))
+  set_lang("zh"); print(t("menu.A"))          # process override
+  set_lang_session("en")                        # lasts this conversation
+  set_lang_permanent("en")                      # writes config.json `language`
+  # or from shell: python scripts/switch_lang.py en [--permanent]
 """
 
 import os
 import sys
+import json
+
+# 中文 Windows 控制台默认 cp936，直接打印中文文案会乱码或抛 UnicodeEncodeError。
+# 与 refine_answer.py 保持一致：统一固定标准流为 UTF-8。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -38,8 +51,87 @@ _OVERRIDE_LANG = None
 
 
 def set_lang(locale_code):
-    """Manually override language (for testing). Pass None to reset to auto-detect."""
+    """[process override] Set an in-process language override (highest priority,
+    valid only for the current script run). Used by `scripts/menu.py --lang` and tests.
+    Pass None to clear it and fall back to session > config > OS detection."""
     global _OVERRIDE_LANG
+    _OVERRIDE_LANG = locale_code
+
+
+# ── Language resolution chain / 语言判定链 ──────────────────────────────────────
+# Priority (highest → lowest):
+#   1. process override (set_lang)          — one script run (menu.py --lang, tests)
+#   2. session override file                — one conversation (switch_lang.py)
+#   3. config.json `language`              — permanent (switch_lang.py --permanent)
+#   4. OS locale detection (is_chinese_os)  — default fallback
+
+_SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SESSION_LANG_FILE = os.path.join(_SKILL_ROOT, "data", ".lang_session")
+_CONFIG_PATH = os.path.join(_SKILL_ROOT, "config.json")
+
+
+def _normalize_lang(code):
+    """归一化为 'zh' / 'en'；非法/空值返回 None。"""
+    if not code:
+        return None
+    return "zh" if str(code).lower().startswith("zh") else "en"
+
+
+def _read_session_lang():
+    """读取会话级语言覆盖文件（一次对话内临时切换）。不存在/损坏返回 None。"""
+    try:
+        with open(_SESSION_LANG_FILE, encoding="utf-8") as f:
+            return _normalize_lang(f.read().strip())
+    except Exception:
+        return None
+
+
+def _read_config_lang():
+    """读取 config.json 的 `language` 字段（永久切换）。缺失返回 None。"""
+    try:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            return _normalize_lang(json.load(f).get("language"))
+    except Exception:
+        return None
+
+
+def set_lang_session(locale_code):
+    """[session] 临时切换：写入 data/.lang_session，对整个对话（多次脚本调用）生效。
+    传 None 删除会话文件，恢复为 配置 > OS。"""
+    global _OVERRIDE_LANG
+    lang = _normalize_lang(locale_code)
+    if lang is None:
+        _OVERRIDE_LANG = None
+        try:
+            os.remove(_SESSION_LANG_FILE)
+        except OSError:
+            pass
+        return
+    os.makedirs(os.path.dirname(_SESSION_LANG_FILE), exist_ok=True)
+    with open(_SESSION_LANG_FILE, "w", encoding="utf-8") as f:
+        f.write(lang)
+    _OVERRIDE_LANG = locale_code
+
+
+def set_lang_permanent(locale_code):
+    """[permanent] 永久切换：写入 config.json `language`，对后续所有会话生效。
+    同时清掉会话覆盖，避免冲突。"""
+    global _OVERRIDE_LANG
+    lang = _normalize_lang(locale_code)
+    if lang is None:
+        return
+    try:
+        with open(_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    cfg["language"] = "zh-CN" if lang == "zh" else "en"
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    try:
+        os.remove(_SESSION_LANG_FILE)
+    except OSError:
+        pass
     _OVERRIDE_LANG = locale_code
 
 
@@ -51,10 +143,6 @@ def is_chinese_os():
       2. Windows API: GetLocaleInfoW + registry (LocaleName)
       3. Python locale module: getdefaultlocale()
     """
-    global _OVERRIDE_LANG
-    if _OVERRIDE_LANG is not None:
-        return _OVERRIDE_LANG == "zh"
-
     # 1. Check environment variables
     for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
         val = os.environ.get(var, "")
@@ -97,7 +185,21 @@ def is_chinese_os():
 
 
 def _current_lang():
-    """Return 'zh' or 'en'."""
+    """Return 'zh' or 'en'. Resolution chain (highest priority first):
+       1. process override  (set_lang / menu.py --lang)
+       2. session override  (set_lang_session / switch_lang.py)
+       3. config.json `language` (set_lang_permanent / switch_lang.py --permanent)
+       4. OS locale detection (is_chinese_os) — default fallback
+    """
+    proc = _normalize_lang(_OVERRIDE_LANG)
+    if proc:
+        return proc
+    sess = _read_session_lang()
+    if sess:
+        return sess
+    cfg = _read_config_lang()
+    if cfg:
+        return cfg
     return "zh" if is_chinese_os() else "en"
 
 
@@ -339,6 +441,10 @@ _MESSAGES = {
     "warn.unconfirmed": {
         "en": "Unconfirmed items — why unconfirmable — what judgment this affects:",
         "zh": "未能确认项——为何无法确认——影响哪些结论：",
+    },
+    "warn.complex_patience": {
+        "en": "This question is complex / not yet fully clear. The AI needs to do an in-depth verification to ensure the conclusion is correct — please wait for the result.",
+        "zh": "这个问题比较复杂 / 还不够明确，AI 需要对问题做深入核查以确保结论正确，请耐心等候结果。",
     },
     "stop.tracing": {
         "en": "Definitive judgment withheld. Official tracing path below; please return the original for re-check.",

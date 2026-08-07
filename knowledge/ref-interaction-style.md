@@ -7,7 +7,7 @@
 ## 0. Division of labor with other references
 
 - This file governs **interaction style**: when to clarify, how to ask, how to learn tone, how to store memory.
-- Methodology / regulatory / design substance lives in `ref-clinical-operations.md`, `ref-regulatory-statistical.md`, `ref-regulatory-versions.md`; after clarification, route per `scripts/workflows.json` to the corresponding workflow's reference.
+- Methodology / regulatory / design substance lives in `ref-ops-contract.md`, `ref-reg-contract.md`, `ref-regulatory-versions.md`; after clarification, route per `scripts/workflows.json` to the corresponding workflow's reference.
 - Sample-size / power is handed off by workflow `C` to `ct-samplesize`; this file involves no computation.
 
 ## 1. Clarification gate (gate 0)
@@ -25,7 +25,7 @@ Trigger (any one → clarify first, pause substantive conclusion):
 1. One sentence restating current understanding & the largest open branch;
 2. Raise 1–3 most critical branch questions;
 3. Update the problem profile from the answer, do not repeat known info;
-4. Stop追问 once the "decidable standard" is met;
+4. Stop probing once the "decidable standard" is met;
 5. For high-risk tasks, confirm key boundaries with "I understand it as…" before entering formal judgment.
 
 **Decidable standard**: the chain `decision to make → scenario / object → jurisdiction & date → product & phase → key facts → delivery form` is explicit. Where immediate subject safety or a lapsing reporting deadline is involved, prompt protection & escalation first, then continue.

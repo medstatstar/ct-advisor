@@ -1,105 +1,105 @@
-# 外部同类项目检索参考报告（GitHub + ClawHub / OpenClaw）
+# External Similar-Project Survey Reference Report (GitHub + ClawHub / OpenClaw)
 
-> 目的：为 ct-advisor 检索 GitHub 与 ClawHub / OpenClaw 生态中类似的临床试验 / 医疗 AI Agent 项目，提取可借鉴信息。 检索日期：2026-08-02 红线约束（全程有效）：本报告仅作本地参考，**不 git push / 不 publish**；涉及法规版本、动态项一律保留「官方核实」标记，不写入全文法规；任何落地改造须先与用户确认。
-
----
-
-## 一、项目地图（按类型）
-
-| # | 项目 | 类型 | 核心技术 | 与 ct-advisor 关联度 |
-|---|------|------|----------|----------------------|
-| 1 | A-xin946/clinical-trial-advisor | 同源 Skill 原始版 | Markdown 三参考结构 | 高（改编源头） |
-| 2 | arnold117/clinical-trial-advisor | 镜像 fork | 同上 | 中（同步验证） |
-| 3 | cyanheads/clinicaltrialsgov-mcp-server | ClinicalTrials.gov MCP | FastMCP / STDIO+HTTP | 中（data_intel 可复用） |
-| 4 | pascalwhoop/medical-mcps（medical-research-toolkit） | 统一生物医学 MCP | 14+ 库统一端点 + ID 归一化 | 中（data_intel 后端） |
-| 5 | CONSORT-RCT-Assistant (pouriamrt) | RAG + 幻觉护栏 | LangChain/LangGraph/Chainlit | 高（证据边界思想同构） |
-| 6 | clinical-protocol-review (pooja-k-swamy) | 多智能体协议审阅 | LangChain + MCP 接口 + 风险评分 | 中（审阅范式） |
-| 7 | Microsoft Prior-Authorization-Multi-Agent | 多智能体 + HITL + 审计 | 4 Agent + Pydantic 结构化输出 | 高（架构哲学契合） |
-| 8 | Clinical-Trial-Success-Predictor | FAISS RAG + 元数据清单 | docs_manifest.csv | 中（知识库元数据控制） |
-| 9 | NexClinicalMind | 合规自治哨兵 | Google ADK + Gemini + CrewAI + MCP | 低（CDISC 哨兵，超范围） |
-| 10 | ClinTrialsGPT | A2A 协议 Agentic RAG | Agent-to-Agent | 低（协议层，暂不需） |
-| 11 | OpenClaw-Medical-Skills (aradotso/hermes) | 医疗 Skill 集 | 869 模块 / FDA·CE·IEC62304·ISO14971 模板 | 中（监管模板参考） |
-| 12 | 云知声五大医疗 Skill | 医疗助理（中文） | "活的医学逻辑引擎"后台 | 低（商业后台，不可复用） |
-| 13 | Andyxcg/intelligent-triage-symptom-analysis | 症状分诊 | 650+ 症状 5 级分级 | 低（分诊，非试验设计） |
+> Purpose: To survey GitHub and the ClawHub / OpenClaw ecosystem for similar clinical-trial / medical AI agent projects, and extract reusable insights for ct-advisor. Survey date: 2026-08-02. Red-line constraint (in effect throughout): This report is for local reference only, **no git push / no publish**; for regulatory versions and any dynamic items, always retain an "official verification" marker and never embed full regulatory text; any downstream adaptation must first be confirmed with the user.
 
 ---
 
-## 二、逐类可借鉴点详解
+## 1. Project Map (by type)
 
-### 2.1 Markdown 定义智能体行为 —— 与 ct-advisor 架构高度契合（强验证）
-- **Microsoft Prior-Authorization** 明确原则：*Agent behavior defined in markdown skill files, not Python code*；CMS 政策更新时**临床/合规人员改一个文本文件即可重新部署，无需工程 PR**。
-- **ct-advisor 现状**：SKILL.md + `knowledge/ref-*.md` + `menu.yaml` + `workflows.yaml` + `system_prompt.md` + `prompts.md` 全套 Markdown/YAML 定义行为，动态项带「官方核实」标记。
-- **结论**：外部成熟项目印证了 ct-advisor 的"知识即配置"设计是正确的。无需改动，建议**保持并强化**这一范式。
+| # | Project | Type | Core Tech | Relevance to ct-advisor |
+|---|---------|------|-----------|--------------------------|
+| 1 | A-xin946/clinical-trial-advisor | Upstream origin Skill | Markdown three-reference structure | High (adaptation source) |
+| 2 | arnold117/clinical-trial-advisor | Mirror fork | Same as above | Medium (sync verification) |
+| 3 | cyanheads/clinicaltrialsgov-mcp-server | ClinicalTrials.gov MCP | FastMCP / STDIO+HTTP | Medium (data_intel reusable) |
+| 4 | pascalwhoop/medical-mcps（medical-research-toolkit） | Unified biomedical MCP | 14+ library unified endpoint + ID normalization | Medium (data_intel backend) |
+| 5 | CONSORT-RCT-Assistant (pouriamrt) | RAG + hallucination guardrails | LangChain/LangGraph/Chainlit | High (evidence-boundary idea is isomorphic) |
+| 6 | clinical-protocol-review (pooja-k-swamy) | Multi-agent protocol review | LangChain + MCP interface + risk scoring | Medium (review paradigm) |
+| 7 | Microsoft Prior-Authorization-Multi-Agent | Multi-agent + HITL + audit | 4 Agents + Pydantic structured output | High (architectural philosophy fits) |
+| 8 | Clinical-Trial-Success-Predictor | FAISS RAG + metadata manifest | docs_manifest.csv | Medium (knowledge-base metadata control) |
+| 9 | NexClinicalMind | Compliance autonomous sentinel | Google ADK + Gemini + CrewAI + MCP | Low (CDISC sentinel, out of scope) |
+| 10 | ClinTrialsGPT | A2A-protocol Agentic RAG | Agent-to-Agent | Low (protocol layer, not needed yet) |
+| 11 | OpenClaw-Medical-Skills (aradotso/hermes) | Medical Skill collection | 869 modules / FDA·CE·IEC62304·ISO14971 templates | Medium (regulatory template reference) |
+| 12 | 云知声五大医疗 Skill | Medical assistant (Chinese) | "living medical-logic engine" backend | Low (commercial backend, not reusable) |
+| 13 | Andyxcg/intelligent-triage-symptom-analysis | Symptom triage | 650+ symptoms, 5-tier grading | Low (triage, not trial design) |
 
-### 2.2 知识库元数据清单（docs_manifest 思路）—— 高契合、低成本
-- **Clinical-Trial-Success-Predictor** 用 `docs_manifest.csv` 控制语料元数据（来源/版本/有效期）。
-- **ct-advisor 现状**：`ref-regulatory-versions.md` 已有维护日期(2026-08-01)与官方核验入口，但三份主文件缺少统一"元数据头"。
-- **建议**：为 `ref-clinical-operations.md` / `ref-regulatory-statistical.md` / `ref-regulatory-versions.md` 各加一个 YAML 头块或独立 `_manifest.yaml`：
+---
+
+## 2. Reusable Takeaways by Category
+
+### 2.1 Defining Agent Behavior in Markdown — Strongly Aligned with ct-advisor Architecture (strong validation)
+- **Microsoft Prior-Authorization** states a clear principle: *Agent behavior defined in markdown skill files, not Python code*; when CMS policy updates, **clinical/compliance staff edit one text file and redeploy — no engineering PR needed**.
+- **ct-advisor current state**: SKILL.md + `knowledge/ref-*.md` + `menu.yaml` + `workflows.yaml` + `system_prompt.md` + `prompts.md` fully define behavior in Markdown/YAML, with dynamic items carrying an "official verification" marker.
+- **Conclusion**: A mature external project validates that ct-advisor's "knowledge-as-configuration" design is correct. No changes needed; recommend **preserving and strengthening** this paradigm.
+
+### 2.2 Knowledge-Base Metadata Manifest (docs_manifest idea) — High Fit, Low Cost
+- **Clinical-Trial-Success-Predictor** uses `docs_manifest.csv` to control corpus metadata (source / version / validity period).
+- **ct-advisor current state**: `ref-regulatory-versions.md` already has a maintenance date (2026-08-01) and an official-verification entry point, but the three main files lack a unified "metadata header".
+- **Recommendation**: Add a YAML header block or a separate `_manifest.yaml` to `ref-ops-contract.md` / `ref-reg-contract.md` / `ref-regulatory-versions.md`:
   ```yaml
-  file: ref-regulatory-statistical.md
+  file: ref-reg-contract.md
   version: 2026-08-01
   source_urls: [ich.org, nmpa.gov.cn, fda.gov]
   last_verified: 2026-08-01
-  next_refresh: 2027-02-01   # 每 6–12 月
+  next_refresh: 2027-02-01   # every 6–12 months
   ```
-直接支撑「官方核实」审计链，且便于将来压缩/拆分知识库时按优先级索引。
+  This directly supports the "official verification" audit chain and eases future priority-indexed compression/splitting of the knowledge base.
 
-### 2.3 RAG + 幻觉护栏（Grounding Score / Hallucination Guard）—— 与证据边界同构
-- **CONSORT-RCT-Assistant**：916 篇论文 RAG + Self-Query Retriever；每答案经 **LLM JSON 评分做 Grounding / Hallucination 检查**，低 grounding 直接拦截。
-- **ct-advisor 现状**："证据边界 + 动态项官方核实"在思想上等价——答案必须可溯源、动态项须标注待核实。
-- **建议（增强现有，不引入 RAG）**：在 `prompts.md` 增加一条硬规则——*任何事实性断言必须标注出处章节（如 §3.6）；无法标注来源者一律标记「官方核实」并提示用户核对*。这把 CONSORT 的"护栏"思想用纯方法论方式落地，不破坏"纯方法学不联网"红线。
+### 2.3 RAG + Hallucination Guardrails (Grounding Score / Hallucination Guard) — Isomorphic to Evidence Boundaries
+- **CONSORT-RCT-Assistant**: 916-paper RAG + Self-Query Retriever; every answer passes through an **LLM JSON scoring step for Grounding / Hallucination checks**, with low grounding blocked outright.
+- **ct-advisor current state**: "Evidence boundary + dynamic-item official verification" is equivalent in spirit — answers must be traceable, and dynamic items must be flagged for verification.
+- **Recommendation (enhance existing, do not introduce RAG)**: Add a hard rule to `prompts.md` — *any factual assertion must cite its source section (e.g. §3.6); any claim with no citable source must be marked "official verification" and prompt the user to double-check*. This lands CONSORT's "guardrail" idea in pure-methodology fashion, without violating the "pure methodology, no network" red line.
 
-### 2.4 MCP Server 接入注册库 / 生物医学库 —— 与 data_intel 层相关，但与 ct-registry 重叠
-- **cyanheads/clinicaltrialsgov-mcp-server** v1.5.0（2025-10-15，覆盖率 92.46%，190+ 测试）：STDIO/HTTP 双传输；`find_eligible_studies`（患者匹配）、`compare_studies`、`time-series`；auth 支持 none/jwt/oauth；Apache-2.0。
-- **pascalwhoop/medical-mcps**（medical-research-toolkit）：统一端点 `https://mcp.cloud.curiloo.com/tools/unified/mcp`，**100+ 工具覆盖 14+ 库**（ChEMBL/OpenTargets/ClinicalTrials.gov/PubMed/OpenFDA/OMIM/nodenorm 等）；nodenorm 做 ID 归一化；多数库免 key（OMIM/NCI 需 key）；MIT。
-- **ct-advisor 现状**：纯方法学层**不联网、不调兄弟技能**；但 data_intel 层本就可调用本工作区已有的 **ct-registry 技能**（已覆盖 ClinicalTrials.gov/WHO ICTRP/CDE/PubChem）。
-- **建议**：若 data_intel 需要实时数据，**优先复用 ct-registry 技能**，避免再引入 cyanheads/pascalwhoop MCP 造成双重维护。仅当 ct-registry 未覆盖某库（如 OpenFDA 药物警戒、ChEMBL 靶点）时，才考虑挂 pascalwhoop 统一端点。优先级：低–中。
+### 2.4 MCP Server Access to Registries / Biomedical Libraries — Related to data_intel Layer, but Overlaps with ct-registry
+- **cyanheads/clinicaltrialsgov-mcp-server** v1.5.0 (2025-10-15, 92.46% coverage, 190+ tests): STDIO/HTTP dual transport; `find_eligible_studies` (patient matching), `compare_studies`, `time-series`; auth supports none/jwt/oauth; Apache-2.0.
+- **pascalwhoop/medical-mcps** (medical-research-toolkit): unified endpoint `https://mcp.cloud.curiloo.com/tools/unified/mcp`, **100+ tools covering 14+ libraries** (ChEMBL/OpenTargets/ClinicalTrials.gov/PubMed/OpenFDA/OMIM/nodenorm, etc.); nodenorm for ID normalization; most libraries key-free (OMIM/NCI require a key); MIT.
+- **ct-advisor current state**: The pure-methodology layer **does not connect to the network and does not call sibling skills**; but the data_intel layer is already allowed to call the **ct-registry skill** present in this workspace (already covering ClinicalTrials.gov/WHO ICTRP/CDE/PubChem).
+- **Recommendation**: If data_intel needs real-time data, **reuse the ct-registry skill first**, avoiding the dual-maintenance cost of adding cyanheads/pascalwhoop MCPs. Only when ct-registry does not cover a given library (e.g. OpenFDA pharmacovigilance, ChEMBL targets) should the pascalwhoop unified endpoint be considered. Priority: Low–Medium.
 
-### 2.5 多智能体协议审阅 + 风险评分 —— 未来增强项
-- **clinical-protocol-review**：PI / Site Physician / Health Authority 三角色 Agent；MCP 接口按章节暴露协议；`risk_assessor` 给 Low/Medium/High 严重度；`scoring_engine` 给数值总分；Streamlit UI。
-- **Microsoft Prior-Auth**：4 Agent（Compliance/Clinical Reviewer/Coverage/Synthesis）并行+顺序流水线；**结构化 Pydantic 输出（无 JSON 解析）**；**HITL 默认 LENIENT（不自动拒绝，需临床医师 Accept/Override 并记录理由）**；8 节审计 PDF。
-- **ct-advisor 现状**：单 Agent 方法学顾问，Workflow A–K。
-- **建议（未来，非当前）**：在协议设计类 Workflow（B 层方法学）增加"多视角审阅清单"——科学严谨性(PI)/可行性(Site)/法规符合(HA) 三栏 + 严重度分级 + 总分。结构化输出与 HITL 审计思想可直接纳入 `prompts.md` 的输出模板。架构改动较大，待用户确认后再做。
+### 2.5 Multi-Agent Protocol Review + Risk Scoring — Future Enhancement
+- **clinical-protocol-review**: PI / Site Physician / Health Authority three-role Agents; MCP interface exposes the protocol by section; `risk_assessor` assigns Low/Medium/High severity; `scoring_engine` gives a numeric total score; Streamlit UI.
+- **Microsoft Prior-Auth**: 4 Agents (Compliance/Clinical Reviewer/Coverage/Synthesis) in parallel+sequential pipeline; **structured Pydantic output (no JSON parsing)**; **HITL defaults to LENIENT (no auto-rejection; requires clinician Accept/Override with reason recorded)**; 8-section audit PDF.
+- **ct-advisor current state**: Single-agent methodology advisor, Workflow A–K.
+- **Recommendation (future, not current)**: Add a "multi-perspective review checklist" to protocol-design Workflows (B-layer methodology) — three columns for scientific rigor (PI) / feasibility (Site) / regulatory compliance (HA) + severity grading + total score. The structured-output and HITL-audit ideas can be folded directly into `prompts.md`'s output template. This is a large architectural change; do it only after user confirmation.
 
-### 2.6 ClawHub / OpenClaw 发布模式 —— 可选，受红线约束
-- pascalwhoop 将 medical-mcps + medical-research-toolkit 作为 OpenClaw Skill 发布；OpenClaw-Medical-Skills 含 869 模块；云知声强调"活的医学逻辑引擎"后台持续更新。
-- **ct-advisor 现状**：本地技能，用户已明确"保持本地不 commit / 不 publish"。
-- **建议**：仅记录为**未来可选动作**——若未来要发布到 ClawHub，可参考 pascalwhoop 的 SKILL.md + OPENCLAW-USAGE.md 结构。当前红线：**不发布，等用户确认**。
-
----
-
-## 三、与 ct-advisor 现有架构契合度矩阵
-
-| 外部模式 | ct-advisor 对应层 | 契合度 | 落地成本 | 备注 |
-|----------|-------------------|--------|----------|------|
-| Markdown 定义行为 | SKILL.md + ref-*.md | ★★★★★ | 无（已具备） | 外部验证设计正确 |
-| 知识库元数据清单 | ref-*.md 头块 | ★★★★★ | 低 | 直接支撑官方核实 |
-| 幻觉护栏 / Grounding | 证据边界 + prompts.md | ★★★★☆ | 低 | 加溯源硬规则即可 |
-| 结构化输出 + HITL 审计 | prompts.md 输出模板 | ★★★★☆ | 中 | 增强审阅类 Workflow |
-| 多智能体协议审阅 | B 层方法学 Workflow | ★★★☆☆ | 高 | 架构扩展，待确认 |
-| 注册库 MCP（cyanheads） | data_intel 层 | ★★☆☆☆ | 中 | 与 ct-registry 重叠 |
-| 统一生物医学 MCP | data_intel 层 | ★★☆☆☆ | 中 | 仅补 ct-registry 盲区 |
-| ClawHub 发布 | 发布流程 | ★☆☆☆☆ | 低 | 红线：等确认 |
-| A2A / CDISC 哨兵 | — | ☆☆☆☆☆ | — | 超范围，不采纳 |
+### 2.6 ClawHub / OpenClaw Publishing Model — Optional, Bound by Red Line
+- pascalwhoop publishes medical-mcps + medical-research-toolkit as an OpenClaw Skill; OpenClaw-Medical-Skills contains 869 modules; 云知声 emphasizes a continuously-updated "living medical-logic engine" backend.
+- **ct-advisor current state**: A local skill; the user has explicitly stated "stay local, do not commit / do not publish".
+- **Recommendation**: Record only as a **future optional action** — if publishing to ClawHub later, reference pascalwhoop's SKILL.md + OPENCLAW-USAGE.md structure. Current red line: **no publishing, wait for user confirmation**.
 
 ---
 
-## 四、可落地建议（按优先级，标注红线）
+## 3. Fit Matrix Against ct-advisor's Current Architecture
 
-1. **【高·低成】加知识库元数据头**：为三份 ref-*.md 增 YAML 头（version/source_urls/last_verified/next_refresh）。本地改动，不 push。
-2. **【高·低成】prompts.md 增"溯源硬规则"**：事实断言必须标 §章节，无来源标「官方核实」。强化证据边界，不联网。
-3. **【中·中成】输出模板增结构化 + HITL 审计段**：审阅/设计类答案带严重度分级与"需人工核实"提示。
-4. **【低·中成】data_intel 实时数据优先复用 ct-registry**：避免重复挂外部 MCP。
-5. **【可选·红线】ClawHub 发布**：仅当用户明确确认后再做。
-
----
-
-## 五、不建议采纳 / 需谨慎的点
-
-- **NexClinicalMind（CDISC 合规哨兵）、ClinTrialsGPT（A2A）**：超出 ct-advisor「方法学顾问」范围，且引入持续联网自治，与"纯方法学不联网/证据边界"红线冲突。
-- **云知声"活的医学逻辑引擎"**：依赖商业后台自动更新，与"动态项官方核实 + 手动每 6–12 月刷新"的本地可控策略相悖，不采纳其自动更新哲学。
-- **重复引入外部 MCP**：ct-registry 已覆盖主要注册库，再挂 cyanheads/pascalwhoop 会造成双重维护与版本漂移风险。
+| External Pattern | ct-advisor Corresponding Layer | Fit | Implementation Cost | Notes |
+|------------------|-------------------------------|-----|---------------------|-------|
+| Markdown-defined behavior | SKILL.md + ref-*.md | ★★★★★ | None (already present) | External validation confirms design is correct |
+| Knowledge-base metadata manifest | ref-*.md header block | ★★★★★ | Low | Directly supports official verification |
+| Hallucination guard / Grounding | Evidence boundary + prompts.md | ★★★★☆ | Low | Add traceability hard rule |
+| Structured output + HITL audit | prompts.md output template | ★★★★☆ | Medium | Enhances review-type Workflows |
+| Multi-agent protocol review | B-layer methodology Workflow | ★★★☆☆ | High | Architectural extension, pending confirmation |
+| Registry MCP (cyanheads) | data_intel layer | ★★☆☆☆ | Medium | Overlaps with ct-registry |
+| Unified biomedical MCP | data_intel layer | ★★☆☆☆ | Medium | Only fills ct-registry blind spots |
+| ClawHub publishing | Release process | ★☆☆☆☆ | Low | Red line: wait for confirmation |
+| A2A / CDISC sentinel | — | ☆☆☆☆☆ | — | Out of scope, not adopted |
 
 ---
 
-*本报告为本地参考文档，所有落地改造须先与用户确认；红线（不 push / 不 publish / 动态项官方核实）全程有效。*
+## 4. Actionable Recommendations (by priority, with red-line markers)
+
+1. **[High · Low cost] Add knowledge-base metadata headers**: Add a YAML header (version/source_urls/last_verified/next_refresh) to the three ref-*.md files. Local change, no push.
+2. **[High · Low cost] Add "traceability hard rule" to prompts.md**: Factual assertions must cite § section; claims with no source marked "official verification". Strengthens evidence boundary, no network.
+3. **[Medium · Medium cost] Add structured output + HITL audit section to the output template**: Review/design answers carry severity grading and a "requires human verification" prompt.
+4. **[Low · Medium cost] data_intel real-time data should reuse ct-registry first**: Avoid redundantly mounting external MCPs.
+5. **[Optional · Red line] ClawHub publishing**: Only after the user explicitly confirms.
+
+---
+
+## 5. Not Recommended / Proceed with Caution
+
+- **NexClinicalMind (CDISC compliance sentinel), ClinTrialsGPT (A2A)**: Beyond ct-advisor's "methodology advisor" scope, and introduce persistent-networked autonomy, conflicting with the "pure methodology, no network / evidence boundary" red line.
+- **云知声 "living medical-logic engine"**: Relies on a commercial backend with automatic updates, contradicting the local-controllable strategy of "dynamic items officially verified + manually refreshed every 6–12 months"; its auto-update philosophy is not adopted.
+- **Redundantly introducing external MCPs**: ct-registry already covers the main registries; mounting cyanheads/pascalwhoop again would create dual maintenance and version-drift risk.
+
+---
+
+*This report is a local reference document; all downstream adaptations must first be confirmed with the user; the red lines (no push / no publish / dynamic items officially verified) remain in effect throughout.*

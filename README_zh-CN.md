@@ -1,4 +1,4 @@
-# 临床试验顾问（ct-advisor）
+# 临床试验总顾问（ct-advisor）
 
 [🇨🇳 中文 (当前)](./README_zh-CN.md) | [🇺🇸 English](./README.md)
 
@@ -8,7 +8,11 @@
 
 > **整个 `ct-*` 临床试验技能家族的统一入口 —— 既是方法学与法规证据顾问，也把真实数据 / 竞品情报类需求路由到兄弟数据技能。**
 
+> 💡 **性能提示**：本技能答案的准确性主要依赖外部云端大模型服务及数据库保障，对本地大模型的要求不高。已发现推理模型（如 Hunyuan-3、DeepSeek-R1）在使用本技能时会耗费大量时间进行深度思考。**如果单次回复等待时间超过 3 分钟，建议切换到普通大模型以加快处理速度。**
+
 > 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清你的试验问题：顾问在内部作答方法学 / 设计 / 统计 / GCP / 安全性 / 法规 / QC / 语气类问题，并在你需要真实数据或竞品情报时，把你导向正确的兄弟技能（`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`），或用三大数据源**自行缝合**完整竞品情报简报。它**不重复实现**任何检索或计算逻辑。B 档；纯方法学完全离线运行。
+
+> ⚠️ **数据出域与隐私提示 —— 安装前请阅读。** 你每次向 ct-advisor 提问，输入内容都会经网络发往作者托管的端点 **`https://ct-advisor.coze.site/run`** 进行答案精校——这是唯一的出域路径。出站前 `sanitize()` 会自动脱敏身份证号、手机号、邮箱及少量敏感词，并附带一个不可逆的 sha256 机器标识 `query_origin`（不含明文）。**自动脱敏并非万无一失——请勿输入其他敏感或机密信息**：真实患者姓名、未公开的试验数据、商业机密、密码、API 密钥，或其他任何可识别个人 / 受限的内容。其中 `config/coze.dat` 是访问该端点的必须公开凭证（作者随技能发布），请原样保留，无需也不应替换为自有 token。详见 §5。
 
 ---
 
@@ -36,13 +40,13 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 
 **助手会这样回（示意）：** > 正在路由到 **ct-registry**（CT.gov + WHO ICTRP + CDE + EU-CTR + ChiCTR + ISRCTN + DRKS）。这是归一化后的格局 —— 试验数量、分期分布、地区分布、主要申办方，每条都标注"数据来源：ct-registry（<日期>）"。
 
-**📌 拿到真实数据**：默认顾问先展示**检索方案**（哪些源、哪些关键词）并请你确认。说**「请直接检索」**（或 "please fetch the data now"）即真正调用兄弟技能、返回实时格局。
+**📌 拿到真实数据**：默认即调用 **ct-registry** 等兄弟技能返回实时格局（data_intel 直接 dispatch，无需额外确认）；每条都标注"数据来源：ct-registry（<日期>）"。
 
 ### 示例 3 · 宽口径竞品情报（三源本技能缝合 ⭐） **你这样说：** > 给我 GLP-1 RA 在肥胖适应症的完整竞品情报 —— 试验、安全信号、文献都要。
 
 **助手会这样回（示意）：** > 这是宽口径需求，我会**分别调用 ct-registry + ct-safety + ct-literature 各一次，由本技能缝合战略简报**（不再走独立编排器）。方案：① 注册格局；② FAERS 安全信号；③ 已发表证据 —— 然后合并成简报，每条断言都带"数据来源：ct-xxx（<日期>）"标签。
 
-**📌 拿到真实简报**：说**「请直接检索」**，即运行三个兄弟技能并组装成合并简报。（这替代了旧的"一站式 ct-pipeline"路由 —— 缝合现由顾问自己完成。）
+**📌 拿到真实简报**：顾问默认**分别调用 ct-registry + ct-safety + ct-literature 各一次并缝合战略简报**（data_intel 直接 dispatch，无需额外确认）。（这替代了旧的"一站式 ct-pipeline"路由 —— 缝合现由顾问自己完成。）
 
 ### 示例 4 · 多决策设计任务（弹出路由菜单） **你这样说：** > 我在规划一项 II 期肿瘤试验，还需要样本量 —— 帮我定一下设计。
 
@@ -76,11 +80,14 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 
 **📌 说明**：当你说"不确定要什么"，顾问用**逐分支追问（grill-me）**而不是猜测或甩菜单。理清后再路由到对应工作流或数据技能。
 
-### 示例 6 · 切换输出语言 **你这样说：** > switch to English.
+### 示例 6 · 切换输出语言
+**你这样说：** > switch to English.  /  > 永久用中文.
 
-**助手会这样回（示意）：** > Sure, I'll reply in English from now on. （输出语言默认跟随系统：中文系统→中文，其他→英文；随时一句话强制切换。）
+**助手会这样回（示意）：** > Sure, I'll reply in English from now on. （输出语言默认跟随系统：中文系统→中文，其他→英文；但可一句话切换。）
 
-**📌 说明**：输出语言默认跟随系统设置；随时一句话强制切换。
+**📌 说明**：语言支持一句话切换：
+- **仅本次对话** —— 说「用中文回复」/ "switch to English" → 顾问运行 `python scripts/switch_lang.py zh-CN`（或 `en`）。
+- **永久（后续所有会话）** —— 说「永久用中文」/ "always reply in English" → 顾问运行 `python scripts/switch_lang.py zh-CN --permanent`，写入 `config.json` 的 `language`。换语言重跑一次即可重置。
 
 ---
 
@@ -123,11 +130,11 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 
 ## 3. 首次使用常见问题 FAQ
 
-**Q：我只给了部分信息，还能答吗？** A：能。方法学部分它依据知识包用你给的内容作答，凡无法核实的都标记 `⚠️ 官方核实`；数据类需求它会在检索前与你确认检索范围。
+**Q：我只给了部分信息，还能答吗？** A：能。方法学部分它依据知识包用你给的内容作答，凡无法核实的都标记 `⚠️ 官方核实`；数据类需求默认即路由到对应兄弟技能完成分析，若想限定检索范围可在提问时一并说明。
 
 **Q：回答里的数据来源怎么标注？** A：每条带数据接地的断言都带"数据来源：ct-xxx（<日期>）"标签，你可据此把每个数字回溯到产出它的兄弟技能。
 
-**Q：它只给方案、不出真实数据，怎么拿到实际结果？** A：默认顾问先展示**路由 / 检索方案**（调哪个技能、哪些源、哪些关键词）并请你确认。说**「请直接检索」**（或 "please fetch the data now"）即真正调用兄弟技能、返回实时结果。这是安全默认 —— 先看方案，确认后再跑。
+**默认就会调用兄弟技能查真实数据。** `data_intel` 类需求默认即路由调用对应兄弟技能（ct-registry / ct-safety / ct-literature / ct-samplesize）完成分析并返回实时结果，无需额外说「请直接检索」。若你只想看方案、暂不取数，说「只看方案」即可。
 
 **Q：中文系统下输出是中文吗？** A：是。输出语言默认跟随系统（中文系统→中文，其他→英文），随时一句话强制切换（如"用中文回复" / "switch to English"）。
 
@@ -137,38 +144,21 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 
 ---
 
-## 4. 安全与预览
+## 4. 安全与隐私
 
-- **什么是安全预览**：默认顾问只**展示方案**（哪个工作流 / 哪个兄弟技能 / 哪些源）并从知识包作答方法学 —— **不会**自动触发兄弟技能的数据检索。说**「请直接检索」**（或 "please fetch the data now"）才真正调用；说**「只看方案」**继续预览。
-- **无密钥、本地优先**：顾问绝不泄露个人信息、受试者信息、未公开项目数据、私有路径或凭据。方法学运行零出站流量，且默认**不向本地磁盘写入任何内容**——问答日志默认关闭，除非在 `config.json` 中显式开启（见 §5）。
+### 安全预览（默认即路由调用兄弟技能）
+- **默认即路由调用**：`data_intel` 类需求（竞品格局 / 安全信号 / 文献 / 样本量）默认**直接 dispatch 到对应兄弟技能**（ct-registry / ct-safety / ct-literature / ct-samplesize）完成分析并返回实时结果，无需额外说「请直接检索」。若你只想要方案、暂不取数，说「只看方案」即可。
 - **可溯源、不编造**：每条事实性 / 规范性断言都带来源标注或 `⚠️ 官方核实` 标记；绝不用流畅措辞填补事实空白。
 - 输出仅供参考；申报 / 决策前请对照官方原文核实。
 
----
+### 出站与隐私（答案精校固定走 Coze）
+- **唯一出站路径 = 答案精校（Coze）**：由于临床试验对问题答案的质量要求很高，本技能会将用户提出的问题发送到服务器 **`https://ct-advisor.coze.site/run`** 在完整数据库中对答案做精校（step 6 固定调用 `scripts/refine_answer.py`，外发 `query_meta`（含 `query_origin` 机器标识）+ `original_question` + `draft_answer`，出站前先经 `sanitize()` 脱敏）。随技能发布的 `config/coze.dat` 是访问该端点的**必须公开凭证**（作者公开发布），请原样保留、勿替换为自有 token。Coze 超时/出错时才会降级为本地草稿，但**仅为故障降级**。因此 **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据** 。
+- **机器标识脱敏且非明文**：外发数据中会包括数据来源，但该信息为 `sha256` 机器标识哈希（不含明文主机名 / IP，非 PII），嵌套在 `query_meta` 中，仅用于按机器的审计与归因等合法用途。
+- **默认不写本地磁盘**：`qa_store` 默认 `noop`，不保留任何问答记录；可选 `qa_store.mode: local` 才会将完整问答追加写入本机 `data/qa_log.jsonl`（未加密，请视为敏感文件并加入 `.gitignore`）。
 
-## 5. 数据保留与隐私
 
-ct-advisor 以隐私为先设计：
 
-- **默认零出站**：方法学（工作流 A–J）完全离线运行；数据 / 情报路由只在你确认方案后、且仅联系你认可的兄弟技能。
-- **默认不写本地磁盘**：问答日志**默认关闭**，除非在 `config.json` 显式设置 `qa_store.mode: local`。默认配置下，顾问不保留你的任何问题与答案记录。
-- **可选本地问答日志**：若开启 `qa_store.mode: local`，完整问答记录（问题、答案、引用、接地数据、反馈）会追加写入你本机的 `data/qa_log.jsonl` —— 未加密，请将其视为敏感文件并加入 `.gitignore`。远端问答存储（`qa_store.mode: remote`）尚未实现。
-- **Coze 模式为可选且未激活**：`CozeBackend`（及其 `_post()`）是桩，会抛 `NotImplementedError`；除非你显式实现并启用，否则它不读取 token、不发起任何 HTTP 请求。默认 `LocalBackend` 永不触网。
-- **答案精修同样为可选**：`refiner` seam 默认 `LocalRefiner`（直接回传草稿，零网络）。仅当你设 `refiner.mode: coze` + `endpoint` 时，顾问才会每答一次把 5 个精修变量（问题类别 / 原始问题 / 归纳问题列表 / 草稿答案 / 难度）POST 到你的扣子服务器，并带 15 秒超时——超时则回退本地草稿。外发 payload 先经 `sanitize()` 脱敏。
-- **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据**，除非你已确认运行环境中日志处于关闭状态。
-
----
-
-## 后续发布计划
-
-`ct-advisor` 目前为本地运行版，当前已在方法学、法规与数据路由上可用，但我们还规划了进一步的能力增强，也欢迎你持续关注：
-
-1. **引入大模型交叉验证**：我们将很快为其引入远程数据库核验大模型交叉验证功能，对关键方法学结论做双模型交叉核验，进一步提升回答的准确性与可靠性。
-2. **兄弟技能陆续发布**：与本技能相关的兄弟技能将在开发完成后陆续发布，逐步补齐临床试验全生命周期的更多能力。
-
----
-
-## 6. 进阶参考（开发者）
+## 5. 进阶参考（开发者）
 
 CLI 助手、运行要求、架构树与扫描器误报说明已移到此处，普通用户无需阅读。规范级内容与版本历史见 [`SKILL.md`](SKILL.md) 与 [`CHANGELOG.md`](CHANGELOG.md)。
 
@@ -177,8 +167,8 @@ CLI 助手、运行要求、架构树与扫描器误报说明已移到此处，�
 |---|---|
 | 运行时 | 智能体直接读 `knowledge/` —— **无强制依赖**。 |
 | 可选 CLI 助手 | `python3`（仅标准库）。`scripts/*.py` 用 `json` 加载 `scripts/*.json` —— **无需 PyYAML**。 |
-| 兄弟技能 | `ct-registry`、`ct-safety`、`ct-literature`、`ct-samplesize`（仅用于数据路由 / 接地；竞品情报简报由本技能缝合三源；缺失时优雅降级）。 |
-| Coze 模式（可选） | `config.json` 设 `backend: coze` + `coze.bot_id`；仅启用 Coze 时才用 `requests`。 |
+| 兄弟技能 | `ct-registry`、`ct-safety`、`ct-literature`、`ct-samplesize`（仅用于数据路由 / 接地；竞品情报简报由本技能缝合三源；缺失时优雅降级）。均从 GitHub 安装：`ct-registry`→`https://github.com/medstatstar/ct-registry`、`ct-safety`→`https://github.com/medstatstar/ct-safety`、`ct-literature`→`https://github.com/medstatstar/ct-literature`、`ct-samplesize`→`https://github.com/medstatstar/ct-samplesize`（克隆到 `~/.workbuddy/skills/<slug>`）。缺失时顾问会直接打印其 GitHub 地址。 |
+| Coze 模式（可选·仅顾问后端） | 可选启用 `backend: coze` + `coze.bot_id` 让顾问后端把问答路由到扣子 bot；**答案精校则固定走 Coze、始终需要 `requests`**（缺失时自动安装）。 |
 
 ### 架构
 ```
@@ -193,7 +183,7 @@ ct-advisor/
 │   ├── check_deps.py     # 仅本地能力探针
 │   └── search_refs.py    # 专题参考定位器
 ├── adapters/             # 推理出口 / 数据接地 / 问答 三层可切换适配
-└── config.json           # 运行时后端选择（默认 local，零出站）
+└── config.json           # 运行时后端选择（后端默认 local → 方法学零出站；答案精校恒走 Coze 远程）
 ```
 
 ### CLI 示例（开发者）
@@ -203,11 +193,11 @@ python3 scripts/menu.py --all     # 把澄清菜单导出为 JSON
 python3 scripts/menu.py --tier data_skill --human --lang zh   # 预览单个 tier
 ```
 
-### 扫描器误报说明 部分自动化扫描器会标记 `adapters/`，因其含看似网络或凭据相关的字符串。**这些均为惰性桩，默认（本地）模式下从不执行** —— `CozeBackend.advise()` 与 `CozeBackend._post()` 均抛 `NotImplementedError`，因此除非你显式实现并在 `config.json` 中启用 Coze，否则不读取 token、也不发起任何 HTTP 请求；`import requests` 为延迟导入，仅存在于该未激活路径；仓库内无密钥（Coze token 仅在你启用 Coze 时才会从环境变量 `COZE_TOKEN` 读取）。按发布原样运行即保持零出站。
+### 扫描器误报说明 部分自动化扫描器会标记 `adapters/`，因其含看似网络或凭据相关的字符串。需区分两条路径：(1) **顾问后端** `CozeBackend.advise()` 与 `_post()` 是惰性桩，均抛 `NotImplementedError`，除非你显式实现并在 `config.json` 中启用 Coze 路由，否则不读取 token、也不发起 HTTP 请求——该路径确实惰性。(2) **答案精校固定走 Coze**（唯一出站路径）：`scripts/refine_answer.py` 每答一次即把 5 变量 POST 到扣子精校器，故 `requests` 由恒定启用的精校器导入（并非仅存在于未激活路径），按发布原样运行**并非**零出站——方法学保持离线，但每一条被精校的答案都会发往 `ct-advisor.coze.site/run`（PII 经 `sanitize()` 脱敏，`query_origin` 为非 PII 的 `sha256` 机器标识）。仓库内无密钥（Coze token 仅精校运行、从 `config/coze.dat` / 环境变量读取）。
 
 ---
 
-**版本**：v0.8.2 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v0.9.38 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 

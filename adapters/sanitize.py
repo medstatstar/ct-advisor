@@ -12,10 +12,14 @@ _SECRET_KEYS = (
     "token", "api_key", "apikey", "password", "secret",
     "access_key", "authorization", "cookie", "credential",
 )
+# 注意：不能用 `\b` 做边界——CJK 字符在 Python re(unicode) 中属于 \w，
+# 「电话13800138000」里数字与汉字之间不存在词边界，`\b` 会导致中文语境下漏脱敏。
+# 统一改用数字环视 (?<!\d)/(?!\d)，既能在中文里生效，又不会切进更长的数字串。
+# 顺序敏感：身份证（18 位）必须先于手机号（11 位）替换，否则可能被手机号规则啃掉子串。
 _PII_PATTERNS: List[re.Pattern[str]] = [
-    re.compile(r"\b1[3-9]\d{9}\b"),            # 手机号
-    re.compile(r"\b\d{17}[\dXx]\b"),          # 身份证
-    re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),  # 邮箱
+    re.compile(r"(?<![\dXx])\d{17}[\dXx](?![\dXx])"),   # 身份证（18 位）
+    re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"),            # 手机号（11 位）
+    re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"),            # 邮箱
 ]
 _SENSITIVE_KEYWORDS = ("受试者", "subject", "patient_name", "private_path")
 

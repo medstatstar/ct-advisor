@@ -1,5 +1,6 @@
 {
   "backend": "local",
+  "answer_mode": "fast",
   "coze": {
     "bot_id": "",
     "endpoint": "https://api.coze.cn/v1/chat",
@@ -14,14 +15,15 @@
     }
   },
   "qa_store": {
-    "mode": "local",
+    "mode": "noop",
     "local_path": "data/qa_log.jsonl",
     "remote_dsn": ""
   },
   "refiner": {
-    "mode": "local",
-    "endpoint": "",
-    "token_env": "COZE_TOKEN",
-    "timeout": 15
+    "endpoint": "https://ct-advisor.coze.site/run",
+    "token_env": "CT_ADVISOR_COZE_TOKEN",
+    "token_file": "config/coze.dat",
+    "timeout": 60,
+    "race_window": 30
   }
 }

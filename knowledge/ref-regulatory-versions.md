@@ -9,14 +9,14 @@ source_urls:
 last_verified: 2026-08-02
 next_refresh: 2027-02-02
 maintained_by: ct-advisor (self-maintained, not third-party ported)
-note: 动态版本/状态/截止日/程序项必须实时官方核实（见 ref-regulatory-statistical.md 官方核验段）
+note: Dynamic versions / status / deadlines / procedure items must be verified in real time against the official source (see the official-verification section of ref-reg-contract.md)
 ---
 
 # Regulatory Version Snapshot (controlled quick-reference · C-layer)
 
-> **Nature**: This table is **maintained by ct-advisor itself** (not ported from a third party); it is the C-layer "China regulatory depth" controlled quick-reference. It is **not full-text regulation** and **does not confirm current validity** — any conclusion involving version, status, deadline, procedure or mandatory obligation must be verified in real time against the official original per the "fields to check" (see the official-verification section of `ref-regulatory-statistical.md`).
+> **Nature**: This table is **maintained by ct-advisor itself** (not ported from a third party); it is the C-layer "China regulatory depth" controlled quick-reference. It is **not full-text regulation** and **does not confirm current validity** — any conclusion involving version, status, deadline, procedure or mandatory obligation must be verified in real time against the official original per the "fields to check" (see the official-verification section of `ref-reg-contract.md`).
 
-> **Relation to the other three references**: `ref-regulatory-statistical.md` explains "on what basis, how documents relate, how normative requirements land"; `ref-regulatory-versions.md` only does the quick-check of "current approximate version + verification entry", without re-expanding methodology.
+> **Relation to the other three references**: `ref-reg-contract.md` explains "on what basis, how documents relate, how normative requirements land"; `ref-regulatory-versions.md` only does the quick-check of "current approximate version + verification entry", without re-expanding methodology.
 
 ## Use contract
 
@@ -75,14 +75,14 @@ note: 动态版本/状态/截止日/程序项必须实时官方核实（见 ref-
 | 沟通交流会议 | General | Type A / B / C meeting procedure / deadline | Official site / current procedure |
 | 临床试验申请（CTA/IND）与默示许可 | General | **60-day tacit approval** (deemed approved if no negative opinion by deadline) | Current procedure / deadline |
 
-> The titles, formal status, release date, implementation date and attachments of the above CDE documents **must** be re-confirmed on the CDE / NMPA official site. See the China clinical-trial safety document chain and official-verification section of `ref-regulatory-statistical.md`.
+> The titles, formal status, release date, implementation date and attachments of the above CDE documents **must** be re-confirmed on the CDE / NMPA official site. See the China clinical-trial safety document chain and official-verification section of `ref-reg-contract.md`.
 
 ## 4. Official verification entry (quick)
 
 - ICH: `https://www.ich.org/` ; guideline index `https://www.ich.org/page/search-index-ich-guidelines`
 - NMPA: `https://www.nmpa.gov.cn/`
 - CDE: `https://www.cde.org.cn/` (search "临床试验期间安全信息报告与管理", "SUSAR/RSI/DSUR", "沟通交流会议", etc.)
-- Recommended search terms see the official-verification section of `ref-regulatory-statistical.md`.
+- Recommended search terms see the official-verification section of `ref-reg-contract.md`.
 
 ## 5. Snapshot maintenance rules
 

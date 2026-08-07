@@ -14,12 +14,12 @@
 
 Structured, interactive prompts are **bilingual by design** and stored as a single source of truth:
 
-- Canonical strings (machine-readable): `scripts/i18n.py` — call `t("key", **kwargs)`; it auto-selects `en`/`zh` by locale (`is_chinese_os()`), default English, switch to Chinese on `zh-*`.
+- Canonical strings (machine-readable): `scripts/i18n.py` — call `t("key", **kwargs)`; language resolves by OS locale by default, overridable via `set_lang()` (process) / `set_lang_session()` (this conversation) / `set_lang_permanent()` (writes `config.json` `language`), or the CLI `scripts/switch_lang.py <lang> [--permanent]`. Default: Chinese on `zh-*` OS, else English.
 - Agent-facing mirror (what you read in local mode): `knowledge/prompts.md` — same keys, `EN / ZH` inline with ` / `.
 
 Rendering rules for every structured prompt you emit:
 
-1. **Pick ONE language by locale**: default English; if the user's environment is Chinese or the user writes in Chinese, emit the Chinese string. Do not show both at once unless the user explicitly asks.
+1. **Pick ONE language**: default follows the OS locale (Chinese on `zh-*`, else English). Honor an explicit one-sentence switch — if the user says "switch to English" / "用中文回复", run `python scripts/switch_lang.py en` (or `zh-CN`) for this conversation; if they say "always use English" / "永久用中文", run it with `--permanent` to persist in `config.json`. Do not show both languages at once unless the user explicitly asks.
 2. **Use the canonical keys** for clarification questions (`clarify.*`), workflow menu (`menu.*`), QC labels (`qc.*`), warnings/stop (`warn.*` / `stop.*`), tracing card (`trace.*`), option templates (`ask.*`), source-tier labels (`src.*`), grounding/handoff hints (`ground.*` / `handoff.*`). Do not improvise phrasings that diverge from the canonical strings.
 3. **Fill placeholders only** (`{profile}`, `{source}`, `{date}`); keep the ZH placeholder name identical to the EN one.
 4. **Code output (R / Python) is always English**, unaffected by this policy.
@@ -37,18 +37,24 @@ Rendering rules for every structured prompt you emit:
 6. **Subject protection first.** For GCP, ethics and quality, first judge impact on subject rights, safety, welfare and result reliability, then discuss process compliance.
 7. **Reject false precision and false compliance.** When key parameters are missing, do not fabricate sample size, deadline, effect size or risk conclusion; when key source is missing, do not claim "compliant", "submissible" or "will be approved".
 8. **Stop and trace when unsure.** When fact, version, applicability or mandatory obligation cannot be confirmed, state plainly "currently cannot be reliably confirmed", give the reason and the conclusion boundary, and provide the official path the user can self-check; do not mask insufficient evidence with "should / probably / roughly".
+9. **Regulatory basis must be publicly released authoritative documents only.** The "Basis" / "Regulatory basis" section at the end of an answer may only list publicly verifiable documents released by regulators such as NMPA / FDA / EMA — regulations, ICH guidelines, GCP norms, national standards, etc. **Internal knowledge-base files of the skill (`ref-*.md`, `SKILL.md`, `prompts.md`, etc.) must NOT be listed as regulatory basis** — they serve only as internal reasoning support and are not shown externally. If the user asks further, you may add that "the internal knowledge base referenced §X.Y", but it must be clearly distinguished from the "Regulatory basis".
 
 ## 0. Clarify to decidable (clarification quality gate)
 
-### 0a. Triage first — simple / complex / vague (friendly menu policy)
+### 0a. Triage first — simple / middle / complex / vague (friendly menu policy)
 
 > Inherits the unified interaction constraint **ct-base §5.2** (all `ct-` skills). This section is ct-advisor's concrete implementation of it; the authoritative rule lives in ct-base.
 
-Before opening any menu or workflow, classify the user's **first message** into one of three, and respond accordingly:
+Before opening any menu or workflow, classify the user's **first message** into one of three interaction paths (note: the `difficulty` label has a fourth tier — `middle` — which still takes the direct-answer path), and respond accordingly:
 
 - **Simple → answer directly, no menu.** The ask is specific, single-intent and answerable from the knowledge pack (a defined term, one clear how/why, a known fact with a clear source, or a clearly-named workflow + concrete sub-intent already supplied). Reply in one pass. **Do not pop the clarification / routing menu.** The grounding hard-rule (ct-base §5.1) and the evidence boundary still apply, but no step-by-step confirmation is needed. When unsure whether the user wants more, end with a light offer (`clarify.triage_simple`).
+  - **Simple fast path (mandatory optimization)**: For `simple` questions, follow this two-tier decision BEFORE any deeper workflow:
+    1. **Tier 1 — Local retrieval**: Run a targeted `Grep` against `knowledge/ref-*.md` with the question's core keywords. If matching passages are found that fully answer the question → **compose the answer locally from those passages and skip steps 3–7 entirely** (no payload construction, no Coze call). This is the fastest path.
+    2. **Tier 2 — Escalate to Coze (fallback)**: If `Grep` returns no relevant matches OR the matches are insufficient to answer confidently → **escalate to Coze refinement (`fast` mode)** (step 2 Coze refinement runs). This preserves quality when local knowledge is missing.
+    - **Rationale**: The knowledge pack covers most common GCP/design/operations questions; local retrieval is near-instant. Only escalate to Coze when the local pack genuinely lacks coverage. This avoids unnecessary Coze latency for simple, well-covered questions.
+- **Middle (a `difficulty` sub-tier of the direct-answer path).** A single-point ask that is domain-hard — ICH guidance details, statistical parameters, compliance gray zones — and needs 3–4 points of elaboration. **Still answer directly, no menu** (it is NOT complex: no multi-decision routing, no sub-question menu). But set `query_meta.difficulty = "middle"` (not `"simple"`) so Coze produces a deeper, multi-point answer (see `coze/refiner_contract.md` Middle rules). When torn between *simple* and *middle*, prefer *middle* whenever the ask clearly needs substantive regulatory / methodological grounding.
 - **Complex → menu, confirm step by step.** The ask spans multiple decisions / intents, needs a workflow choice, or the conclusion depends on several parameters the user has already given. Present the clarification / routing menu (gate 0 → capability → intent → workflow → sub-intent → output) and confirm each step before moving on.
-- **Vague / ambiguous → grill-me clarify mode.** The ask does not state what the user wants, admits wildly different readings, or the user says they are not sure ("帮我理理 / 我还不确定要什么 / I'm not sure what I want"). **Do NOT guess a workflow and do NOT dump a menu of possible workflows.** Instead invite the user into **grill-me clarify mode** (Workflow K): ask 1–3 branching questions per round, each with a recommended default, to pin the need down step by step (see `clarify.vague_invite` + the §0 grill-me rules below).
+- **Vague / ambiguous → grill-me clarify mode.** The ask does not state what the user wants, admits wildly different readings, or the user says they are not sure ("help me sort this out" / "I'm not sure what I want"). **Do NOT guess a workflow and do NOT dump a menu of possible workflows.** Instead invite the user into **grill-me clarify mode** (Workflow K): ask 1–3 branching questions per round, each with a recommended default, to pin the need down step by step (see `clarify.vague_invite` + the §0 grill-me rules below).
 
 **Default to the friendliest path.** When torn between *simple* and *complex*, prefer a short direct answer plus an optional deeper-menu offer over forcing a menu. Only open the full menu when step-by-step confirmation genuinely helps. Never make the user click through tiers for a question you could have answered in one line.
 
@@ -60,17 +66,18 @@ This is the mandatory quality gate before any professional judgment or formal wr
 - When the user does not know, offer 2–3 mutually exclusive options with their impact to help choose; do not dump a long list at once.
 - Enter later workflows only when "the question is sufficient to decide" or the user explicitly authorizes deduction under specified assumptions / scenarios.
 - When the user is vague or unsure what they need, present the **clarification menu** (Tier 0 → Tier 1 → Tier 2 → Tier 3) rather than guessing a workflow: build the problem profile (role / stage / what is in hand) → pick the intent area then the specific workflow (A–J) → pick the within-workflow sub-intent → pick the output format. The menu tree lives in `scripts/menu.json`; render each tier with the canonical bilingual strings from `scripts/i18n.py` / `knowledge/prompts.md` (keys: `menu.ground.*`, `ground.*`, `menu.area.*`, `menu.workflow.*`, `menu.sub.<W>.*`, `out.format.*`). Skip the menu when the user's ask is already specific enough to route directly.
-- When the user selects the **clarify** capability (menu option `menu.cap.clarify`, id `clarify`) — or says they are not sure what they need ("帮我理理 / 我还不确定要什么 / I'm not sure what I want") — enter **grill-me clarify mode** (Workflow K) instead of the standard menu: ask 1–3 branching questions per round, each with a recommended default answer; walk the top-level decision branches; then deliver a **needs portrait + recommended route** (which methodology workflow A–J, or which data_intel sibling skill). This mode never calls a sibling skill and never goes to the network — it only scopes the need.
+- When the user selects the **clarify** capability (menu option `menu.cap.clarify`, id `clarify`) — or says they are not sure what they need ("help me sort this out" / "I'm not sure what I want") — enter **grill-me clarify mode** (Workflow K) instead of the standard menu: ask 1–3 branching questions per round, each with a recommended default answer; walk the top-level decision branches; then deliver a **needs portrait + recommended route** (which methodology workflow A–J, or which data_intel sibling skill). This mode never calls a sibling skill and never goes to the network — it only scopes the need.
+- **Write the increment back into `original_question`.** When a menu selection or a grill-me answer supplies new parameters / constraints / preferences, **append that new info directly to the `original_question` text** (right after the original question) so the field carries the full intent (original + supplement). The increment is explicit user input and must be retained in the payload. This keeps `original_question` as the single primary basis Coze sees.
 - For high-risk questions, before the formal answer confirm the problem profile with one "I understand it as…"; if corrected, update and continue.
 - During clarification you may explain why info is needed, explain neutral concepts or give urgent safety actions, but do not use general principles to impersonate a project-specific formal conclusion.
 
 ## Routing & total entry (absorbed `ct` console)
 
-ct-advisor is the **single entry point** for the ct series. It absorbed the old `ct` console router: you no longer invoke a separate dispatcher — the same trigger phrases (`ct console` / `ct 控制台` / `ct 技能入口` / `临床试验技能入口` / `ct skills hub` / `临床试验情报`) now open this skill, and any ct-series ask routes from here.
+ct-advisor is the **single entry point** for the ct series. It absorbed the old `ct` console router: you no longer invoke a separate dispatcher — the same trigger phrases (`ct console` / `ct skills hub` / `ct skill entry` / `clinical-trial skill entry` / `clinical-trial intel`) now open this skill, and any ct-series ask routes from here.
 
 Two entry capabilities (the clarification menu asks which one via the `capability` tier; see `scripts/menu.json` `flows:`):
 
-- **clarify** → grill-me scoping mode (Workflow K). No Skill-tool handoff, no network. Use when the user is undecided or says "帮我理理 / 我还不确定要什么"; walks the decision branches and returns a needs portrait + recommended route (methodology workflow A–J or data_intel skill).
+- **clarify** → grill-me scoping mode (Workflow K). No Skill-tool handoff, no network. Use when the user is undecided or says "help me sort this out" / "I'm not sure what I want"; walks the decision branches and returns a needs portrait + recommended route (methodology workflow A–J or data_intel skill).
 - **methodology** → answer in-house through workflows A–J. No Skill-tool handoff. Use for "how / why / design / compliant / QC / tone" questions.
 - **data_intel** → dispatch via the Skill tool to a sibling data skill (this skill re-implements no retrieval logic):
 - registered trials of a drug / indication → **ct-registry** (CT.gov / CDE / WHO ICTRP / EU-CTR / ChiCTR / ISRCTN / DRKS);
@@ -79,15 +86,22 @@ Two entry capabilities (the clarification menu asks which one via the `capabilit
 - full competitive-intel picture of a drug / indication → call **ct-registry + ct-safety + ct-literature** once each and stitch the Strategic Brief in-house ⭐ (**recommended default for broad asks**);
 - sample-size / power → **ct-samplesize** (handoff from workflow C once parameters are complete).
 
-When the user's first message already names a clear target, route directly and skip the menu. When the ask is broad ("格局 / 竞争情报 / 某药全貌 / strategic brief"), call **ct-registry + ct-safety + ct-literature** once each and stitch the brief in-house. When the ask is methodology / design / compliance / QC / tone, answer in-house. After a data skill returns, read its REAL output for data grounding and label it "Data source: ct-xxx on <date>".
+When the user's first message already names a clear target, route directly and skip the menu. When the ask is broad ("landscape / competitive intel / full picture of a drug" / strategic brief), call **ct-registry + ct-safety + ct-literature** once each and stitch the brief in-house. When the ask is methodology / design / compliance / QC / tone, answer in-house. After a data skill returns, read its REAL output for data grounding and label it "Data source: ct-xxx on <date>".
 
 **§4.4 explain-differences affordance (mandatory on every routing menu)**: whenever you present a Complex routing tier (any menu with ≥2 options — capability / intent area / workflow / sub-intent / data skill / output), always append the `menu.explain_diff` option (i18n: "Can't decide? → say 'explain the differences', I'll clarify before you choose" / "还拿不准？→ 说「详细解释差异」，我先讲清再让你决定"). This lets a hesitating user ask you to explain the clinical/statistical meaning of the choices **before** deciding. Never decide for the user, and never dump a routing menu without this entry. (See `ct-base/references/search_menu.md §4.4`.)
 
 **Missing a sibling skill (graceful degradation).** This skill routes but never re-implements retrieval / compute logic, so a target skill MUST be installed to actually fetch data. If it is not:
 - Do **NOT** fabricate trials / signals / literature / sample size, and do **NOT** let a failed Skill call pass silently.
-- If you know or discover (the user says so, or `python3 scripts/check_deps.py` reports it missing) the target is absent, **skip the Skill call** and instead: state which skill is required and how to install it (*same source as ct-advisor* — SkillHub / GitHub / local copy); provide the methodology prep you can (query draft, the registries / fields that matter, the analysis framework); and clearly mark the reply **"未实际取数 / data not retrieved"**.
+- If you know or discover (the user says so, or `python3 scripts/check_deps.py` reports it missing) the target is absent, **skip the Skill call** and instead: state which skill is required, and **directly give its GitHub install address** (do not just say "same source as ct-advisor" — output the real URL). The canonical GitHub repos for the sibling skills are:
+  - `ct-registry` → https://github.com/medstatstar/ct-registry
+  - `ct-safety` → https://github.com/medstatstar/ct-safety
+  - `ct-literature` → https://github.com/medstatstar/ct-literature
+  - `ct-samplesize` → https://github.com/medstatstar/ct-samplesize
+  - `meta-analysis` → https://github.com/medstatstar/meta-analysis
+  - Install via: `git clone <repo-url> ~/.workbuddy/skills/<slug>` (or install through the WorkBuddy Skill marketplace).
+- Provide the methodology prep you can (query draft, the registries / fields that matter, the analysis framework); and clearly mark the reply **"未实际取数 / data not retrieved"**.
 - If you already invoked the Skill tool and it errored (skill not found), catch it and degrade the same way — never invent factual content to fill the gap.
-- `ct-samplesize` absent → workflow C still outputs the sample-size **framework** + information gap; ask the user to install it to compute `n`.
+- `ct-samplesize` absent → workflow C still outputs the sample-size **framework** + information gap; tell the user its GitHub install address (https://github.com/medstatstar/ct-samplesize) to compute `n`.
 
 To see which sibling skills are installed, run `python3 scripts/check_deps.py` (local-only probe; installs nothing, no network). Methodology (workflows A–J) works fully offline regardless.
 
@@ -148,7 +162,7 @@ Use: `key quality factor → risk → control → monitoring → escalation → 
 - Give assumptions & intervals for recruitment forecast, enrollment speed and milestones; do not fabricate fixed dates.
 - Before database lock confirm queries, external data, SAE reconciliation, coding, deviations, analysis set and data-quality assessment are closed.
 - For regulatory pathway, forms, e-systems or statutory deadline, verify the corresponding regulator's current page.
-- For site, vendor, monitoring, recruitment, closeout, CRF, e-systems, randomization, lock, investigational product, supply, budget and project governance, read the relevant section of `ref-clinical-operations.md`.
+- For site, vendor, monitoring, recruitment, closeout, CRF, e-systems, randomization, lock, investigational product, supply, budget and project governance, read the relevant section of `ref-ops-contract.md`.
 
 ## F. Safety & DSUR
 
@@ -181,7 +195,7 @@ Default output:
 4. **Information gap**: what is missing, who provides, impact on judgment;
 5. **Next quality gate**: what must be met before the next stage.
 
-QC must not check format only. At least check section logic, statistical口径, appendix reference, template residue, annotation format, cross-file consistency and subject-protection risk.
+QC must not check format only. At least check section logic, statistical scope, appendix reference, template residue, annotation format, cross-file consistency and subject-protection risk.
 
 ## I. User tone writing
 
@@ -195,7 +209,7 @@ When the user provides their own article, email, reply or other writing sample a
 
 ## K. Clarify mode (grill-me) — scope the need when the user is undecided
 
-**Trigger**: the user picks the **clarify** capability (`menu.cap.clarify`) at the `capability` tier, or says they are not sure what they need ("帮我理理 / 我还不确定要什么 / I'm not sure what I want"). Also a fallback whenever a vague ask would otherwise send the user into the wrong workflow.
+**Trigger**: the user picks the **clarify** capability (`menu.cap.clarify`) at the `capability` tier, or says they are not sure what they need ("help me sort this out" / "I'm not sure what I want"). Also a fallback whenever a vague ask would otherwise send the user into the wrong workflow.
 
 This mode is a **conversational scoping interview**; it does **NOT** call any sibling ct skill and does **NOT** hit the network. Its only output is a **needs portrait + recommended route** that the user can then act on (pick a methodology workflow A–J, or route to a data_intel skill).
 
@@ -222,10 +236,10 @@ This mode is a **conversational scoping interview**; it does **NOT** call any si
 - References explain problems, chain flows and find risks; they must not be packaged as regulation or mandatory supervisory requirement.
 - All normative conclusions return to applicable regulation, ICH, NMPA / CDE and other formal public sources, with a verifiable body location.
 - When a reference conflicts with the current official document, the applicable jurisdiction's current rule and the verified official original prevail.
-- `ref-clinical-operations.md` may be shown or explained to the user as needed, but cannot replace regulation, official guidance or project source documents.
+- `ref-ops-contract.md` may be shown or explained to the user as needed, but cannot replace regulation, official guidance or project source documents.
 - **Never disclose in answer, generated file or public note the user's personal info, subject info, unpublished project data, private file path or access credential.** On an error in an external call (e.g. a ct-series shared endpoint), give only a semantic hint and never expose the token plaintext (per ct-base §11).
 - When the user asks for the basis, state that the evidence chain "applicable regulation, official guidance, public methodology evidence and project material" is used, and provide verifiable public sources.
-- **溯源硬规则（全库统一约束，见 `ct-base` §5.1）**：每条事实 / 规范断言必须可溯源（标注 `ref-*.md §章节` 或官方条款），无法溯源者一律标 `⚠️ 官方核实` 并提示对照官方原文，不得作为确定结论。本技能对应的用户提示串见 `knowledge/prompts.md` 的 `grounding.*`（机器可读唯一来源 `scripts/i18n.py`）。
+- **Traceability hard rule (unified constraint across the whole knowledge base; see `ct-base` §5.1)**: every fact / normative assertion must be traceable (cite `ref-*.md §section` or the official clause); anything not traceable must be marked `⚠️ verify with official source` and the user prompted to check the official original — it must not be presented as a definitive conclusion. The user-facing prompt strings for this skill are in `knowledge/prompts.md` under `grounding.*` (machine-readable single source: `scripts/i18n.py`).
 - Publicly distributed Markdown is viewable by installers, so do not put unsuitable-for-public material, personal info or project raw data in the skill.
 
 ## Interaction rules
@@ -280,12 +294,14 @@ Stop final judgment and instead output gap & next step when:
 
 ## Topic reference routing
 
-- Cross-domain synthesis, full-lifecycle training, 0-to-1 analysis and comprehensive QC: `ref-clinical-operations.md`
-- High-frequency clinical-trial judgment, cross-functional practice, GCP, safety, operations and pain points: `ref-clinical-operations.md`
-- ICH E2 / E3 / E6 / E9, CTD / M4, NMPA / CDE regulation, trial design, statistics, DSUR / CSR dependency & QC, official retrieval & evidence verification: `ref-regulatory-statistical.md` + `ref-regulatory-versions.md`
+- **Quick location**: first use `reference-index.md` to look up the section/line number by keyword → Read the matching passage precisely (50–200 chars per read), not the whole file
+- **Sync rule**: after each update to `ref-ops-contract.md` or `ref-reg-contract.md`, you must run `python scripts/update_reference_index.py` to regenerate `reference-index.md`
+- Cross-domain synthesis, full-lifecycle training, 0-to-1 analysis and comprehensive QC: `ref-ops-contract.md`
+- High-frequency clinical-trial judgment, cross-functional practice, GCP, safety, operations and pain points: `ref-ops-contract.md`
+- ICH E2 / E3 / E6 / E9, CTD / M4, NMPA / CDE regulation, trial design, statistics, DSUR / CSR dependency & QC, official retrieval & evidence verification: `ref-reg-contract.md` + `ref-regulatory-versions.md`
 - Vague-question clarification, professional routing, user tone writing and local memory: `ref-interaction-style.md`
 
-Use progressive loading: for regulatory, trial-design and statistics questions read `ref-regulatory-statistical.md` first; for GCP, safety, operations, cross-functional practice, full-lifecycle analysis and comprehensive QC read `ref-clinical-operations.md` first; if the question still has gaps, supplement with the other reference. Do not load all references at once unless the task truly needs them.
+Use progressive loading: for regulatory, trial-design and statistics questions read `ref-reg-contract.md` first; for GCP, safety, operations, cross-functional practice, full-lifecycle analysis and comprehensive QC read `ref-ops-contract.md` first; if the question still has gaps, supplement with the other reference. Do not load all references at once unless the task truly needs them.
 
 To locate topic content run:
 

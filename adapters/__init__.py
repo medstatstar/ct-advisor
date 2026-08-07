@@ -24,15 +24,16 @@ from .data_context import (
     LocalDiskDataContext,
 )
 from .qa_store import JsonlStore, NoOpStore, QARecord, QASessionStore, RemoteDbStore
-from .refiner import CozeRefiner, LocalRefiner, RefineRequest, Refiner
+from .refiner import CozeRefiner, RefineRequest, Refiner, compute_machine_id, ACCURACY_ENUM, DIFFICULTY_ENUM, _parse_query_meta, strip_display_tags, MissingDependencyError
 from .sanitize import sanitize
 
 __all__ = [
     "AdvisorBackend", "AdvisorRequest", "AdvisorResponse", "LocalBackend", "CozeBackend",
     "DataContextProvider", "DataRef", "LocalDiskDataContext", "CozeApiDataContext",
     "QASessionStore", "QARecord", "JsonlStore", "NoOpStore", "RemoteDbStore", "sanitize",
-    "Refiner", "RefineRequest", "LocalRefiner", "CozeRefiner",
-    "build_backend", "build_data_context", "build_qa_store", "build_refiner",
+    "Refiner", "RefineRequest", "CozeRefiner", "compute_machine_id",
+    "ACCURACY_ENUM", "DIFFICULTY_ENUM", "_parse_query_meta",
+    "build_backend", "build_data_context", "build_qa_store", "build_refiner", "MissingDependencyError",
 ]
 
 
@@ -81,18 +82,45 @@ def build_qa_store(config_path: str = "config.json") -> QASessionStore:
     return NoOpStore()
 
 
-def build_refiner(config_path: str = "config.json") -> Refiner:
-    """答案精修出口（第 4 个 seam）。
+def _resolve_token_path(config_path: str, rc: Dict[str, Any]) -> str:
+    """解析 coze token 落盘路径，优先级：config.refiner.token_file > 技能默认绝对路径。
 
-    安全默认：未显式配置 refiner.mode=coze + endpoint 时返回 LocalRefiner（零网络、回传草稿）。
-    仅显式开启 coze 才实例化 CozeRefiner 发起真实出站。
+    - token_file 省略 → 用 adapters.coze_token.default_token_path()（绝对路径）。
+    - token_file 以 ~ 或 / 开头 → 直接 expanduser / 按绝对路径。
+    - 否则视为相对 config.json 目录的相对路径（如 "config/coze.dat"）。
+    """
+    import os
+    from .coze_token import default_token_path
+
+    tf = rc.get("token_file")
+    if not tf:
+        return default_token_path()
+    if tf.startswith("~") or os.path.isabs(tf):
+        return os.path.expanduser(tf)
+    return os.path.join(os.path.dirname(os.path.abspath(config_path)), tf)
+
+
+def build_refiner(config_path: str = "config.json",
+                  cli_token: str = None, token_path: str = None) -> Refiner:
+    """答案精校出口（第 4 个 seam）。
+
+    Coze 是唯一的精校后端：按难度自动分流——simple/middle 后台竞速择优选、complex/vague 前台串行等待，都经此调用
+    Coze 精校，两者都在失败/超时时由 CozeRefiner 内置回退到本地 draft_answer。
+
+    token 解析：CLI(--token) > env(CT_ADVISOR_COZE_TOKEN) > 混淆落盘文件（见 adapters/coze_token.py）。
+    token_path 参数（来自 refine_answer.py --token-path）可覆盖 config 中的 token_file。
     """
     cfg = _load_config(config_path)
     rc = cfg.get("refiner", {}) or {}
-    if rc.get("mode") == "coze" and rc.get("endpoint"):
-        return CozeRefiner(
-            endpoint=rc.get("endpoint", ""),
-            token_env=rc.get("token_env", "COZE_TOKEN"),
-            timeout=float(rc.get("timeout", 15.0)),
-        )
-    return LocalRefiner()
+    answer_mode = cfg.get("answer_mode", "fast")
+    if answer_mode != "fast":
+        answer_mode = "fast"  # 2026-08-05 起仅保留 fast 模式（precise 已删除）
+    return CozeRefiner(
+        endpoint=rc.get("endpoint", ""),
+        token_env=rc.get("token_env", "CT_ADVISOR_COZE_TOKEN"),
+        timeout=float(rc.get("timeout", 60.0)),
+        race_window=float(rc.get("race_window", 2.0)),
+        cli_token=cli_token,
+        token_path=token_path or _resolve_token_path(config_path, rc),
+        answer_mode=answer_mode,
+    )

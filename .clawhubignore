@@ -15,6 +15,36 @@ assets/*
 # Dev / working logs (not part of the skill's runtime or knowledge)
 auto_loop_rounds.md
 knowledge/survey_external_projects.md
+tests/
+*.err
+timing_*.txt
+test_*.json
+test_results*.json
+payload_*.json
+analyze_ctdb.py
+analyze_ctdb5.py
+analyze_ctdb5_detail.py
+analyze_ctdb5_final.py
+build_difficulty_map.py
+build_vaccine_payload.py
+compare_v1_v2.py
+run_tests.py
+run_tests_v2.py
+run_tests_v3.py
+difficulty_map.json
+final_vaccine_as.md
+final_vaccine_as_skeleton.md
+timing_fast_err.txt
+timing_lean_err.txt
+timing_parallel_step7_err.txt
 
 # Empty runtime output dir (created on first Q&A persist)
 data/
+
+# coze 接口文档：发布时一律不打包（用户 2026-08-03 明确要求；2026-08-05 扩展至全部三个接口文档）。
+# 含入参/出参接口契约、Coze system prompt、执行细则；ClawHub 走本 .clawhubignore 剔除。
+# GitHub 发布走 .gitignore。
+coze/refiner_contract.md
+coze/coze_system_prompt_v1.4.md
+coze/subagent_prompt.md
+references/ops.md

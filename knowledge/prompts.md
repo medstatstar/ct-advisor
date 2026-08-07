@@ -6,7 +6,7 @@
 
 ## Language rule / 语言规则（来自 ct-base `references/language_policy.md`）
 
-- **Default English.** When the user's environment is Chinese (OS locale contains `zh`/`CN`) or the user writes in Chinese, emit the **ZH** string automatically — no explicit request needed. / 默认英文。当用户环境为中文（OS locale 含 `zh`/`CN`）或用户用中文提问时，自动输出**中文**串，无需显式要求。
+- **Default: follow OS locale.** Chinese on `zh-*` OS or when the user writes in Chinese; English otherwise — no explicit request needed. One-sentence switch: say "switch to English" / "用中文回复" (this conversation) or "always use X" / "永久用X" (`--permanent` → writes `config.json` `language`); the advisor runs `python scripts/switch_lang.py <lang> [--permanent]`. / 默认跟随系统区域：`zh-*` 系统或用户用中文时输出中文，否则英文，无需显式要求。一句话切换：说「用中文回复」/"switch to English"（仅本次对话），或「永久用X」/"always use X"（`--permanent` 写 `config.json` `language`）；顾问运行 `python scripts/switch_lang.py <lang> [--permanent]`。
 - **Render only the active language.** Do not mechanically append an English translation after a Chinese heading (and vice versa). / 只输出当前语言；不要在中文标题后机械附带英文翻译（反之亦然）。
 - **Code output (R / Python) is always English** and unaffected by this policy. / 代码输出（R / Python）始终为英文，不受本策略影响。
 - In any bilingual doc, join EN and ZH on the same line with ` / ` (slash, spaces both sides); never use `|` (Markdown column delimiter). / 双语文档中，中英文一律用 ` / `（斜杠，两侧空格）连同一行；不要用 `|`。
@@ -134,6 +134,7 @@
 ### Warnings / stop rules / 警示与停止规则
 - `warn.verify_incomplete`: Verification not yet complete — no definitive judgment on items depending on this basis. / 核实尚未完成——对依赖该依据的事项不下确定结论。
 - `warn.unconfirmed`: Unconfirmed items — why unconfirmable — what judgment this affects: / 未能确认项——为何无法确认——影响哪些结论：
+- `warn.complex_patience`: This question is complex / not yet fully clear. The AI needs to do an in-depth verification to ensure the conclusion is correct — please wait for the result. / 这个问题比较复杂 / 还不够明确，AI 需要对问题做深入核查以确保结论正确，请耐心等候结果。
 - `stop.tracing`: Definitive judgment withheld. Official tracing path below; please return the original for re-check. / 不下确定结论。官方溯源路径如下，请返回原文复核。
 - `stop.no_risk_mask`: Do not use "no risk found" to mask unreceived or unreconciled data. / 不得用「未发现风险」掩盖未收到或未核对的资料。
 - `stop.fabricate`: Do not fabricate sample size, deadline, effect size or risk conclusion when key parameters are missing. / 关键参数缺失时，不得编造样本量、时限、效应量或风险结论。

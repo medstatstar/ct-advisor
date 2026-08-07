@@ -1,0 +1,1 @@
+[ct-advisor] alias table: 246 groups; 1 fired / 别名表: 246 组; 本次命中 1 组; pattern len 49 / 检索式长度 49 chars

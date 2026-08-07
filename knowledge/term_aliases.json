@@ -1,0 +1,1149 @@
+{
+  "version": "2026-08-06",
+  "purpose": "ct-advisor 中英术语别名表：search_refs.py 检索前据此将用户关键字自动扩展为同义中英文词组，确保中文/英文提问均能命中知识库。",
+  "usage": "检索时若 user pattern 含表中任一 term（不区分大小写子串），则把该 term 所在 group 全部并入正则。扩展词表可在此增删。",
+  "aliases": [
+    [
+      "一致性",
+      "concordance",
+      "agreement"
+    ],
+    [
+      "上市后安全性研究",
+      "PASS"
+    ],
+    [
+      "上市许可申请",
+      "MAA"
+    ],
+    [
+      "不自动否定相似性",
+      "Similarity"
+    ],
+    [
+      "不良事件",
+      "adverse event",
+      "AE"
+    ],
+    [
+      "封档",
+      "flagging"
+    ],
+    [
+      "严重不良事件",
+      "serious adverse event",
+      "SAE"
+    ],
+    [
+      "个例安全报告",
+      "ICSR"
+    ],
+    [
+      "中心",
+      "site",
+      "ISF"
+    ],
+    [
+      "中心关闭",
+      "site closeout"
+    ],
+    [
+      "中心化监查",
+      "centralized monitoring"
+    ],
+    [
+      "中心启动访视",
+      "启动访视",
+      "SIV"
+    ],
+    [
+      "中心影像",
+      "central imaging"
+    ],
+    [
+      "中枢神经系统",
+      "CNS"
+    ],
+    [
+      "临床数据管理系统",
+      "CDMS",
+      "data management",
+      "EDC"
+    ],
+    [
+      "临床终点裁定",
+      "CEC",
+      "EAC"
+    ],
+    [
+      "临床结局评估",
+      "COA"
+    ],
+    [
+      "临床试验申请",
+      "CTA/IND"
+    ],
+    [
+      "临床验证",
+      "分析验证",
+      "验证",
+      "analytical validation",
+      "clinical validation",
+      "validation",
+      "CSV"
+    ],
+    [
+      "临界值",
+      "截断值",
+      "cut-off",
+      "cutoff"
+    ],
+    [
+      "主方案",
+      "master protocol"
+    ],
+    [
+      "主要终点",
+      "primary endpoint"
+    ],
+    [
+      "剂量限制性毒性",
+      "DLT"
+    ],
+    [
+      "个体水平数据",
+      "IPD"
+    ],
+    [
+      "人遗资源",
+      "human genetic resources"
+    ],
+    [
+      "优效",
+      "superiority"
+    ],
+    [
+      "会议审查",
+      "convened"
+    ],
+    [
+      "伞式",
+      "Umbrella",
+      "umbrella"
+    ],
+    [
+      "伦理委员会",
+      "IEC",
+      "IRB"
+    ],
+    [
+      "估计目标",
+      "estimand",
+      "E9 R1"
+    ],
+    [
+      "伴发事件",
+      "intercurrent event"
+    ],
+    [
+      "伴随诊断",
+      "companion diagnostic",
+      "CDx"
+    ],
+    [
+      "保险",
+      "insurance"
+    ],
+    [
+      "信号检测",
+      "signal detection",
+      "PRR",
+      "ROR"
+    ],
+    [
+      "修正案",
+      "amendment"
+    ],
+    [
+      "独立终点判定",
+      "BICR",
+      "CEC",
+      "independent review"
+    ],
+    [
+      "假设下的假阳性率",
+      "一类错误",
+      "type I error",
+      "alpha"
+    ],
+    [
+      "假设检验",
+      "hypothesis testing",
+      "hypothesis"
+    ],
+    [
+      "儿科剂量常按体重",
+      "mg/kg"
+    ],
+    [
+      "先与两国监管沟通",
+      "并尽早与监管沟通",
+      "Pre-IND / Type B"
+    ],
+    [
+      "光安全",
+      "phototoxicity",
+      "photoallergy"
+    ],
+    [
+      "全球多中心试验",
+      "国际多中心",
+      "MRCT"
+    ],
+    [
+      "关键质量因素",
+      "CtQ"
+    ],
+    [
+      "监管沟通",
+      "沟通交流",
+      "阻碍程序",
+      "Pre-IND",
+      "Type A",
+      "Type B",
+      "Type C"
+    ],
+    [
+      "出具统计分析报告",
+      "统计分析报告",
+      "SAR"
+    ],
+    [
+      "分层",
+      "stratification"
+    ],
+    [
+      "分析与处理",
+      "with general docs"
+    ],
+    [
+      "分配筛选号",
+      "screening ID"
+    ],
+    [
+      "分配隐藏",
+      "分配",
+      "allocation concealment",
+      "allocation"
+    ],
+    [
+      "分阶段",
+      "interim"
+    ],
+    [
+      "医学科学联络员",
+      "医学事务",
+      "MSL"
+    ],
+    [
+      "单臂试验",
+      "单臂",
+      "single-arm"
+    ],
+    [
+      "历史对照",
+      "historical control"
+    ],
+    [
+      "去中心化试验",
+      "DCT"
+    ],
+    [
+      "受试者",
+      "患者",
+      "participant",
+      "subject"
+    ],
+    [
+      "可比性",
+      "桥接",
+      "comparability",
+      "bridging"
+    ],
+    [
+      "可行性",
+      "feasibility"
+    ],
+    [
+      "可解释性",
+      "anchor-based MCID",
+      "Explainability"
+    ],
+    [
+      "可重复性",
+      "Reproducibility"
+    ],
+    [
+      "合同",
+      "contract"
+    ],
+    [
+      "合成对照",
+      "synthetic control"
+    ],
+    [
+      "同情用药",
+      "compassionate use",
+      "expanded access"
+    ],
+    [
+      "名义患者",
+      "named patient"
+    ],
+    [
+      "后享有的数据保护",
+      "data exclusivity"
+    ],
+    [
+      "启动召回",
+      "回收",
+      "recall"
+    ],
+    [
+      "响应自适应随机化",
+      "RAR"
+    ],
+    [
+      "回复核查发现",
+      "finding"
+    ],
+    [
+      "培训",
+      "training"
+    ],
+    [
+      "基于风险的监查",
+      "基于风险监查",
+      "RBM"
+    ],
+    [
+      "基因治疗长期随访",
+      "LTFU"
+    ],
+    [
+      "外部对照",
+      "external control"
+    ],
+    [
+      "多臂多阶段",
+      "MAMS"
+    ],
+    [
+      "多重性",
+      "multiplicity"
+    ],
+    [
+      "孤儿药",
+      "orphan drug"
+    ],
+    [
+      "安全性",
+      "safety"
+    ],
+    [
+      "安全性信号",
+      "信号",
+      "safety signal"
+    ],
+    [
+      "完整性",
+      "样本链",
+      "chain of custody"
+    ],
+    [
+      "实验室正常值范围",
+      "心特异正常值范围",
+      "LLN / ULN"
+    ],
+    [
+      "审评时限缩短",
+      "加快上市",
+      "accelerated approval",
+      "breakthrough therapy",
+      "priority review",
+      "fast track"
+    ],
+    [
+      "富集",
+      "enrichment"
+    ],
+    [
+      "对分中心研究者",
+      "sub-I"
+    ],
+    [
+      "平台",
+      "Platform"
+    ],
+    [
+      "平台试验",
+      "platform trial"
+    ],
+    [
+      "并做传输影响评估",
+      "TIA"
+    ],
+    [
+      "终点裁定委员会",
+      "CEC / EAC"
+    ],
+    [
+      "应急信封",
+      "应急分配",
+      "emergency envelope"
+    ],
+    [
+      "首次人体试验",
+      "FIH"
+    ],
+    [
+      "心电图",
+      "ECG"
+    ],
+    [
+      "快速报告",
+      "SAE clock",
+      "SAE 时钟"
+    ],
+    [
+      "性与跨队列一致性",
+      "class effect"
+    ],
+    [
+      "患者报告结局",
+      "PRO / ePRO",
+      "ePRO",
+      "PRO"
+    ],
+    [
+      "体表面积",
+      "BSA"
+    ],
+    [
+      "把握度",
+      "power"
+    ],
+    [
+      "招募",
+      "recruitment"
+    ],
+    [
+      "按量级与临床意义",
+      "CS / NCS"
+    ],
+    [
+      "据完整与编码一致",
+      "MedDRA"
+    ],
+    [
+      "授权",
+      "authorization",
+      "delegation"
+    ],
+    [
+      "授权表",
+      "delegation log"
+    ],
+    [
+      "提交儿科研究计划",
+      "儿科研究计划",
+      "儿科",
+      "pediatric",
+      "PIP"
+    ],
+    [
+      "揭盲",
+      "破盲",
+      "unblinding",
+      "unblind"
+    ],
+    [
+      "撰写",
+      "with E2A / E2F"
+    ],
+    [
+      "效用值映射",
+      "mapping"
+    ],
+    [
+      "数据保护",
+      "data protection"
+    ],
+    [
+      "数据保护影响评估",
+      "DPIA"
+    ],
+    [
+      "数据做样本量重估",
+      "样本量重估",
+      "SSR"
+    ],
+    [
+      "数据共享",
+      "data sharing"
+    ],
+    [
+      "数据出境",
+      "数据跨境",
+      "cross-border"
+    ],
+    [
+      "数据完整性",
+      "data integrity",
+      "ALCOA+",
+      "ALCOA"
+    ],
+    [
+      "数据库锁定",
+      "锁库",
+      "database lock",
+      "DBL"
+    ],
+    [
+      "数据标准",
+      "CDISC SDTM / ADaM"
+    ],
+    [
+      "数据治理",
+      "data governance"
+    ],
+    [
+      "数据管理员",
+      "DM"
+    ],
+    [
+      "新药申请",
+      "NDA"
+    ],
+    [
+      "方案",
+      "protocol"
+    ],
+    [
+      "方案偏离",
+      "偏离",
+      "protocol deviation",
+      "PD"
+    ],
+    [
+      "方法",
+      "PRR / ROR"
+    ],
+    [
+      "无效性",
+      "futility"
+    ],
+    [
+      "早期终止标准",
+      "Stopping Rules"
+    ],
+    [
+      "时间戳",
+      "contemporaneous"
+    ],
+    [
+      "映射关键风险指标",
+      "关键风险指标",
+      "监测指标",
+      "KRI"
+    ],
+    [
+      "是否构成不当诱导",
+      "inducement"
+    ],
+    [
+      "跨境传输",
+      "SCC",
+      "BCR",
+      "TIA",
+      "standard contractual clauses",
+      "binding corporate rules",
+      "transfer impact"
+    ],
+    [
+      "暂停",
+      "hold"
+    ],
+    [
+      "替代终点",
+      "surrogate endpoint"
+    ],
+    [
+      "有效性检查",
+      "effectiveness check"
+    ],
+    [
+      "期中分析",
+      "期中",
+      "interim analysis"
+    ],
+    [
+      "机构",
+      "institution"
+    ],
+    [
+      "标准合同条款",
+      "SCC"
+    ],
+    [
+      "标准数据格式",
+      "分析数据集",
+      "数据呈现",
+      "CDISC",
+      "ADaM",
+      "SDTM"
+    ],
+    [
+      "样本量",
+      "sample size"
+    ],
+    [
+      "核查准备",
+      "inspection readiness"
+    ],
+    [
+      "模型引导剂量探索",
+      "CRM / BOIN"
+    ],
+    [
+      "次要终点",
+      "secondary endpoint"
+    ],
+    [
+      "死亡",
+      "death"
+    ],
+    [
+      "沟通交流会议",
+      "Type A / B / C"
+    ],
+    [
+      "法规",
+      "21 CFR 314.500"
+    ],
+    [
+      "源数据核查",
+      "电子源数据",
+      "原始数据",
+      "源数据",
+      "核查",
+      "source data verification",
+      "source data review",
+      "source document",
+      "verification",
+      "source data",
+      "inspection",
+      "eSource",
+      "SDV"
+    ],
+    [
+      "滥用潜力",
+      "药物滥用",
+      "abuse potential"
+    ],
+    [
+      "漂移",
+      "drift"
+    ],
+    [
+      "药物分析",
+      "PK / BA"
+    ],
+    [
+      "特别关注不良事件",
+      "AESI"
+    ],
+    [
+      "独立中心影像",
+      "独立影像",
+      "影像",
+      "BICR",
+      "IRC"
+    ],
+    [
+      "生物制品许可申请",
+      "BLA"
+    ],
+    [
+      "生物标志物",
+      "biomarker"
+    ],
+    [
+      "生物样本",
+      "样本",
+      "biospecimen"
+    ],
+    [
+      "生物等效性",
+      "BE"
+    ],
+    [
+      "生物类似药",
+      "biosimilar"
+    ],
+    [
+      "标签扩展",
+      "label expansion"
+    ],
+    [
+      "用户认证",
+      "attributable"
+    ],
+    [
+      "真实世界证据",
+      "RWE"
+    ],
+    [
+      "群体药代",
+      "PopPK"
+    ],
+    [
+      "申办方",
+      "sponsor",
+      "eTMF"
+    ],
+    [
+      "申办方与机构",
+      "主要研究者",
+      "研究者",
+      "investigator",
+      "PI"
+    ],
+    [
+      "电子数据采集",
+      "EDC"
+    ],
+    [
+      "电子知情同意",
+      "知情同意",
+      "informed consent",
+      "eConsent",
+      "ICF"
+    ],
+    [
+      "留存",
+      "retention"
+    ],
+    [
+      "病例报告表",
+      "eCRF",
+      "CRF"
+    ],
+    [
+      "专利期延期",
+      "SPC",
+      "PTE",
+      "supplementary protection certificate",
+      "patent term extension"
+    ],
+    [
+      "几何均值比",
+      "GMR"
+    ],
+    [
+      "监查",
+      "monitoring",
+      "CRA"
+    ],
+    [
+      "监查访视报告",
+      "Monitoring Visit Report",
+      "MVR"
+    ],
+    [
+      "监管检查",
+      "检查",
+      "inspection"
+    ],
+    [
+      "真实世界研究",
+      "RWS",
+      "real-world study",
+      "real-world"
+    ],
+    [
+      "研发期间安全性更新报告",
+      "间安全性更新报告",
+      "DSUR"
+    ],
+    [
+      "研究用检测方法",
+      "investigational assay",
+      "assay"
+    ],
+    [
+      "研究者发起研究",
+      "IIT"
+    ],
+    [
+      "研究者手册",
+      "IB"
+    ],
+    [
+      "研究者手册安全性参考信息",
+      "中安全性参考信息",
+      "RSI"
+    ],
+    [
+      "研究者文件夹",
+      "试验主文件",
+      "必备文件",
+      "essential documents",
+      "ISF / eTMF",
+      "eTMF",
+      "ISF",
+      "TMF"
+    ],
+    [
+      "研究者评估一致性",
+      "Kappa"
+    ],
+    [
+      "隐私设计",
+      "privacy by design"
+    ],
+    [
+      "种族因子",
+      "种族桥接",
+      "ethnic bridging",
+      "RFE"
+    ],
+    [
+      "种族敏感性",
+      "Ethnic Sensitivity"
+    ],
+    [
+      "稽查",
+      "audit"
+    ],
+    [
+      "研究者经济利益冲突",
+      "成员利益冲突",
+      "利益冲突",
+      "COI"
+    ],
+    [
+      "窄治疗窗",
+      "NTID"
+    ],
+    [
+      "章程",
+      "charter"
+    ],
+    [
+      "等效",
+      "equivalence"
+    ],
+    [
+      "筛选失败",
+      "screen-failure"
+    ],
+    [
+      "数据处理协议",
+      "DPA"
+    ],
+    [
+      "篮式",
+      "Basket",
+      "basket"
+    ],
+    [
+      "系统放行",
+      "go-live"
+    ],
+    [
+      "纠正与预防措施",
+      "纠正预防措施",
+      "CAPA"
+    ],
+    [
+      "约束性企业规则",
+      "BCR"
+    ],
+    [
+      "组织盲态数据审查",
+      "盲态数据审查",
+      "BDR"
+    ],
+    [
+      "终点",
+      "endpoint"
+    ],
+    [
+      "终点验证",
+      "qualification"
+    ],
+    [
+      "中央随机",
+      "IWRS / IRT",
+      "IWRS",
+      "IRT"
+    ],
+    [
+      "经济评价",
+      "EE"
+    ],
+    [
+      "结果登记",
+      "ClinicalTrials.gov",
+      "trial registration"
+    ],
+    [
+      "统计分析计划",
+      "statistical analysis plan",
+      "SAP"
+    ],
+    [
+      "编码",
+      "SOC / PT"
+    ],
+    [
+      "缺失",
+      "missing data",
+      "missingness"
+    ],
+    [
+      "置信区间",
+      "confidence interval",
+      "CI"
+    ],
+    [
+      "老年",
+      "geriatric"
+    ],
+    [
+      "脱落",
+      "dropout"
+    ],
+    [
+      "良事件相关性评价",
+      "with E2A"
+    ],
+    [
+      "最大耐受剂量",
+      "MTD",
+      "RP2D",
+      "maximum tolerated dose",
+      "recommended phase 2 dose"
+    ],
+    [
+      "方案违背",
+      "protocol violation",
+      "PV"
+    ],
+    [
+      "药代药效",
+      "PK-PD"
+    ],
+    [
+      "药品账目",
+      "drug accountability"
+    ],
+    [
+      "药物临床试验",
+      "CTA",
+      "IND"
+    ],
+    [
+      "药物基因组学",
+      "PGx"
+    ],
+    [
+      "药物相互作用",
+      "DDI"
+    ],
+    [
+      "药物经济学",
+      "HEOR"
+    ],
+    [
+      "药物警戒",
+      "pharmacovigilance",
+      "PV"
+    ],
+    [
+      "行政性可快速审查",
+      "快速审查",
+      "expedited"
+    ],
+    [
+      "补偿",
+      "诱导",
+      "compensation"
+    ],
+    [
+      "表级",
+      "TFL"
+    ],
+    [
+      "地域性附录",
+      "Module 1"
+    ],
+    [
+      "历史数据借力",
+      "外部数据",
+      "power prior"
+    ],
+    [
+      "质量容忍限",
+      "QTL"
+    ],
+    [
+      "计算机化系统验证",
+      "CSV"
+    ],
+    [
+      "数据使用协议",
+      "DUA"
+    ],
+    [
+      "数据保护职责",
+      "数据保护官",
+      "DPO"
+    ],
+    [
+      "诊断",
+      "detect disease",
+      "diagnostic"
+    ],
+    [
+      "试验用药品",
+      "investigational product",
+      "IP"
+    ],
+    [
+      "最小化",
+      "minimization"
+    ],
+    [
+      "育龄女性",
+      "妊娠",
+      "pregnancy",
+      "WOCBP"
+    ],
+    [
+      "孤儿药资格认定",
+      "orphan designation"
+    ],
+    [
+      "贝叶斯",
+      "Bayesian"
+    ],
+    [
+      "贝叶斯自适应",
+      "Bayesian adaptive"
+    ],
+    [
+      "质量管理",
+      "质量",
+      "quality",
+      "QM"
+    ],
+    [
+      "载体脱落动力学",
+      "shedding"
+    ],
+    [
+      "过量",
+      "overdose"
+    ],
+    [
+      "远程",
+      "remote"
+    ],
+    [
+      "适应性设计",
+      "适应性",
+      "adaptive"
+    ],
+    [
+      "遗传毒性",
+      "genotoxicity"
+    ],
+    [
+      "避孕",
+      "contraception"
+    ],
+    [
+      "数据监查委员会",
+      "DSMB",
+      "iDMC"
+    ],
+    [
+      "重读一致性",
+      "Kappa",
+      "ICC"
+    ],
+    [
+      "锁定",
+      "locked assay",
+      "locked"
+    ],
+    [
+      "防滥用剂型",
+      "abuse-deterrent"
+    ],
+    [
+      "附条件批准",
+      "conditional approval"
+    ],
+    [
+      "随机化",
+      "随机",
+      "randomization"
+    ],
+    [
+      "非劣效",
+      "non-inferiority"
+    ],
+    [
+      "项目经理",
+      "PM"
+    ],
+    [
+      "须伦理会议审查",
+      "convened"
+    ],
+    [
+      "预后",
+      "predict course",
+      "prognostic"
+    ],
+    [
+      "预测性",
+      "预测",
+      "predictive"
+    ],
+    [
+      "预设折扣因子",
+      "discounting"
+    ],
+    [
+      "风险管理计划",
+      "RMP"
+    ],
+    [
+      "高变异药物",
+      "HVDP"
+    ],
+    [
+      "CTD"
+    ],
+    [
+      "eCTD"
+    ],
+    [
+      "QTc"
+    ]
+  ]
+}

@@ -22,8 +22,8 @@
         "查找最新或中国监管要求（当前/是否实施/时限/依据）"
       ],
       "reads": [
-        "ref-clinical-operations.md",
-        "ref-regulatory-statistical.md",
+        "ref-ops-contract.md",
+        "ref-reg-contract.md",
         "ref-regulatory-versions.md"
       ],
       "deliverable": "结论、边界、例子、误区、依据；涉及最新/中国要求时给官网溯源卡",
@@ -38,8 +38,8 @@
         "BA/BE、食物影响、FIH、剂量递增、PopPK 或 DDI"
       ],
       "reads": [
-        "ref-regulatory-statistical.md",
-        "ref-clinical-operations.md"
+        "ref-reg-contract.md",
+        "ref-ops-contract.md"
       ],
       "deliverable": "设计链、选项权衡、推荐、假设与风险",
       "design_chain": "目标决策 → 临床问题 → 估计目标 → 人群 → 干预与对照 → 终点 → 随机/盲法 → 数据采集 → 分析 → 可行性 → 可解释结论"
@@ -50,7 +50,7 @@
       "name_en": "Statistics & estimands",
       "trigger": "估计目标、样本量、分析集、缺失、多重性、非劣效",
       "reads": [
-        "ref-regulatory-statistical.md"
+        "ref-reg-contract.md"
       ],
       "downstream": "ct-samplesize",
       "deliverable": "方法框架、参数缺口、分析影响；参数齐全时由 ct-samplesize 实算",
@@ -71,7 +71,7 @@
       "name_en": "GCP & quality",
       "trigger": "GCP、伦理、偏差、CAPA、监查、数据质量或临床运营中的质量问题",
       "reads": [
-        "ref-clinical-operations.md"
+        "ref-ops-contract.md"
       ],
       "deliverable": "影响判断、责任、控制、升级和 CAPA",
       "chain": "关键质量因素 → 风险 → 控制 → 监测 → 升级 → CAPA → 有效性检查"
@@ -82,7 +82,7 @@
       "name_en": "Clinical operations",
       "trigger": "中心、供应商、RBM、招募、试验用药、数据、随机化、锁库或关闭",
       "reads": [
-        "ref-clinical-operations.md"
+        "ref-ops-contract.md"
       ],
       "deliverable": "依赖、职责、风险触发器和闭环"
     },
@@ -92,8 +92,8 @@
       "name_en": "Safety & DSUR",
       "trigger": "AE/SAE/SUSAR、信号、RSI、获益风险；首份或年度 DSUR",
       "reads": [
-        "ref-regulatory-statistical.md",
-        "ref-clinical-operations.md"
+        "ref-reg-contract.md",
+        "ref-ops-contract.md"
       ],
       "deliverable": "分类、RSI 版本、报告路径、汇总分析、行动与依据",
       "chain": "个例 → 汇总 → 信号 → 风险表征 → 获益风险 → 行动"
@@ -104,8 +104,8 @@
       "name_en": "Documents & reports",
       "trigger": "CSR 规划、撰写输入或一致性审查",
       "reads": [
-        "ref-regulatory-statistical.md",
-        "ref-clinical-operations.md"
+        "ref-reg-contract.md",
+        "ref-ops-contract.md"
       ],
       "deliverable": "资料依赖、一致性链、问题优先级和修正建议",
       "chain": "方案/修订 → SAP → 数据审核 → 数据库 → TFL → 正文 → 附录"
@@ -116,8 +116,10 @@
       "name_en": "Methodology QC",
       "trigger": "审查方案、统计策略、资料包或工作流",
       "reads": [
-        "target workflow modules"
+        "ref-reg-contract.md",
+        "ref-ops-contract.md"
       ],
+      "reads_dynamic": "additionally re-read the reads[] of the workflow under QC (H is a review pass over another workflow's output)",
       "deliverable": "总体判定、问题清单、修正方案、资料缺口、下一质量门",
       "output_shape": [
         "总体判定(可接受/有条件可接受/不可接受)",
@@ -181,7 +183,7 @@
         "B"
       ],
       "reads": [
-        "ref-regulatory-statistical.md",
+        "ref-reg-contract.md",
         "ref-regulatory-versions.md"
       ]
     },

@@ -22,20 +22,25 @@ import os
 import sys
 from pathlib import Path
 
-# (slug, tier, purpose, install_hint)
+# (slug, tier, purpose, github_repo, install_hint)
+# 缺失时直接给出 GitHub 安装地址（repo URL + 克隆命令）。
 KNOWN_DEPS = [
     ("ct-registry", "B",
      "Trial-registry landscape (CT.gov / CDE / WHO ICTRP / EU-CTR / ChiCTR / ISRCTN / DRKS)",
-     "与 ct-advisor 同源安装：SkillHub / GitHub / 本地拷贝"),
+     "https://github.com/medstatstar/ct-registry",
+     "GitHub 安装地址: https://github.com/medstatstar/ct-registry ｜ 或 `git clone https://github.com/medstatstar/ct-registry ~/.workbuddy/skills/ct-registry`"),
     ("ct-safety", "B",
      "Safety signals (FAERS PRR / ROR / IC)",
-     "与 ct-advisor 同源安装：SkillHub / GitHub / 本地拷贝"),
+     "https://github.com/medstatstar/ct-safety",
+     "GitHub 安装地址: https://github.com/medstatstar/ct-safety ｜ 或 `git clone https://github.com/medstatstar/ct-safety ~/.workbuddy/skills/ct-safety`"),
     ("ct-literature", "B",
      "Published literature (OpenAlex / Europe PMC / Semantic Scholar)",
-     "与 ct-advisor 同源安装：SkillHub / GitHub / 本地拷贝"),
+     "https://github.com/medstatstar/ct-literature",
+     "GitHub 安装地址: https://github.com/medstatstar/ct-literature ｜ 或 `git clone https://github.com/medstatstar/ct-literature ~/.workbuddy/skills/ct-literature`"),
     ("ct-samplesize", "A",
      "Sample-size & power computation (handoff from workflow C)",
-     "与 ct-advisor 同源安装：SkillHub / GitHub / 本地拷贝"),
+     "https://github.com/medstatstar/ct-samplesize",
+     "GitHub 安装地址: https://github.com/medstatstar/ct-samplesize ｜ 或 `git clone https://github.com/medstatstar/ct-samplesize ~/.workbuddy/skills/ct-samplesize`"),
 ]
 
 
@@ -68,7 +73,7 @@ def _skill_roots(project=None):
 
 def check(roots):
     result = []
-    for slug, tier, purpose, hint in KNOWN_DEPS:
+    for slug, tier, purpose, github, hint in KNOWN_DEPS:
         found_in = None
         for root in roots:
             root = Path(root)  # tolerate string roots (e.g. direct check() calls)
@@ -79,6 +84,7 @@ def check(roots):
             "slug": slug,
             "tier": tier,
             "purpose": purpose,
+            "github": github,
             "installed": found_in is not None,
             "path": found_in,
             "install_hint": hint,
@@ -95,6 +101,7 @@ def render_human(report):
         print("  [%s] %s  (tier %s)" % (mark, r["slug"], r["tier"]))
         print("           %s" % r["purpose"])
         if not r["installed"]:
+            print("           GitHub: %s" % r["github"])
             print("           install: %s" % r["install_hint"])
     print("-" * 72)
     print("  %d/%d sibling skills installed." % (installed, len(report)))
