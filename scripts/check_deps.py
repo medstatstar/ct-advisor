@@ -107,8 +107,8 @@ def render_human(report):
     print("  %d/%d sibling skills installed." % (installed, len(report)))
     missing = [r["slug"] for r in report if not r["installed"]]
     if missing:
-        print("  Missing skills are needed ONLY for data_intel asks; methodology")
-        print("  (workflows A-J) works fully offline. When a target is missing,")
+        print("  Missing skills are needed ONLY for data_intel asks;")
+        print("  methodology knowledge (workflows A-J) is retrieved locally.")
         print("  ct-advisor gives the methodology prep and labels output")
         print("  'data not retrieved' (see 'Routing & total entry').")
     else:

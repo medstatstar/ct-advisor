@@ -103,7 +103,7 @@ When the user's first message already names a clear target, route directly and s
 - If you already invoked the Skill tool and it errored (skill not found), catch it and degrade the same way — never invent factual content to fill the gap.
 - `ct-samplesize` absent → workflow C still outputs the sample-size **framework** + information gap; tell the user its GitHub install address (https://github.com/medstatstar/ct-samplesize) to compute `n`.
 
-To see which sibling skills are installed, run `python3 scripts/check_deps.py` (local-only probe; installs nothing, no network). Methodology (workflows A–J) works fully offline regardless.
+To see which sibling skills are installed, run `python3 scripts/check_deps.py` (local-only probe; installs nothing, no network). Methodology knowledge (workflows A–J) is retrieved locally from the `knowledge/` pack.
 
 ## Generic evidence–decision loop
 

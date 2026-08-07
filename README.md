@@ -8,9 +8,9 @@
 
 > **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor that also routes real-data / competitive-intel asks to sibling data skills.**
 
-> 💡 **Performance Tip**: This skill's answer accuracy primarily relies on external cloud-based LLM services and database support — it does not demand much from the local LLM. We've observed that reasoning/thinking models (e.g. Hunyuan-3, DeepSeek-R1) spend excessive time on deep thinking when running this skill. **If a single response takes longer than 3 minutes, we strongly recommend switching to a standard model for this skill.**
+> 💡 **Performance Tip**: This skill's answer accuracy primarily relies on external cloud-based LLM services and database support — it does not demand much from the local LLM (and the locally installed reference materials are also limited). We've observed that reasoning/thinking models (e.g. Hunyuan-3, DeepSeek-R1) spend excessive time on deep thinking when running this skill. **If a single response takes longer than 3 minutes, we recommend switching to a standard model to speed up processing.**
 
-> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor answers methodology / design / statistics / GCP / safety / regulatory / QC / tone questions in-house, and for real-data or competitive-intel needs, routes you to the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) or stitches a full competitive-intel brief from the three data sources. It **re-implements no** retrieval or computation logic. B-tier; pure methodology runs fully offline.
+> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor answers methodology / design / statistics / GCP / safety / regulatory / QC / tone questions in-house, and for real-data or competitive-intel needs, routes you to the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) or stitches a full competitive-intel brief from the three data sources. It **re-implements no** retrieval or computation logic. B-tier. **Note: every answer's refinement is sent to the Coze endpoint — see the privacy notice below.**
 
 > ⚠️ **Data outbound & privacy notice — read before installing.** Every time you ask ct-advisor a question, your input is sent over the network to the author-hosted endpoint **`https://ct-advisor.coze.site/run`** for answer refinement — this is the one outbound path. Before sending, `sanitize()` automatically strips PII (ID numbers, phone numbers, emails, and a small set of sensitive keywords), and a non-reversible sha256 machine id is attached as `query_origin` (no plaintext). **Auto-redaction is not bulletproof — do NOT enter other sensitive or confidential information**: real patient names, unpublished trial data, trade secrets, passwords, API keys, or any other personally identifiable / restricted content. The shipped `config/coze.dat` is the **required public credential** for that endpoint (published by the author) — keep it as-is; do not replace it with your own token. See §5 for details.
 
@@ -30,27 +30,39 @@ ct-advisor is a **conversational skill**: you simply tell the assistant what you
 
 Below are 6 real conversational examples ordered from simple to advanced. Each shows **"You say"** and a sketch of **"The assistant replies"**, plus how to get the actual data / computation.
 
-### Example 1 · A simple methodology question (direct answer, no menu) **You say:** > Superiority design, two parallel groups — how should I set the primary estimand?
+### Example 1 · A simple methodology question (direct answer, no menu) 
+**You say:** 
+Superiority design, two parallel groups — how should I set the primary estimand?
 
-**Assistant replies (sketch):** > Per the ICH E9(R1) estimand framework, a two-arm superiority trial defines: ① **treatment effect** (difference in the chosen endpoint), ② **population** (default "unless an intercurrent event is clinically critical, use the 'while on treatment' strategy"), ③ **variable** (e.g. change from baseline), ④ **summary** (difference + 95% CI). Give me the endpoint and I can draft the full estimand statement.
+**Assistant replies (sketch):** 
+Per the ICH E9(R1) estimand framework, a two-arm superiority trial defines: ① **treatment effect** (difference in the chosen endpoint), ② **population** (default "unless an intercurrent event is clinically critical, use the 'while on treatment' strategy"), ③ **variable** (e.g. change from baseline), ④ **summary** (difference + 95% CI). Give me the endpoint and I can draft the full estimand statement.
 
 **📌 No data needed** — this is answered in-house from the knowledge pack; you get the answer directly, no menu.
 
-### Example 2 · A narrow data ask (one data skill) **You say:** > Pull the registered trials for semaglutide in type-2 diabetes, 2021–2026.
+### Example 2 · A narrow data ask (one data skill) 
+**You say:** 
+Pull the registered trials for semaglutide in type-2 diabetes, 2021–2026.
 
-**Assistant replies (sketch):** > Routing you to **ct-registry** (CT.gov + WHO ICTRP + CDE + EU-CTR + ChiCTR + ISRCTN + DRKS). Here is the normalized landscape — N trials, phase mix, region mix, top sponsors — with each row labeled "Data source: ct-registry on <date>".
+**Assistant replies (sketch):** 
+Routing you to **ct-registry** (CT.gov + WHO ICTRP + CDE + EU-CTR + ChiCTR + ISRCTN + DRKS). Here is the normalized landscape — N trials, phase mix, region mix, top sponsors — with each row labeled "Data source: ct-registry on <date>".
 
 **📌 Get the real data:** By default the advisor dispatches to **ct-registry** and the sibling skills, returning the live landscape directly (data_intel dispatched directly, no extra confirmation needed); every row labeled "Data source: ct-registry on <date>".
 
-### Example 3 · A broad competitive-intel ask (three sources stitched in-house ⭐) **You say:** > Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature.
+### Example 3 · A broad competitive-intel ask (three sources stitched in-house ⭐) 
+**You say:** 
+Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature.
 
-**Assistant replies (sketch):** > This is a broad ask, so I'll call **ct-registry + ct-safety + ct-literature** once each and **stitch the Strategic Brief in-house** (no separate orchestrator). Plan: (1) registry landscape, (2) FAERS safety signals, (3) published evidence — then a merged brief with a "Data source: ct-xxx on <date>" label on every claim.
+**Assistant replies (sketch):** 
+This is a broad ask, so I'll call **ct-registry + ct-safety + ct-literature** once each and **stitch the Strategic Brief in-house** (no separate orchestrator). Plan: (1) registry landscape, (2) FAERS safety signals, (3) published evidence — then a merged brief with a "Data source: ct-xxx on <date>" label on every claim.
 
 **📌 Get the real brief:** By default the advisor **calls ct-registry + ct-safety + ct-literature once each and stitches the Strategic Brief in-house** (data_intel dispatched directly, no extra confirmation needed). (This replaces the old one-stop `ct-pipeline` route — the advisor now does the stitching itself.)
 
-### Example 4 · A multi-decision design task (popup routing menu) **You say:** > I'm planning a Phase II oncology trial and also need the sample size — help me decide the design.
+### Example 4 · A multi-decision design task (popup routing menu) 
+**You say:** 
+I'm planning a Phase II oncology trial and also need the sample size — help me decide the design.
 
-**Assistant replies (sketch):** > Two things are clear (oncology, Phase II), but a few choices remain — here's a menu so I don't decide for you:
+**Assistant replies (sketch):** 
+Two things are clear (oncology, Phase II), but a few choices remain — here's a menu so I don't decide for you:
 
 > **① What kind of help?**
 > - (a) Methodology & regulatory advice (design / stats / compliance / QC)
@@ -69,9 +81,12 @@ Below are 6 real conversational examples ordered from simple to advanced. Each s
 
 **📌 Note:** When your request has **multiple decisions / depends on several parameters**, the advisor **pops a step-by-step routing menu** (each step confirmed before advancing) and always offers the "explain the differences" entry — it never dumps the full menu or decides for you.
 
-### Example 5 · Not sure what you need (vague → grill-me) **You say:** > I'm not sure what I actually need — I have a half-written protocol and some questions.
+### Example 5 · Not sure what you need (vague → grill-me) 
+**You say:** 
+I'm not sure what I actually need — I have a half-written protocol and some questions.
 
-**Assistant replies (sketch):** > No problem — let's pin it down branch by branch; a few key questions will locate the right help:
+**Assistant replies (sketch):** 
+No problem — let's pin it down branch by branch; a few key questions will locate the right help:
 > 1. What's your **role** — sponsor / CRO / investigator / regulatory?
 > 2. What **stage** is the program at — pre-IND, Phase I–IV, post-market?
 > 3. What **material** do you have — the protocol, SAP, CSR, or just a question?
@@ -81,9 +96,11 @@ Below are 6 real conversational examples ordered from simple to advanced. Each s
 **📌 Note:** When you say "not sure what I want", the advisor uses **branch-by-branch probing (grill-me)** instead of guessing or dumping a menu. Once clarified, it routes to the right workflow or data skill.
 
 ### Example 6 · Switch the output language
-**You say:** > switch to English.  /  > Always reply in English.
+**You say:** 
+switch to English.  /  > Always reply in English.
 
-**Assistant replies (sketch):** > Sure, I'll answer in English from now on. (Output language auto-follows your OS by default — Chinese OS → Chinese, otherwise English — but you can switch with one sentence.)
+**Assistant replies (sketch):** 
+Sure, I'll answer in English from now on. (Output language auto-follows your OS by default — Chinese OS → Chinese, otherwise English — but you can switch with one sentence.)
 
 **📌 Note:** Language is one-sentence switchable:
 - **This conversation only** — say "switch to English" / "用中文回复" → advisor runs `python scripts/switch_lang.py en` (or `zh-CN`).
@@ -140,7 +157,7 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 **Q: How is the full competitive-intel brief generated now?** A: The advisor calls **ct-registry + ct-safety + ct-literature** once each and **stitches the Strategic Brief itself** — no separate `ct-pipeline` orchestrator. This keeps the same three-source coverage while removing the extra dependency.
 
-**Q: Does pure methodology need the network?** A: No. Methodology (workflows A–J) runs **fully offline** — no network, no third-party Python packages. Only data/intel routing touches the sibling skills (which may do public retrieval).
+**Q: Does pure methodology need the network?** A: Methodology knowledge retrieval (workflows A–J) runs locally from the `knowledge/` pack — **no third-party packages needed for the knowledge itself**. However, **every answer's refinement step is sent to the Coze endpoint** (`https://ct-advisor.coze.site/run`) — this is the only outbound path for answer content. There is **no local/offline refinement mode**.
 
 ---
 
@@ -183,7 +200,7 @@ ct-advisor/
 │   ├── check_deps.py     # local-only capability probe
 │   └── search_refs.py    # topic-reference locator
 ├── adapters/             # reasoning-exit / data-grounding / Q&A seams (swappable)
-└── config.json           # runtime backend selector (backend default: local → methodology zero-outbound; answer refinement always calls Coze remotely)
+└── config.json           # runtime backend selector (methodology knowledge retrieved locally from `knowledge/`; answer refinement always calls Coze remotely)
 ```
 
 ### CLI examples (developers)
@@ -193,7 +210,8 @@ python3 scripts/menu.py --all     # dump the clarification menu as JSON
 python3 scripts/menu.py --tier data_skill --human --lang zh   # preview one tier
 ```
 
-### Security scanner false positives Some automated scanners flag `adapters/` because it contains strings that look network- or credential-related. Distinguish two paths: (1) the **advisor backend** `CozeBackend.advise()` / `_post()` are inert stubs that raise `NotImplementedError` and are never executed unless you explicitly implement and enable Coze routing in `config.json` — no token read, no HTTP request on that path. (2) **Answer refinement uses Coze** (the one outbound path; no local refinement mode): `scripts/refine_answer.py` POSTs the 5 variables to the Coze refiner on every answer, so `requests` is imported by the always-active refiner (not just an inactive path), and running the skill as shipped is **not** zero-outbound — methodology stays offline, but each refined answer is sent to `ct-advisor.coze.site/run` (PII sanitized via `sanitize()`; `query_origin` is a non-PII `sha256` machine id). No secrets are in the repo (the Coze token is read from `config/coze.dat` / env var, only when refinement runs).
+### Security scanner false positives 
+Some automated scanners flag `adapters/` because it contains strings that look network- or credential-related. Distinguish two paths: (1) the **advisor backend** `CozeBackend.advise()` / `_post()` are inert stubs that raise `NotImplementedError` and are never executed unless you explicitly implement and enable Coze routing in `config.json` — no token read, no HTTP request on that path. (2) **Answer refinement uses Coze** (the one outbound path; no local refinement mode): `scripts/refine_answer.py` POSTs the 5 variables to the Coze refiner on every answer, so `requests` is imported by the always-active refiner (not just an inactive path), and running the skill as shipped is **not** zero-outbound — methodology knowledge is retrieved locally from `knowledge/`, but each refined answer is sent to `ct-advisor.coze.site/run` (PII sanitized via `sanitize()`; `query_origin` is a non-PII `sha256` machine id). No secrets are in the repo (the Coze token is read from `config/coze.dat` / env var, only when refinement runs).
 
 ---
 

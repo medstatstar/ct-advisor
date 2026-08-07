@@ -11,7 +11,7 @@
   Coze（中断本地）；否则直接采用本地草稿（速度优先——本地秒级先出、Coze 实测 9~25s 慢、
   常态本地胜出）。complex/vague 走 **串行**（前台等 Coze 完整返回、含 draft_answer 一并发送），
   两者都走 Coze、失败/超时回退本地草稿。
-- 仅在真正发起出站时才 import requests，避免 phantom-outbound 误报。
+- 依赖保障：出站前 `_ensure_requests()` 确保 `requests` 可用。首次缺失时**仅在交互模式（stdin 为 TTY）下提示用户确认后安装**；非交互（管道 / 后台 fire-only）直接报错退出——无人值守不阻塞等待。安装固定版本 `requests==2.32.3`，避免供应链投毒。
 
 外发 payload（3 变量）：
 - query_meta:   dict，包含 difficulty / category / accuracy 三字段 + query_origin 机器标识
@@ -77,23 +77,62 @@ def _try_install(pkg: str) -> bool:
 
 
 def _ensure_requests():
-    """确保 ``requests`` 可用：先导入；缺失则尝试自动安装；仍失败抛 MissingDependencyError。
+    """确保 ``requests`` 可用：先导入；缺失则提示用户同意后安装；仍失败抛 MissingDependencyError。
 
-    必须在 refine() 的出站 try 之外调用，使依赖缺失异常能向上传播、
-    不被兜底逻辑静默回退为本地草稿。
+    出站精校（Coze）需要 ``requests`` 发起 HTTPS 请求。首次运行时若本地未装，
+    **必须先征得用户同意再安装**（不可静默安装，否则等同在用户环境引入外部依赖
+    而无人类审查节点）。
+
+    交互模式（stdin 为 TTY）：提示用户输入 y/n 确认安装；非交互模式（stdin 为管道 /
+    后台调用 --fire-only）：直接报错退出——后台无人值守，不阻塞等待输入。
     """
     try:
         import requests  # noqa: F401
         return requests
     except ImportError:
-        # 固定版本安装，避免供应链投毒（见 _try_install 安全约束）
-        if _try_install("requests==2.32.3"):
-            import requests  # noqa: F401
-            return requests
+        pass
+
+    # 缺失：构造提示文案（中英双语）
+    install_cmd = 'python -m pip install "requests==2.32.3"'
+    notice = (
+        "\n[ct-advisor] 出站精校（Coze）需要 `requests` 库来发起 HTTPS 请求。\n"
+        "  → 是否同意自动安装？输入 y 继续，n 退出："
+        f"     （将执行：{install_cmd}）\n"
+        "  → Auto-install `requests` for outbound Coze refinement (HTTPS)? "
+        "Enter y to proceed, n to abort: "
+        f"     (will run: {install_cmd})\n"
+    )
+
+    # 仅交互模式（stdin 为 TTY）才提示；非交互（管道/后台 fire-only）直接报错
+    if sys.stdin.isatty():
+        try:
+            answer = input(notice).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer not in ("y", "yes", "是"):
+            raise MissingDependencyError(
+                "用户拒绝自动安装 `requests`。请手动运行后重试："
+                f"{install_cmd} / "
+                "User declined auto-install. Please install manually and retry: "
+                f"{install_cmd}"
+            )
+    else:
+        # 非交互模式（后台 fire-only / 管道调用）：无人确认，直接报错退出
         raise MissingDependencyError(
-            "缺少依赖 'requests' 且自动安装失败。请手动运行："
-            'python -m pip install "requests==2.32.3"'
+            "缺少 `requests` 且处于非交互模式（后台调用），无法提示安装。"
+            f"请手动运行：{install_cmd} / "
+            "Missing `requests` in non-interactive mode (background call). "
+            f"Please install manually: {install_cmd}"
         )
+
+    # 用户同意安装（或交互模式下走到这里）
+    if _try_install("requests==2.32.3"):
+        import requests  # noqa: F401
+        return requests
+    raise MissingDependencyError(
+        f"自动安装失败。请手动运行：{install_cmd} / "
+        f"Auto-install failed. Please install manually: {install_cmd}"
+    )
 
 
 # 展示前剥离 <source> 标签的正则（注意：用字符类 ["'] 避免 \" 在 raw string 中的解析问题）

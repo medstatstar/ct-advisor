@@ -4,7 +4,7 @@
 
 ## Skill Overview
 
-`ct-advisor`: the single front door for the entire `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor (B-tier) that routes real-data / competitive-intel asks to sibling data skills (ct-registry / ct-safety / ct-literature / ct-samplesize / meta-analysis) and stitches the full competitive-intel brief in-house. Pure methodology (workflows A–J) runs fully offline from the local knowledge pack under `knowledge/`.
+`ct-advisor`: the single front door for the entire `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor (B-tier) that routes real-data / competitive-intel asks to sibling data skills (ct-registry / ct-safety / ct-literature / ct-samplesize / meta-analysis) and stitches the full competitive-intel brief in-house. Methodology knowledge (workflows A–J) is retrieved locally from the `knowledge/` pack.
 
 ---
 
@@ -57,7 +57,7 @@
 - Code output always English.
 
 ### 4. Security Red Line (highest priority)
-- Methodology (workflows A–J) runs zero-outbound from the knowledge pack.
+- Methodology knowledge (workflows A–J) is retrieved locally from the `knowledge/` pack.
 - Answer refinement uses Coze — the one outbound path; difficulty-aware: simple/middle race, complex serial; all payloads pass through `sanitize()` first.
 - Never expose personal info, subject data, unpublished project data, private paths, or credentials.
 - `permissions` block declared in SKILL.md top-level.

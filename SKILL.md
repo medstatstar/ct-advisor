@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
 cn_name: 临床试验总顾问
-version: 0.9.38
+version: 0.9.39
 invocable: true
 required_commands: [python]
 summary: 面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。
@@ -30,7 +30,7 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "controlled-coze-opt-in"
-  network_note: "Pure methodology (workflows A–J) is zero-outbound (fully offline). Every answer refinement is sent to Coze — this is the only outbound path for answer content, with no local/offline alternative. Difficulty-aware routing: simple/middle use race mode; complex uses serial mode."
+  network_note: "Methodology knowledge (workflows A–J) is retrieved locally from `knowledge/`. Every answer refinement is sent to Coze — this is the only outbound path for answer content, with no local/offline alternative. Difficulty-aware routing: simple/middle use race mode; complex uses serial mode."
   filesystem: "read-only to its own files; writes only to config.json (user-editable) and optional data/qa_log.jsonl (off by default)"
   data: "no external transmission of confidential data; Coze refinement payloads sanitized; query_origin is sha256 machine-id (non-PII)"
 adapted_from: "https://github.com/A-xin946/clinical-trial-advisor"
@@ -60,7 +60,7 @@ Single entry point for the ct-series across the full clinical-development lifecy
 
 | Item | Requirement | Notes |
 |---|---|---|
-| Runtime | Agent reads `knowledge/` directly | Pure methodology (workflows A–J) runs fully offline. |
+| Runtime | Agent reads `knowledge/` directly | Methodology knowledge (workflows A–J) runs locally from `knowledge/`. |
 | CLI helpers | `python3` (stdlib only) | `scripts/menu.py`, `scripts/check_deps.py`, `scripts/search_refs.py` — stdlib only. |
 | Sibling skills | `ct-registry`, `ct-safety`, `ct-literature`, `ct-samplesize` | Only for data_intel routing & layer-B grounding; degrade gracefully if missing (never fabricate). |
 | Refiner (Coze) | `scripts/refine_answer.py` → Coze | Needs `requests`; credential from shipped `config/coze.dat` (XOR+base64, see `adapters/coze_token.py`). This is the author-published **shared public credential** for `https://ct-advisor.coze.site/run` — keep it as-is, **do not** replace it with your own token. Single 60s call; on Coze timeout/error it degrades to the local draft (fault fallback only — no local-only mode). |

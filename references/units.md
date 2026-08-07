@@ -21,7 +21,7 @@
 - **Input**: concept / term / "why" question + jurisdiction (optional). Reads `ref-ops-contract.md` + `ref-reg-contract.md` + `ref-regulatory-versions.md`.
 - **Output**: conclusion / boundary / example / common-mistake / regulatory citation card; `⚠️ verify-official` flag on dynamic items.
 - **Dependency**: UNIT-0.
-- **AI autonomy**: ⬛ fully automatic (offline from knowledge pack).
+- **AI autonomy**: ⬛ fully automatic (local knowledge retrieval).
 - **Combination interface**: → UNIT-H (A's output can be QC-reviewed).
 
 ### UNIT-B · Trial design
