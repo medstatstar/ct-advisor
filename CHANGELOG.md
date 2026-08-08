@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.9.44 (2026-08-08) — 文档去重（SKILL.md ↔ steps.md 冗余合并）
+## 0.9.45 (2026-08-08) — 版本升格（三平台统一 0.9.45，确保 coze 接口文档不打包）
+
+> 0.9.44 已先于 SkillHub 创建；SkillHub 不允许同版本重发，故升格 0.9.45 在三平台统一发布。内容同 0.9.44（见下），并借此次确认 SkillHub 发布包排除 coze 接口文档（refiner_contract / coze_system_prompt / subagent_prompt / ops）。
+
+- **跨文件去重**：SKILL.md 作为入口摘要，删去与 `references/steps.md` 逐字重复的展开段，改为指针引用：
 
 - **跨文件去重**：SKILL.md 作为入口摘要，删去与 `references/steps.md` 逐字重复的展开段，改为指针引用：
   - Anti-short-circuit + RACE-MODE VERBATIM 两条 HARD GATE 合并为单段摘要（详细禁止列表 / failure-mode 注 → steps.md Step 0 / Step 2）。
