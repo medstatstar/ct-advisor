@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.48 (2026-08-08) — 修复 refiner token 调用签名 + 出站鉴权告警
+
+> 修复云端精校（Coze refine）因函数签名不匹配而永不触发的隐藏 bug，并将版本升格以在 SkillHub 覆盖已存在的 0.9.47。
+
+- **修复 get_token 调用签名不匹配**：`adapters/refiner.py:431` 按旧 3 参签名 `get_token(cli_token, token_path, token_env)` 调用 `config/keys.py` 的无参 `get_token()`，抛 `TypeError` 后被 `refine_fire_only` 的 `except Exception: return ""` 静默吞掉 → POST 永不发出、云端精校恒降级本地。调用处改为无参 `get_token()`。
+- **出站授权白名单**：`config.json` 的 `auto_approve_endpoints` 加入 `https://ct-advisor.coze.site/run`（用户已授权出站）。
+- **HTTP 错误显式告警**：`adapters/refiner.py` 的 `_call_coze` 加 `raise_for_status()` + 401 `AUTH_REJECTED` 告警，防止 4xx/5xx 再被伪装成超时。
+- **knowledge/ 修订**：多文件修订、去重与 `reference-index` 重建。
+
 ## 0.9.47 (2026-08-08) — 公共凭据统一 config/keys.py（SkillHub 文件过滤规避）
 
 > 公共凭据从分散的 `adapters/coze_token_embedded.py` + `config/coze.dat` 统一迁移到 `config/keys.py`，解决 SkillHub 平台对非白名单后缀文件的静默剥离问题，并提供可扩展的公共凭据管理规范。
