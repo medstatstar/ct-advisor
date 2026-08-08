@@ -13,11 +13,11 @@ adapted_from: github.com/A-xin946/clinical-trial-advisor (not verbatim)
 serves_workflows: [A, D]
 source_file: ref-reg-gcp-version.md (originally ref-regulatory-statistical.md §271-§274, merged 2026-08-05)
 topics: E6(R2)/E6(R3) version judgment, transition-period handling
-note: Dynamic items (current regulations / deadlines / thresholds / China pathways) must be officially verified; this series' contract & source hierarchy are in ref-reg-contract.md
+note: Dynamic items (current regulations / deadlines / thresholds / China pathways) must be officially verified; this series' contract & source hierarchy are in reference-index.md (Regulatory & Statistical 系列契约)
 ---
 # GCP Version Discipline (workflow A/D boundary)
 
-> This file is the Regulatory & Statistical series GCP-version file (the original ref-regulatory-statistical.md §271-§274 region, merged and retained on 2026-08-05); cross-series basis is in ref-reg-contract.md; use `scripts/search_refs.py` for full-text location.
+> This file is the Regulatory & Statistical series GCP-version file (the original ref-regulatory-statistical.md §271-§274 region, merged and retained on 2026-08-05); cross-series basis is in reference-index.md (Regulatory & Statistical 系列契约); use `scripts/search_refs.py` for full-text location.
 
 ## 6. GCP version discipline (A / D boundary)
 

@@ -13,11 +13,11 @@ adapted_from: github.com/A-xin946/clinical-trial-advisor (not verbatim)
 serves_workflows: [F]
 source_file: ref-reg-safety.md (originally ref-regulatory-statistical.md §113-§156, merged 2026-08-05)
 topics: SUSAR/RSI/DSUR loop, RSI rules, oncology SUSAR aggregation, DSUR E2F, SUSAR expedited-reporting clock, signal detection PRR/ROR, ICSR chain, safety database, RMP, PASS
-note: Dynamic items (current regulations / deadlines / thresholds / China pathways) must be officially verified; see ref-reg-contract.md for this series' contract & source hierarchy.
+note: Dynamic items (current regulations / deadlines / thresholds / China pathways) must be officially verified; see reference-index.md (Regulatory & Statistical 系列契约) for this series' contract & source hierarchy.
 ---
 # Safety Regulatory Chain — SUSAR/RSI/DSUR (workflow F)
 
-> This file is the safety-chain document of the Regulatory & Statistical series (originally the §113–§156 area of ref-regulatory-statistical.md, merged and retained on 2026-08-05); cross-series basis is in ref-reg-contract.md; use `scripts/search_refs.py` for full-text location.
+> This file is the safety-chain document of the Regulatory & Statistical series (originally the §113–§156 area of ref-regulatory-statistical.md, merged and retained on 2026-08-05); cross-series basis is in reference-index.md (Regulatory & Statistical 系列契约); use `scripts/search_refs.py` for full-text location.
 
 ## 4. Safety regulatory chain (workflow F)
 

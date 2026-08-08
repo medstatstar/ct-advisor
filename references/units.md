@@ -18,56 +18,56 @@
 ## Methodology Workflows (A–J)
 
 ### UNIT-A · Explain & locate evidence
-- **Input**: concept / term / "why" question + jurisdiction (optional). Reads `ref-ops-contract.md` + `ref-reg-contract.md` + `ref-regulatory-versions.md`.
+- **Input**: concept / term / "why" question + jurisdiction (optional). Reads `reference-index.md` (incl. series contract) + `ref-regulatory-versions.md`.
 - **Output**: conclusion / boundary / example / common-mistake / regulatory citation card; `⚠️ verify-official` flag on dynamic items.
 - **Dependency**: UNIT-0.
 - **AI autonomy**: ⬛ fully automatic (local knowledge retrieval).
 - **Combination interface**: → UNIT-H (A's output can be QC-reviewed).
 
 ### UNIT-B · Trial design
-- **Input**: design goal + population / endpoint / control / blinding choices + therapeutic area. Reads `ref-reg-contract.md` + `ref-ops-contract.md`.
+- **Input**: design goal + population / endpoint / control / blinding choices + therapeutic area. Reads `reference-index.md` (incl. series contract).
 - **Output**: design chain (goal → clinical question → estimand → population → intervention → endpoint → randomization/blinding → data collection → analysis → feasibility → conclusion) + option trade-off + risks.
 - **Dependency**: UNIT-0.
 - **AI autonomy**: 🟨 semi-automatic (design choices confirmed with user).
 - **Combination interface**: → UNIT-C (estimand feeds stats) / → UNIT-H.
 
 ### UNIT-C · Statistics & estimands
-- **Input**: estimand strategy + sample-size parameters (effect size, α, power, dropout) + analysis-set / missing / multiplicity. Reads `ref-reg-contract.md`.
+- **Input**: estimand strategy + sample-size parameters (effect size, α, power, dropout) + analysis-set / missing / multiplicity. Reads `reference-index.md` (incl. series contract).
 - **Output**: method framework + parameter gap analysis; when parameters complete → handoff payload to `ct-samplesize`.
 - **Dependency**: UNIT-B (design context).
 - **AI autonomy**: 🟨 semi-automatic (parameter confirmation) → ⬛ fully automatic (handoff).
 - **Combination interface**: → `ct-samplesize` (external skill) / → UNIT-H.
 
 ### UNIT-D · GCP & quality
-- **Input**: GCP / ethics / deviation / CAPA / monitoring / data-quality scenario. Reads `ref-ops-contract.md`.
+- **Input**: GCP / ethics / deviation / CAPA / monitoring / data-quality scenario. Reads `reference-index.md` (incl. series contract).
 - **Output**: impact judgment + responsibility + escalation + CAPA recommendation.
 - **Dependency**: UNIT-0.
 - **AI autonomy**: ⬛ fully automatic.
 - **Combination interface**: → UNIT-H.
 
 ### UNIT-E · Clinical operations
-- **Input**: site / supplier / RBM / recruitment / IP / data / randomization / lock / close scenario. Reads `ref-ops-contract.md`.
+- **Input**: site / supplier / RBM / recruitment / IP / data / randomization / lock / close scenario. Reads `reference-index.md` (incl. series contract).
 - **Output**: dependencies + RACI + risk triggers + closed-loop actions.
 - **Dependency**: UNIT-0.
 - **AI autonomy**: ⬛ fully automatic.
 - **Combination interface**: → UNIT-H.
 
 ### UNIT-F · Safety & DSUR
-- **Input**: AE/SAE/SUSAR / signal / RSI / benefit-risk / DSUR scenario. Reads `ref-reg-contract.md` + `ref-ops-contract.md`.
+- **Input**: AE/SAE/SUSAR / signal / RSI / benefit-risk / DSUR scenario. Reads `reference-index.md` (incl. series contract).
 - **Output**: case classification + RSI versioning + reporting path + aggregate analysis + action + regulatory basis.
 - **Dependency**: UNIT-0.
 - **AI autonomy**: ⬛ fully automatic.
 - **Combination interface**: → UNIT-H / → ct-safety (data grounding).
 
 ### UNIT-G · Documents & reports
-- **Input**: CSR planning / writing inputs / consistency review. Reads `ref-reg-contract.md` + `ref-ops-contract.md`.
+- **Input**: CSR planning / writing inputs / consistency review. Reads `reference-index.md` (incl. series contract).
 - **Output**: document dependency + consistency chain + issue priority + fix recommendation.
 - **Dependency**: UNIT-B/C/D/E/F (consumes their outputs).
 - **AI autonomy**: 🟨 semi-automatic.
 - **Combination interface**: → UNIT-H.
 
 ### UNIT-H · Methodology QC
-- **Input**: protocol / statistical strategy / document pack / workflow under review + the `reads[]` of the workflow being reviewed. Reads `ref-reg-contract.md` + `ref-ops-contract.md`.
+- **Input**: protocol / statistical strategy / document pack / workflow under review + the `reads[]` of the workflow being reviewed. Reads `reference-index.md` (incl. series contract).
 - **Output**: overall judgment (acceptable / conditionally acceptable / unacceptable) + issue list (evidence/impact/priority) + fix plan + document gap + next quality gate.
 - **Dependency**: UNIT-A…G (any workflow output can be the QC target).
 - **AI autonomy**: 🟨 semi-automatic (judgment + fix plan confirmed with user).

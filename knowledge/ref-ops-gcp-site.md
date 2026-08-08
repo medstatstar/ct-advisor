@@ -11,7 +11,7 @@ serves_workflows: [D, E]
 
 ## 2. GCP & role responsibilities (workflow D · execution layer)
 
-> The **current GCP version & implementation status** follow the GCP version discipline section of `ref-reg-contract.md`; this section covers execution principles only.
+> The **current GCP version & implementation status** follow the GCP version discipline section of `reference-index.md` (Regulatory & Statistical 系列契约); this section covers execution principles only.
 
 ### 2.1 Ethical judgment order
 

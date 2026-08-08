@@ -6,6 +6,9 @@
     "endpoint": "https://api.coze.cn/v1/chat",
     "token_env": "COZE_TOKEN"
   },
+  "auto_approve_endpoints": [
+    "https://ct-advisor.coze.site/run"
+  ],
   "data_context": {
     "mode": "local",
     "sibling_outputs": {

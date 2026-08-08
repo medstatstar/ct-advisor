@@ -162,7 +162,7 @@ Use: `key quality factor → risk → control → monitoring → escalation → 
 - Give assumptions & intervals for recruitment forecast, enrollment speed and milestones; do not fabricate fixed dates.
 - Before database lock confirm queries, external data, SAE reconciliation, coding, deviations, analysis set and data-quality assessment are closed.
 - For regulatory pathway, forms, e-systems or statutory deadline, verify the corresponding regulator's current page.
-- For site, vendor, monitoring, recruitment, closeout, CRF, e-systems, randomization, lock, investigational product, supply, budget and project governance, read the relevant section of `ref-ops-contract.md`.
+- For site, vendor, monitoring, recruitment, closeout, CRF, e-systems, randomization, lock, investigational product, supply, budget and project governance, read the relevant section of `reference-index.md` (Clinical Operations 系列契约).
 
 ## F. Safety & DSUR
 
@@ -236,7 +236,7 @@ This mode is a **conversational scoping interview**; it does **NOT** call any si
 - References explain problems, chain flows and find risks; they must not be packaged as regulation or mandatory supervisory requirement.
 - All normative conclusions return to applicable regulation, ICH, NMPA / CDE and other formal public sources, with a verifiable body location.
 - When a reference conflicts with the current official document, the applicable jurisdiction's current rule and the verified official original prevail.
-- `ref-ops-contract.md` may be shown or explained to the user as needed, but cannot replace regulation, official guidance or project source documents.
+- `reference-index.md` may be shown or explained to the user as needed, but cannot replace regulation, official guidance or project source documents.
 - **Never disclose in answer, generated file or public note the user's personal info, subject info, unpublished project data, private file path or access credential.** On an error in an external call (e.g. a ct-series shared endpoint), give only a semantic hint and never expose the token plaintext (per ct-base §11).
 - When the user asks for the basis, state that the evidence chain "applicable regulation, official guidance, public methodology evidence and project material" is used, and provide verifiable public sources.
 - **Traceability hard rule (unified constraint across the whole knowledge base; see `ct-base` §5.1)**: every fact / normative assertion must be traceable (cite `ref-*.md §section` or the official clause); anything not traceable must be marked `⚠️ verify with official source` and the user prompted to check the official original — it must not be presented as a definitive conclusion. The user-facing prompt strings for this skill are in `knowledge/prompts.md` under `grounding.*` (machine-readable single source: `scripts/i18n.py`).
@@ -295,13 +295,13 @@ Stop final judgment and instead output gap & next step when:
 ## Topic reference routing
 
 - **Quick location**: first use `reference-index.md` to look up the section/line number by keyword → Read the matching passage precisely (50–200 chars per read), not the whole file
-- **Sync rule**: after each update to `ref-ops-contract.md` or `ref-reg-contract.md`, you must run `python scripts/update_reference_index.py` to regenerate `reference-index.md`
-- Cross-domain synthesis, full-lifecycle training, 0-to-1 analysis and comprehensive QC: `ref-ops-contract.md`
-- High-frequency clinical-trial judgment, cross-functional practice, GCP, safety, operations and pain points: `ref-ops-contract.md`
-- ICH E2 / E3 / E6 / E9, CTD / M4, NMPA / CDE regulation, trial design, statistics, DSUR / CSR dependency & QC, official retrieval & evidence verification: `ref-reg-contract.md` + `ref-regulatory-versions.md`
+- **Sync rule**: after each update to `reference-index.md` (incl. series contract content), you must run `python scripts/update_reference_index.py` to regenerate `reference-index.md`
+- Cross-domain synthesis, full-lifecycle training, 0-to-1 analysis and comprehensive QC: `reference-index.md` (Clinical Operations 系列契约)
+- High-frequency clinical-trial judgment, cross-functional practice, GCP, safety, operations and pain points: `reference-index.md` (Clinical Operations 系列契约)
+- ICH E2 / E3 / E6 / E9, CTD / M4, NMPA / CDE regulation, trial design, statistics, DSUR / CSR dependency & QC, official retrieval & evidence verification: `reference-index.md` (Regulatory & Statistical 系列契约) + `ref-regulatory-versions.md`
 - Vague-question clarification, professional routing, user tone writing and local memory: `ref-interaction-style.md`
 
-Use progressive loading: for regulatory, trial-design and statistics questions read `ref-reg-contract.md` first; for GCP, safety, operations, cross-functional practice, full-lifecycle analysis and comprehensive QC read `ref-ops-contract.md` first; if the question still has gaps, supplement with the other reference. Do not load all references at once unless the task truly needs them.
+Use progressive loading: for regulatory, trial-design and statistics questions read `reference-index.md` (Regulatory & Statistical 系列契约) first; for GCP, safety, operations, cross-functional practice, full-lifecycle analysis and comprehensive QC read `reference-index.md` (Clinical Operations 系列契约) first; if the question still has gaps, supplement with the other reference. Do not load all references at once unless the task truly needs them.
 
 To locate topic content run:
 

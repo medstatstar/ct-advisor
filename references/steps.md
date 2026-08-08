@@ -61,6 +61,11 @@ When the question **does not involve external data pull / sample size computatio
 
 > 🔴 **Key**: this step is the start of race mode and MUST execute right after Triage. simple/middle MUST fire fire-only here (before any local retrieval), so Coze is already computing while the agent does local work; by Step 2 `--collect` it is very likely already back (cache hit → verbatim ship). Firing late (after Route / pre-reading knowledge) is the #1 measured latency failure mode.
 
+> 🔴 **出站授权门控（自动执行）**：`--fire-only` 出站前由脚本自动检查授权：
+> - 端点在 `config.json` `auto_approve_endpoints` 白名单中 → 直接放行
+> - 本会话已授权过 → 直接放行（脚本内存记忆）
+> - 未授权 → 脚本返回空串（本地胜出），agent 应提示用户确认后将端点加入白名单
+
 ---
 
 ## Step 2 — Collect + Route + Local Answer (race core)
@@ -134,6 +139,8 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 **Input**: local answer + external data results 1 and 2.
 
 **Output**: await Coze's refined result; on timeout return local answer + external data results 1 and 2.
+
+> 🔴 **出站授权门控（自动执行）**：串行精校出站前由脚本自动检查授权（同 Step 1 规则）。未授权时直接回退本地草稿，agent 应提示用户确认。
 
 ```
 step 2 local answer + step 3/4 external data → foreground serial call to refine_answer.py (with draft_answer)

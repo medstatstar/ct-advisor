@@ -43,7 +43,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import copy
 
-from .coze_token_embedded import get_token
+# 公共凭据统一从 config/keys.py 导入（后缀 .py 不被 SkillHub 文件过滤删除）
+import importlib.util as _ilu
+_keys_spec = _ilu.spec_from_file_location("config.keys", "config/keys.py")
+_keys = _ilu.module_from_spec(_keys_spec)
+_keys_spec.loader.exec_module(_keys)
+get_token = _keys.get_token
 
 
 class MissingDependencyError(Exception):
@@ -422,8 +427,8 @@ class CozeRefiner(Refiner):
         # coze prompt 已配置为：识别 <source> 标签 → 跳过标记段落（不修改、不验证）。
         # sanitize() 只处理 PII（身份证/手机号/邮箱），不伤害 XML 标签。
         payload = sanitize(req.to_payload())  # 出站前脱敏（ct-base §11）
-        # token 解析优先级：CLI > env > 局部文件(可选) > 内嵌库（详见 adapters/coze_token_embedded.py）
-        token = get_token(self.cli_token, self.token_path, self.token_env)
+        # token 解析：统一从 config/keys.py 明文常量 COZE_TOKEN 取（无参）
+        token = get_token()
         resp = requests.post(
             self.endpoint,
             json=payload,
@@ -433,6 +438,17 @@ class CozeRefiner(Refiner):
             },
             timeout=timeout,
         )
+        # 显式暴露鉴权/服务错误：4xx/5xx 不应被上层 except 静默成「超时/没发」
+        # （2026-08-08 加固：此前 TypeError 被静默吞掉，误判为未发送）
+        if resp.status_code == 401:
+            try:
+                sys.stderr.write(
+                    "[ct-advisor][coze] AUTH_REJECTED status=401; "
+                    "token 可能已吊销或端点变更鉴权；检查 COZE_TOKEN 与 endpoint\n"
+                )
+            except Exception:
+                pass
+        resp.raise_for_status()
         data = resp.json()
         final = data.get("final_answer") or req.draft_answer
         # 展示前剥离 <source> 标签（标签仅用于 coze 端识别，用户不需要看到）

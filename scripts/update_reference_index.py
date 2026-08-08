@@ -45,7 +45,7 @@ def build():
         "# Reference Index — 文件级路由表",
         "",
         "> **用法**：收到提问 → 按关键词匹配下表「覆盖主题」列 → 用 `python3 scripts/search_refs.py \"<关键词>\" --context 3` 定位行段，或 Read 目标文件（单次 ≤60 行）。",
-        "> 两系列契约入口：`ref-ops-contract.md` / `ref-reg-contract.md`（含来源层级与动态项核实规则）。",
+        "> Contract content is embedded in this file (auto-generated header + manual sections below).",
         "",
     ]
     entries = {}

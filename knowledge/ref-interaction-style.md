@@ -7,7 +7,7 @@
 ## 0. Division of labor with other references
 
 - This file governs **interaction style**: when to clarify, how to ask, how to learn tone, how to store memory.
-- Methodology / regulatory / design substance lives in `ref-ops-contract.md`, `ref-reg-contract.md`, `ref-regulatory-versions.md`; after clarification, route per `scripts/workflows.json` to the corresponding workflow's reference.
+- Methodology / regulatory / design substance lives in `reference-index.md` (incl. series contract content) + `ref-regulatory-versions.md`; after clarification, route per `scripts/workflows.json` to the corresponding workflow's reference.
 - Sample-size / power is handed off by workflow `C` to `ct-samplesize`; this file involves no computation.
 
 ## 1. Clarification gate (gate 0)
@@ -71,7 +71,24 @@ Activate only after the user explicitly says "remember / write to local memory /
 
 ## 4. Privacy & delivery checks (gate / I / J common red line)
 
-- Writing samples are for the current task only, not as style source for other users or tasks; do not expose internal style profiles, do not repeat irrelevant personal or project info.
+## 5. Official Retrieval, Conflict Handling & Stop Rules (workflow A)
+
+> 原 `ref-reg-retrieval.md` 已合并至此（2026-08-08 精简知识库）。本节供 workflow A（官方检索）使用。
+
+### 5.1 Official entries
+ICH `https://www.ich.org/` (guideline index `https://www.ich.org/page/search-index-ich-guidelines`); NMPA `https://www.nmpa.gov.cn/`; CDE `https://www.cde.org.cn/`.
+
+### 5.2 Retrieval process
+First turn the question into `jurisdiction + product + phase + topic + document type + activity date`; for each candidate document verify: official full title & issuing body; document number / version / Step / revision; official / draft / pending / superseded / withdrawn / historical status; release & implementation date; applicable product / population / phase / role / activity; section / clause / table / footnote / appendix supporting the conclusion; official page & attachment link; retrieval date. Search snippets only locate, do not replace the original; when PDF tables / footnotes / flowcharts / attachments affect meaning, check the corresponding page image; never judge currency by file-name version number alone.
+
+### 5.3 Recommended search terms
+`full document name + release / implementation / attachment`; `site:ich.org topic + guideline + Step`; `site:cde.org.cn product / indication + 临床试验技术指导原则`; `site:cde.org.cn SUSAR / RSI / DSUR + 安全性`; `site:nmpa.gov.cn 药物临床试验质量管理规范 + 实施`; `site:nmpa.gov.cn 药品注册管理办法 + 临床试验`.
+
+### 5.4 Conflict handling, citation & stop rules
+Conflicts compared in order: jurisdiction & activity date → law / regulatory tier → official / pending / draft / historical → general vs product/therapeutic-area → problem scope & role → whether project approval / protocol / SOP is stricter. Unresolvable → state the conflict & impact, do not declare a document invalid on your own. Citation format: `document name (version / date), section or clause + official link + retrieval date`; explicitly mark `regulatory / mandatory requirement`, `formal technical guidance suggestion`, `draft / Q&A / example`, `methodology judgment`, `project practice suggestion`. Stop rule: when official site inaccessible / only secondary source / version-status conflict / missing body location / jurisdiction-date unknown and changes the conclusion → stop definitive judgment, output what is unconfirmed, why it cannot be confirmed, which conclusions are affected, conservative measures before verification, official site / search terms / fields to check, pages the user can return.
+
+### 5.5 Minimal regulatory answer template (workflow A)
+1. **Conclusion**: how far confirmation reaches now; 2. **Applicable boundary**: jurisdiction / product / phase / role / activity date; 3. **Document role**: what each applicable regulation / guidance resolves; 4. **Official basis**: document status / body location / link / retrieval date; 5. **Project impact**: on subjects / protocol / IB-RSI / data / statistics / operations / DSUR-CSR / filing; 6. **Immediate action**: owner / time point / record / escalation / closure evidence; 7. **Unverified items**: what is missing / impact / how to verify.
 - Names, emails, patient info, unpublished project & commercial info used on a least-necessary basis.
 - Do not fabricate attachments, meetings, approvals, commitments or completion status; clinical, medical, regulatory statements keep necessary boundaries.
 - All to-be-confirmed items explicitly marked; deliverables directly copyable.

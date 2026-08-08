@@ -24,11 +24,51 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Set
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from adapters import build_refiner, RefineRequest, MissingDependencyError
+
+def _load_auto_approve_endpoints(config_path: str) -> Set[str]:
+    """从 config.json 加载 auto_approve_endpoints 白名单。"""
+    try:
+        cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        return set(cfg.get("auto_approve_endpoints", []) or [])
+    except Exception:
+        return set()
+
+
+def _get_endpoint_from_config(config_path: str) -> str:
+    """从 config.json 读取 refiner.endpoint。"""
+    try:
+        cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
+        return (cfg.get("refiner", {}) or {}).get("endpoint", "")
+    except Exception:
+        return ""
+
+
+# Session-scoped in-memory authorization (resets per script invocation).
+_SESSION_AUTHORIZED_ENDPOINTS: Set[str] = set()
+
+
+def _check_outbound_authorization(endpoint: str, config_path: str) -> bool:
+    """检查出站授权：返回 True 表示已授权可继续，False 表示未授权需拦截。"""
+    # 1. 会话内存中已授权
+    if endpoint in _SESSION_AUTHORIZED_ENDPOINTS:
+        return True
+    # 2. config.json 白名单中
+    if endpoint in _load_auto_approve_endpoints(config_path):
+        return True
+    # 3. 未授权：输出拦截提示，agent 应展示给用户确认
+    sys.stderr.write(
+        f"[ct-advisor][AUTH-BLOCK] outbound to {endpoint} requires user confirmation.\n"
+        f"  Add to config.json 'auto_approve_endpoints' list to skip confirmation.\n"
+        f"  Local reference materials are limited; declining will disable cloud-based refinement "
+        f"and significantly reduce answer quality/coverage.\n"
+    )
+    return False
 
 # On Chinese Windows the console defaults to cp936:
 #  - stdin decoded as cp936 would corrupt the UTF-8 JSON piped in (the agent's main usage is piping JSON);
@@ -71,10 +111,13 @@ def main() -> None:
                     help="--collect gather wait cap in seconds; defaults to config refiner.race_window")
     args = ap.parse_args()
 
-    # Persist mode: obfuscate and store the given plaintext token, then exit.
     if args.store_token:
-        from adapters.coze_token_embedded import store_token, default_token_path
-        path = store_token(args.store_token, args.token_path or default_token_path())
+        # 公共凭据统一从 config/keys.py 导入
+        import sys as _sys, importlib.util as _ilu
+        _keys_spec = _ilu.spec_from_file_location("config.keys", "config/keys.py")
+        _keys = _ilu.module_from_spec(_keys_spec)
+        _keys_spec.loader.exec_module(_keys)
+        path = _keys.store_token(args.store_token, args.token_path or _keys.default_token_path())
         sys.stdout.write(f"[ct-advisor] token stored (obfuscated) -> {path} / token 已存储（混淆）-> {path}\n")
         sys.exit(0)
 
@@ -155,6 +198,12 @@ def main() -> None:
     if args.fire_only:
         # Race early-fire mode (step 2 background call): draft left empty, only original_question.
         # Coze wins -> stdout is its result; fail/timeout -> empty string, agent uses the local draft as a fault fallback in step 4.
+        # Outbound authorization check: if not authorized, output empty (local wins) + stderr notice.
+        if not _check_outbound_authorization(
+            _get_endpoint_from_config(args.config), args.config
+        ):
+            sys.stdout.write("")
+            sys.exit(0)
         try:
             final = build_refiner(
                 config_path=args.config,
@@ -176,6 +225,7 @@ def main() -> None:
     if args.collect:
         # Race collect mode (step 3): read the race cache written by step 2 --fire-only.
         # Hit (Coze returned first) -> return Coze result (Coze wins, local interrupted); else empty (local wins).
+        # --collect does not make a network call, so no auth check needed.
         try:
             refiner = build_refiner(
                 config_path=args.config,
@@ -195,6 +245,16 @@ def main() -> None:
         sys.stdout.write(final or "")
         sys.exit(0)
 
+    # Serial mode (foreground, complex/vague): outbound authorization check.
+    # If not authorized, output draft directly + stderr notice.
+    if not _check_outbound_authorization(
+        _get_endpoint_from_config(args.config), args.config
+    ):
+        sys.stderr.write(
+            f"[ct-advisor][AUTH-BLOCK] serial refine blocked — falling back to local draft.\n"
+        )
+        sys.stdout.write(draft)
+        sys.exit(0)
     try:
         final = build_refiner(
             config_path=args.config,
