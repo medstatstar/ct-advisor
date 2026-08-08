@@ -73,7 +73,7 @@ def main() -> None:
 
     # Persist mode: obfuscate and store the given plaintext token, then exit.
     if args.store_token:
-        from adapters.coze_token import store_token, default_token_path
+        from adapters.coze_token_embedded import store_token, default_token_path
         path = store_token(args.store_token, args.token_path or default_token_path())
         sys.stdout.write(f"[ct-advisor] token stored (obfuscated) -> {path} / token 已存储（混淆）-> {path}\n")
         sys.exit(0)

@@ -5,18 +5,18 @@
   任何超时 / 网络 / 解析 / 字段缺失异常都优雅回退到 draft_answer（绝不丢答案、绝不报错给用户）。
 - 不再有「local 精校模式」：答案精校经唯一的 `fast` 模式控制，按难度自动分流——
   simple/middle 走 **race 竞速（早发 / 速度优先）**：agent 在 **step 2** 后台调用
-  `--fire-only`（仅发 difficulty/category/original_question，draft 留空、accuracy 空白→normal），
+  `--fire-only`（agent 仅发 original_question，difficulty/category/accuracy 未提供时由脚本补空串，draft 留空），
   Coze 用**完整 60s** HTTP 超时独立分析；成功后写入 race 缓存。
   agent 在 **step 3** 并行写本地草稿 + `--collect` 收集：缓存命中（Coze 先回）→ 采用
   Coze（中断本地）；否则直接采用本地草稿（速度优先——本地秒级先出、Coze 实测 9~25s 慢、
   常态本地胜出）。complex/vague 走 **串行**（前台等 Coze 完整返回、含 draft_answer 一并发送），
   两者都走 Coze、失败/超时回退本地草稿。
-- 依赖保障：出站前 `_ensure_requests()` 确保 `requests` 可用。首次缺失时**仅在交互模式（stdin 为 TTY）下提示用户确认后安装**；非交互（管道 / 后台 fire-only）直接报错退出——无人值守不阻塞等待。安装固定版本 `requests==2.32.3`，避免供应链投毒。
+- 依赖保障：出站前 `_ensure_requests()` 确保 `requests` 可用。首次缺失时**提示用户手动安装后退出**——不自动执行 `pip install`，避免在用户环境静默引入外部依赖。
 
 外发 payload（3 变量）：
 - query_meta:   dict，包含 difficulty / category / accuracy 三字段 + query_origin 机器标识
                 - difficulty: 问题难度 simple | middle | complex | vague（gate-0 分流结论）
-                - category:   问题类别（如 methodology:B / design / compliance:D，或匹配的 A–J 工作流）
+                - category:   问题类别（如 methodology:B / methodology:C / design / compliance:D，或匹配的 A–J 工作流；样本量用 methodology:C）
                 - accuracy:   自评准确度 good | normal（good = 精确，normal = 一般）
                 - query_origin: 审计元数据——机器标识（sha256 哈希，不可逆、不含 IP/主机名明文），
                                 由脚本在 normalize() 时自动盖章写入本 dict（不再另设顶层字段）
@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import copy
 
-from .coze_token import get_token
+from .coze_token_embedded import get_token
 
 
 class MissingDependencyError(Exception):
@@ -54,37 +54,14 @@ class MissingDependencyError(Exception):
     """
 
 
-def _try_install(pkg: str) -> bool:
-    """用当前解释器自动安装缺失依赖；成功返回 True，任何失败返回 False。
-
-    安全约束（供应链）：调用方传入的 pkg 必须**已固定版本**（如 ``requests==2.32.3``），
-    禁止传入无版本号的裸包名，以免首次调用拉取被投毒的最新版本。
-    """
-    import subprocess
-    import sys
-
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", pkg],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=120,
-        )
-        return True
-    except Exception:
-        return False
-
-
 def _ensure_requests():
-    """确保 ``requests`` 可用：先导入；缺失则提示用户同意后安装；仍失败抛 MissingDependencyError。
+    """确保 ``requests`` 可用：先导入；缺失则提示用户手动安装并退出。
 
     出站精校（Coze）需要 ``requests`` 发起 HTTPS 请求。首次运行时若本地未装，
-    **必须先征得用户同意再安装**（不可静默安装，否则等同在用户环境引入外部依赖
-    而无人类审查节点）。
+    **必须提示用户手动安装**（不自动执行 pip install，避免在用户环境静默引入外部依赖）。
 
-    交互模式（stdin 为 TTY）：提示用户输入 y/n 确认安装；非交互模式（stdin 为管道 /
-    后台调用 --fire-only）：直接报错退出——后台无人值守，不阻塞等待输入。
+    交互模式（stdin 为 TTY）：显示手动安装命令并退出；
+    非交互模式（stdin 为管道 / 后台调用 --fire-only）：同样提示手动命令并退出。
     """
     try:
         import requests  # noqa: F401
@@ -92,47 +69,19 @@ def _ensure_requests():
     except ImportError:
         pass
 
-    # 缺失：构造提示文案（中英双语）
+    # 缺失：构造提示文案（中英双语），提示用户手动安装后退出
     install_cmd = 'python -m pip install "requests==2.32.3"'
     notice = (
         "\n[ct-advisor] 出站精校（Coze）需要 `requests` 库来发起 HTTPS 请求。\n"
-        "  → 是否同意自动安装？输入 y 继续，n 退出："
-        f"     （将执行：{install_cmd}）\n"
-        "  → Auto-install `requests` for outbound Coze refinement (HTTPS)? "
-        "Enter y to proceed, n to abort: "
-        f"     (will run: {install_cmd})\n"
+        "  → 检测到本地未安装，请手动运行以下命令后重试：\n"
+        f"     {install_cmd}\n"
+        "  → The `requests` library is required for outbound Coze refinement (HTTPS).\n"
+        "     Please install it manually and retry:\n"
+        f"     {install_cmd}\n"
     )
 
-    # 仅交互模式（stdin 为 TTY）才提示；非交互（管道/后台 fire-only）直接报错
-    if sys.stdin.isatty():
-        try:
-            answer = input(notice).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            answer = "n"
-        if answer not in ("y", "yes", "是"):
-            raise MissingDependencyError(
-                "用户拒绝自动安装 `requests`。请手动运行后重试："
-                f"{install_cmd} / "
-                "User declined auto-install. Please install manually and retry: "
-                f"{install_cmd}"
-            )
-    else:
-        # 非交互模式（后台 fire-only / 管道调用）：无人确认，直接报错退出
-        raise MissingDependencyError(
-            "缺少 `requests` 且处于非交互模式（后台调用），无法提示安装。"
-            f"请手动运行：{install_cmd} / "
-            "Missing `requests` in non-interactive mode (background call). "
-            f"Please install manually: {install_cmd}"
-        )
-
-    # 用户同意安装（或交互模式下走到这里）
-    if _try_install("requests==2.32.3"):
-        import requests  # noqa: F401
-        return requests
-    raise MissingDependencyError(
-        f"自动安装失败。请手动运行：{install_cmd} / "
-        f"Auto-install failed. Please install manually: {install_cmd}"
-    )
+    # 两种模式均提示手动安装后退出（不自动执行 pip install）
+    raise MissingDependencyError(notice)
 
 
 # 展示前剥离 <source> 标签的正则（注意：用字符类 ["'] 避免 \" 在 raw string 中的解析问题）
@@ -209,8 +158,8 @@ class RefineRequest:
         静默兜底、远程根本没被调用」这一整类问题。
 
         自愈策略：
-          - ``query_meta``：解析并补齐 / 修正枚举非法值（middle / normal），
-            category 缺省补 ``general``；``query_origin`` 缺失则由脚本自动盖章
+          - ``query_meta``：解析并修正枚举非法值；difficulty / category / accuracy
+            缺失或非枚举合法值时统一补空串（``""``）；``query_origin`` 缺失则由脚本自动盖章
             （sha256 机器标识，写入 query_meta 字典）。
           - ``original_question``：若空，用 ``draft_answer`` 首行兜底。
 
@@ -231,9 +180,9 @@ class RefineRequest:
             meta = {}
         changed = False
         if not meta.get("difficulty") or meta["difficulty"] not in DIFFICULTY_ENUM:
-            meta["difficulty"] = "middle"
+            meta["difficulty"] = ""
             changed = True
-        # category：允许 string 或 string[]（多标签）；缺失补默认；多标签去重保序、不裁剪
+        # category：允许 string 或 string[]（多标签）；缺失/空补空串；多标签去重保序、不裁剪
         cat_raw = meta.get("category", "")
         if isinstance(cat_raw, list):
             cat_filtered = []
@@ -244,15 +193,15 @@ class RefineRequest:
                     if s2 not in cat_seen:
                         cat_seen.add(s2)
                         cat_filtered.append(s2)
-            meta["category"] = cat_filtered if cat_filtered else "general"
+            meta["category"] = cat_filtered if cat_filtered else ""
             changed = True
         elif isinstance(cat_raw, str) and cat_raw.strip():
             pass  # 合法 string，保留
         else:
-            meta["category"] = "general"
+            meta["category"] = ""
             changed = True
         if not meta.get("accuracy") or meta["accuracy"] not in ACCURACY_ENUM:
-            meta["accuracy"] = "normal"
+            meta["accuracy"] = ""
             changed = True
         if changed or not isinstance(self.query_meta, dict):
             self.query_meta = meta
@@ -280,29 +229,29 @@ class RefineRequest:
         这一极端情形外，应当总能通过。校验失败抛 ValueError；调用方负责捕获后
         显式告警 + 兜底，不再静默。
 
-        除 draft_answer 允许为空外，其余字段均为必填：
+        字段约束（经 normalize() 自愈后）：
           - query_meta       : 非空 dict，包含 difficulty / category / accuracy / query_origin
-                               difficulty ∈ {simple, middle, complex, vague}
-                               accuracy ∈ {good, normal}
-                               query_origin : 非空，格式 sha256:<64 hex>（机器标识）
+                               difficulty ∈ {simple, middle, complex, vague}（允许为空串）
+                               accuracy ∈ {good, normal}（允许为空串）
+                               category   : 任意非空串，或为空串（允许未提供）
+                               query_origin : 非空，格式 sha256:<64 hex>（机器标识，脚本盖章）
           - original_question  : 非空
+          - draft_answer       : 允许为空
+          - difficulty / category / accuracy 缺失时由 normalize() 补空串，不再强制非空；
+            仅当「非空但枚举非法」时（difficulty / accuracy）才报错。
         校验失败抛 ValueError；调用方（refine_answer.py）捕获后兜底输出 draft_answer。
         """
         # 校验 query_meta
         if not self.query_meta or not str(self.query_meta).strip():
             raise ValueError("required field 'query_meta' is empty")
         meta = _parse_query_meta(self.query_meta)
-        if not meta["difficulty"]:
-            raise ValueError("query_meta.difficulty is required (non-empty)")
-        if meta["difficulty"] not in DIFFICULTY_ENUM:
+        # difficulty / category / accuracy 允许为空串（agent 未提供时由 normalize() 补空串）；
+        # 仅在「非空但枚举非法」时才报错。category 无枚举约束，非空即合法。
+        if meta["difficulty"] and meta["difficulty"] not in DIFFICULTY_ENUM:
             raise ValueError(
                 f"query_meta.difficulty must be one of {DIFFICULTY_ENUM}, got {meta['difficulty']!r}"
             )
-        if not meta["category"]:
-            raise ValueError("query_meta.category is required (non-empty)")
-        if not meta["accuracy"]:
-            raise ValueError("query_meta.accuracy is required (non-empty)")
-        if meta["accuracy"] not in ACCURACY_ENUM:
+        if meta["accuracy"] and meta["accuracy"] not in ACCURACY_ENUM:
             raise ValueError(
                 f"query_meta.accuracy must be one of {ACCURACY_ENUM}, got {meta['accuracy']!r}"
             )
@@ -348,7 +297,7 @@ class CozeRefiner(Refiner):
         self.token_path = token_path
         # answer_mode 已固定为 fast（2026-08-05 删除 precise）；按难度分流：
         #   simple/middle = race 竞速（早发 / 速度优先，详见 refine_fire_only + collect_race）：
-        #     agent 在 step 2 后台调用 --fire-only（draft_answer 留空、accuracy 空白→normal），
+        #     agent 在 step 2 后台调用 --fire-only（draft_answer 留空、difficulty/category/accuracy 未提供→补空串），
         #     Coze 用**完整 60s**（self.timeout）HTTP 超时独立分析 original_question，
         #     成功后写入 race 缓存文件；agent 在 step 3 并行写本地草稿 + 调用 --collect
         #     [--wait race_window] 收集：缓存命中（Coze 在 step 3→step 4 间已返回）→ 采用 Coze
@@ -473,7 +422,7 @@ class CozeRefiner(Refiner):
         # coze prompt 已配置为：识别 <source> 标签 → 跳过标记段落（不修改、不验证）。
         # sanitize() 只处理 PII（身份证/手机号/邮箱），不伤害 XML 标签。
         payload = sanitize(req.to_payload())  # 出站前脱敏（ct-base §11）
-        # token 解析优先级：CLI > env > 混淆落盘文件（详见 adapters/coze_token.py）
+        # token 解析优先级：CLI > env > 局部文件(可选) > 内嵌库（详见 adapters/coze_token_embedded.py）
         token = get_token(self.cli_token, self.token_path, self.token_env)
         resp = requests.post(
             self.endpoint,

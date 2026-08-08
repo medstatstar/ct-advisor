@@ -48,3 +48,7 @@ coze/refiner_contract.md
 coze/coze_system_prompt_v1.4.md
 coze/subagent_prompt.md
 references/ops.md
+
+# Race-mode runtime cache (created on every fire-only/collect round-trip;
+# holds the last Coze answer text — dev/test artifact, never ship)
+.coze_race_cache/

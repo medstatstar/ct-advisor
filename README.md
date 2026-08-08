@@ -8,7 +8,7 @@
 
 > **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor that also routes real-data / competitive-intel asks to sibling data skills.**
 
-> 💡 **Performance Tip**: This skill's answer accuracy primarily relies on external cloud-based LLM services and database support — it does not demand much from the local LLM (and the locally installed reference materials are also limited). We've observed that reasoning/thinking models (e.g. Hunyuan-3, DeepSeek-R1) spend excessive time on deep thinking when running this skill. **If a single response takes longer than 3 minutes, we recommend switching to a standard model to speed up processing.**
+> 💡 **Performance Tip**: In race mode (the default for simple/middle questions), the answer is refined by the Coze endpoint — it typically returns in **~20s**, and the skill fires it immediately after triage so you get the result fast. We've observed that reasoning/thinking models (e.g. Hunyuan-3, DeepSeek-R1) spend excessive time on deep thinking when running this skill locally. **If a single response still takes longer than 3 minutes, we recommend switching to a standard model to speed up processing.**
 
 > No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor answers methodology / design / statistics / GCP / safety / regulatory / QC / tone questions in-house, and for real-data or competitive-intel needs, routes you to the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) or stitches a full competitive-intel brief from the three data sources. It **re-implements no** retrieval or computation logic. B-tier. **Note: every answer's refinement is sent to the Coze endpoint — see the privacy notice below.**
 
@@ -110,7 +110,7 @@ Sure, I'll answer in English from now on. (Output language auto-follows your OS 
 
 ## 2. What Can It Do — Scenarios
 
-The advisor covers the entire clinical-trial lifecycle through ten in-house workflows (A–J) plus routing to four sibling skills. Each row gives the typical **situation** and a line you can **copy verbatim** under "Try saying".
+The advisor covers the entire clinical-trial lifecycle through ten in-house workflows (A–J) plus routing to five sibling skills. Each row gives the typical **situation** and a line you can **copy verbatim** under "Try saying".
 
 ### ① Methodology & regulatory advice (answered in-house, A–J)
 | Situation | Try saying in chat |
@@ -170,8 +170,9 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 ### Outbound & Privacy (answer refinement always via Coze)
 - **The only outbound path = answer refinement (Coze):** Because clinical trials demand high answer quality, the advisor sends your question to **`https://ct-advisor.coze.site/run`** for refinement against the full database on every answer (step 6 always invokes `scripts/refine_answer.py`, POSTing `query_meta` (incl. `query_origin` machine id) + `original_question` + `draft_answer`; outbound payloads pass through `sanitize()` first). The shipped `config/coze.dat` is the **required public credential** for that endpoint (published by the author) — keep it as-is and do not replace it with your own token. On Coze timeout/error it degrades to the local draft, but **only as a fault fallback**. **Do not paste confidential trial / patient / sponsor data** into any prompt.
-- **Machine id is hashed, non-PII:** `query_origin` (nested inside `query_meta`) is a `sha256` machine-id hash (no plaintext hostname/IP, non-PII), used only for per-machine audit/attribution.
+- **Machine id is hashed, non-PII:** `query_origin` (nested inside `query_meta`) is `sha256(hostname + "ct-advisor-query-origin-v1")` — a stable per-machine identifier used only for per-machine audit/attribution and Coze-side rate limiting. It contains **no plaintext hostname, IP, or any other PII**. The salt is a fixed namespace separator, not a secret.
 - **Nothing written to disk by default:** `qa_store` defaults to `noop` — no Q&A record is kept. Only `qa_store.mode: local` appends full Q&A to `data/qa_log.jsonl` on your machine (unencrypted, treat as sensitive, add to `.gitignore`).
+- **About memory (self-improving agent):** ct-advisor follows the WorkBuddy self-improving system. Recurring patterns (same issue ≥ 3 times across ≥ 2 tasks) are **automatically** promoted to long-term memory: behavior/communication rules → `~/.workbuddy/SOUL.md`; workflow/tool rules → project `AGENTS.md`; cross-project user preferences → `~/.workbuddy/MEMORY.md`; project-level notes → `.workbuddy/memory/MEMORY.md`. These files live on your machine. To review what's stored, say "show me your MEMORY.md"; to delete, say "forget all my preferences" or manually `rm ~/.workbuddy/MEMORY.md` (global) / `rm -rf .workbuddy/memory/` (project-level). The promotion is silent to avoid interrupting your workflow.
 
 ---
 

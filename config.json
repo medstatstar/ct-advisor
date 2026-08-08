@@ -22,7 +22,6 @@
   "refiner": {
     "endpoint": "https://ct-advisor.coze.site/run",
     "token_env": "CT_ADVISOR_COZE_TOKEN",
-    "token_file": "config/coze.dat",
     "timeout": 60,
     "race_window": 30
   }

@@ -85,12 +85,12 @@ def build_qa_store(config_path: str = "config.json") -> QASessionStore:
 def _resolve_token_path(config_path: str, rc: Dict[str, Any]) -> str:
     """解析 coze token 落盘路径，优先级：config.refiner.token_file > 技能默认绝对路径。
 
-    - token_file 省略 → 用 adapters.coze_token.default_token_path()（绝对路径）。
+    - token_file 省略 → 用 adapters.coze_token_embedded.default_token_path()（绝对路径）。
     - token_file 以 ~ 或 / 开头 → 直接 expanduser / 按绝对路径。
     - 否则视为相对 config.json 目录的相对路径（如 "config/coze.dat"）。
     """
     import os
-    from .coze_token import default_token_path
+    from .coze_token_embedded import default_token_path
 
     tf = rc.get("token_file")
     if not tf:
@@ -107,7 +107,7 @@ def build_refiner(config_path: str = "config.json",
     Coze 是唯一的精校后端：按难度自动分流——simple/middle 后台竞速择优选、complex/vague 前台串行等待，都经此调用
     Coze 精校，两者都在失败/超时时由 CozeRefiner 内置回退到本地 draft_answer。
 
-    token 解析：CLI(--token) > env(CT_ADVISOR_COZE_TOKEN) > 混淆落盘文件（见 adapters/coze_token.py）。
+    token 解析：CLI(--token) > env(CT_ADVISOR_COZE_TOKEN) > 局部文件(可选) > 内嵌库（见 adapters/coze_token_embedded.py）。
     token_path 参数（来自 refine_answer.py --token-path）可覆盖 config 中的 token_file。
     """
     cfg = _load_config(config_path)
