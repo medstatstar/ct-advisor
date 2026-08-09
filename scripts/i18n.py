@@ -612,7 +612,40 @@ _MESSAGES = {
         "en": "Note: I will not expose personal info, subject info, unpublished project data, private paths or access credentials in the answer.",
         "zh": "提示：我不会在回答中泄露个人信息、受试者信息、未公开项目数据、私有路径或访问凭据。",
     },
+    # NOTE: auth.* / error.* 等通用词条已迁移至 ct-base 共享 i18n
+    # (ct-base/scripts/i18n_messages.json)，由本模块 t() 在运行时合并加载，
+    # 本文件不再重复维护（消除双份维护，唯一真源仅在 ct-base）。
 }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Shared messages from ct-base (single source of truth for generic/auth/error)
+# ═══════════════════════════════════════════════════════════════════════════
+# ct-advisor 专属词条(菜单/澄清/QC/warn/boundary 等)已在上方 _MESSAGES。
+# 通用词条(auth.*/error.*/generic/exec/...)由 ct-base 统一维护，避免双份维护。
+# 查找顺序：本技能专属 > ct-base 共享真源 > 本包随附快照(发布态离线兜底)。
+# 发布态 ct-advisor 为独立包，~/.workbuddy/skills/ct-base 不一定存在，故回退到
+# 随包内置的 scripts/i18n_messages.json(发布前由 sync_i18n_from_ctbase.py 同步)。
+
+_BASE_MSG_PATHS = [
+    os.path.join(os.path.expanduser("~"), ".workbuddy", "skills", "ct-base",
+                 "scripts", "i18n_messages.json"),                 # 开发态：ct-base 真源
+    os.path.join(_SKILL_ROOT, "scripts", "i18n_messages.json"),    # 发布态：离线快照
+]
+
+
+def _load_base_messages():
+    """加载 ct-base 共享词条；任一路径可用即采用，全不可用回退空 dict。"""
+    for _p in _BASE_MSG_PATHS:
+        try:
+            with open(_p, encoding="utf-8") as _f:
+                return json.load(_f)
+        except Exception:
+            continue
+    return {}
+
+
+_BASE_MESSAGES = _load_base_messages()
 
 
 def t(key, **kwargs):
@@ -626,7 +659,10 @@ def t(key, **kwargs):
         Localized string. Falls back to the key itself if not found.
     """
     lang = _current_lang()
+    # 查找顺序：本技能专属词条 > ct-base 共享词条(开发态真源 / 发布态快照)
     entry = _MESSAGES.get(key)
+    if entry is None:
+        entry = _BASE_MESSAGES.get(key)
     if entry is None:
         return key
     text = entry.get(lang, entry.get("en", key))

@@ -35,6 +35,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from scripts.i18n import t  # noqa: E402  (user-facing prompts EN/ZH, locale-resolved)
 from adapters import build_refiner, RefineRequest
 
 
@@ -65,20 +66,17 @@ def refine_direct(
     heal_notes = req.normalize()
     if heal_notes:
         sys.stderr.write(
-            "[ct-advisor] payload auto-healed (self-heal): " + "; ".join(heal_notes)
-            + " / payload 已自动补全（自愈）: " + "; ".join(heal_notes) + "\n"
+            t("error.payload_healed", notes="; ".join(heal_notes)) + "\n"
         )
 
     try:
         req.validate()
     except ValueError as e:
         sys.stderr.write(
-            f"[ct-advisor] payload contract validation failed: {e} / payload 契约校验失败: {e}\n"
+            t("error.payload_invalid", error=f"contract validation failed: {e}") + "\n"
         )
         if not draft_answer or not draft_answer.strip():
-            return ("[ct-advisor] cannot generate answer: the problem description is empty, "
-                    "please provide a specific clinical-trial question. / "
-                    "无法生成答案：问题描述为空，请提供具体的临床试验问题。")
+            return t("error.empty_question")
         return draft_answer
 
     try:
@@ -86,8 +84,7 @@ def refine_direct(
         return refiner.refine(req)
     except Exception as e:
         sys.stderr.write(
-            f"[ct-advisor] refine error, falling back to draft: {type(e).__name__}: {e} / "
-            f"refine 异常，回退草稿: {type(e).__name__}: {e}\n"
+            t("error.refine_fallback", error=f"{type(e).__name__}: {e}") + "\n"
         )
         return draft_answer
 
@@ -97,8 +94,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="ct-advisor answer refiner (base64 payload)")
     ap.add_argument("--payload-b64", required=True, help="Base64-encoded UTF-8 JSON payload")
     ap.add_argument("--config", default="config.json", help="path to config.json")
-    ap.add_argument("--token", help="inline coze token (CLI precedence)")
-    ap.add_argument("--token-path", help="path to obfuscated token file")
+    ap.add_argument("--payload-b64", required=True, help="Base64-encoded UTF-8 JSON payload")
     args = ap.parse_args()
 
     # 1) Base64 decode → JSON string
@@ -106,8 +102,7 @@ def main() -> None:
         raw = base64.b64decode(args.payload_b64).decode("utf-8")
     except Exception as e:
         sys.stderr.write(
-            f"[ct-advisor] base64 decode failed: {type(e).__name__}: {e} / "
-            f"base64 解码失败: {type(e).__name__}: {e}\n"
+            t("error.base64_decode", error=f"{type(e).__name__}: {e}") + "\n"
         )
         sys.exit(1)
 
@@ -116,8 +111,7 @@ def main() -> None:
         obj = json.loads(raw)
     except json.JSONDecodeError as e:
         sys.stderr.write(
-            f"[ct-advisor] JSON parse failed: {type(e).__name__}: {e} / "
-            f"JSON 解析失败: {type(e).__name__}: {e}\n"
+            t("error.payload_invalid", error=f"JSON parse failed: {type(e).__name__}: {e}") + "\n"
         )
         sys.exit(1)
 

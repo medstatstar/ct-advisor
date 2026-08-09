@@ -82,38 +82,13 @@ def build_qa_store(config_path: str = "config.json") -> QASessionStore:
     return NoOpStore()
 
 
-def _resolve_token_path(config_path: str, rc: Dict[str, Any]) -> str:
-    """解析 coze token 落盘路径，优先级：config.refiner.token_file > 技能默认绝对路径。
-
-    - token_file 省略 → 用 config.keys.default_token_path()（绝对路径）。
-    - token_file 以 ~ 或 / 开头 → 直接 expanduser / 按绝对路径。
-    - 否则视为相对 config.json 目录的相对路径（如 "config/coze.dat"）。
-    """
-    import os
-    # 公共凭据统一从 config/keys.py 导入（后缀 .py 不被 SkillHub 文件过滤删除）
-    import importlib.util as _ilu
-    _keys_spec = _ilu.spec_from_file_location("config.keys", "config/keys.py")
-    _keys = _ilu.module_from_spec(_keys_spec)
-    _keys_spec.loader.exec_module(_keys)
-    default_token_path = _keys.default_token_path
-
-    tf = rc.get("token_file")
-    if not tf:
-        return default_token_path()
-    if tf.startswith("~") or os.path.isabs(tf):
-        return os.path.expanduser(tf)
-    return os.path.join(os.path.dirname(os.path.abspath(config_path)), tf)
-
-
-def build_refiner(config_path: str = "config.json",
-                  cli_token: str = None, token_path: str = None) -> Refiner:
+def build_refiner(config_path: str = "config.json") -> Refiner:
     """答案精校出口（第 4 个 seam）。
 
     Coze 是唯一的精校后端：按难度自动分流——simple/middle 后台竞速择优选、complex/vague 前台串行等待，都经此调用
     Coze 精校，两者都在失败/超时时由 CozeRefiner 内置回退到本地 draft_answer。
 
-    token 解析：CLI(--token) > env(CT_ADVISOR_COZE_TOKEN) > 局部文件(可选) > config/keys.py。
-    token_path 参数（来自 refine_answer.py --token-path）可覆盖 config 中的 token_file。
+    token 解析：统一从 config/keys.py 的 COZE_TOKEN 公共凭据读取（无参 get_token()）。
     """
     cfg = _load_config(config_path)
     rc = cfg.get("refiner", {}) or {}
@@ -125,7 +100,5 @@ def build_refiner(config_path: str = "config.json",
         token_env=rc.get("token_env", "CT_ADVISOR_COZE_TOKEN"),
         timeout=float(rc.get("timeout", 60.0)),
         race_window=float(rc.get("race_window", 2.0)),
-        cli_token=cli_token,
-        token_path=token_path or _resolve_token_path(config_path, rc),
         answer_mode=answer_mode,
     )

@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from adapters import build_refiner, RefineRequest, MissingDependencyError
+from scripts.i18n import t  # noqa: E402  (user-facing prompts EN/ZH, locale-resolved)
 
 def _load_auto_approve_endpoints(config_path: str) -> Set[str]:
     """从 config.json 加载 auto_approve_endpoints 白名单。"""
@@ -61,12 +62,10 @@ def _check_outbound_authorization(endpoint: str, config_path: str) -> bool:
     # 2. config.json 白名单中
     if endpoint in _load_auto_approve_endpoints(config_path):
         return True
-    # 3. 未授权：输出拦截提示，agent 应展示给用户确认
+    # 3. 未授权：输出机器信号 + 随 locale 切换的用户提示，agent 应展示给用户确认
     sys.stderr.write(
         f"[ct-advisor][AUTH-BLOCK] outbound to {endpoint} requires user confirmation.\n"
-        f"  Add to config.json 'auto_approve_endpoints' list to skip confirmation.\n"
-        f"  Local reference materials are limited; declining will disable cloud-based refinement "
-        f"and significantly reduce answer quality/coverage.\n"
+        f"\n{t('auth.coze_outbound', endpoint=endpoint)}\n"
     )
     return False
 
@@ -94,7 +93,6 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="ct-advisor answer refiner (Coze polish, single call)")
     ap.add_argument("payload", nargs="?", help="path to JSON file with the 3 variables (deprecated: use stdin or --payload-inline)")
     ap.add_argument("--payload-inline", help="inline JSON payload string (highest priority, avoids temp files)")
-    ap.add_argument("--token", help="inline coze token (CLI precedence); not for daily use")
     ap.add_argument("--token-path", help="path to obfuscated token file (overrides config token_file)")
     ap.add_argument("--store-token", metavar="TOKEN",
                     help="store the given token (obfuscated) to the token file and exit")
@@ -153,17 +151,15 @@ def main() -> None:
             # --collect mode: payload parse failure means the cache path cannot be located;
             # tell the agent explicitly "local wins", do NOT confuse it with "cache miss"
             sys.stderr.write(
-                f"[ct-advisor] collect: payload parse failed ({type(e).__name__}), "
-                "cannot locate race cache -> **LOCAL WINS**, agent should use local draft directly, do NOT wait for Coze / "
-                "collect: payload 解析失败，无法查找 race 缓存 → **本地胜出**，agent 应直接采用本地草稿，禁止等 Coze\n"
+                t("error.payload_invalid",
+                  error=f"{type(e).__name__}; collect: cache path cannot be located -> LOCAL WINS, do NOT wait for Coze")
+                + "\n"
             )
             sys.stdout.write("")
             sys.exit(0)
         # Other modes (fire-only / serial): cannot self-heal; warn clearly + fall back to draft
         sys.stderr.write(
-            f"[ct-advisor] payload parse failed (invalid JSON): {type(e).__name__}; "
-            "fell back to local draft, remote NOT called / "
-            f"payload 解析失败（非合法 JSON）: {type(e).__name__}；已回退本地草稿，未调用远程\n"
+            t("error.payload_invalid", error=f"{type(e).__name__} (invalid JSON)") + "\n"
         )
         sys.stdout.write(draft)
         sys.exit(0)
@@ -172,25 +168,18 @@ def main() -> None:
     heal_notes = req.normalize()
     if heal_notes:
         sys.stderr.write(
-            "[ct-advisor] payload auto-healed (self-heal, remote called as usual): "
-            + "; ".join(heal_notes) + " / "
-            "payload 已自动补全（自愈，照常调用远程）: " + "; ".join(heal_notes) + "\n"
+            t("error.payload_healed", notes="; ".join(heal_notes)) + "\n"
         )
 
     try:
         req.validate()  # Should pass after self-heal; only fails in extreme cases (both orgq and draft empty)
     except ValueError as e:
         sys.stderr.write(
-            f"[ct-advisor] payload contract validation failed: {e}; "
-            "fell back to local draft, remote NOT called / "
-            f"payload 契约校验失败: {e}；已回退本地草稿，未调用远程\n"
+            t("error.payload_invalid", error=f"contract validation failed: {e}") + "\n"
         )
         # Fallback: when the draft is also empty, emit an explicit prompt instead of a silent empty answer
         if not draft or not draft.strip():
-            sys.stdout.write(
-                "[ct-advisor] cannot generate answer: the problem description is empty, please provide a specific clinical-trial question. / "
-                "无法生成答案：问题描述为空，请提供具体的临床试验问题。\n"
-            )
+            sys.stdout.write(t("error.empty_question") + "\n")
         else:
             sys.stdout.write(draft)
         sys.exit(0)
@@ -207,14 +196,11 @@ def main() -> None:
         try:
             final = build_refiner(
                 config_path=args.config,
-                cli_token=args.token,
-                token_path=args.token_path,
             ).refine_fire_only(req)
         except MissingDependencyError as e:
             sys.stderr.write(
-                f"[ct-advisor][FATAL] refiner dependency missing: {e}\n"
-                "this issue will NOT silently fall back; install per the command above and retry. / "
-                "精校依赖缺失；此问题不会静默回退；请按上述命令安装后重试。\n"
+                t("error.dependency_fatal",
+                  cmd='python -m pip install "requests==2.32.3"') + "\n"
             )
             sys.exit(1)
         except Exception:  # noqa: BLE001
@@ -229,15 +215,12 @@ def main() -> None:
         try:
             refiner = build_refiner(
                 config_path=args.config,
-                cli_token=args.token,
-                token_path=args.token_path,
             )
             final = refiner.collect_race(req, args.wait)
         except MissingDependencyError as e:
             sys.stderr.write(
-                f"[ct-advisor][FATAL] refiner dependency missing: {e}\n"
-                "this issue will NOT silently fall back; install per the command above and retry. / "
-                "精校依赖缺失；此问题不会静默回退；请按上述命令安装后重试。\n"
+                t("error.dependency_fatal",
+                  cmd='python -m pip install "requests==2.32.3"') + "\n"
             )
             sys.exit(1)
         except Exception:  # noqa: BLE001
@@ -250,30 +233,24 @@ def main() -> None:
     if not _check_outbound_authorization(
         _get_endpoint_from_config(args.config), args.config
     ):
-        sys.stderr.write(
-            f"[ct-advisor][AUTH-BLOCK] serial refine blocked — falling back to local draft.\n"
-        )
+        sys.stderr.write(t("auth.serial_blocked") + "\n")
         sys.stdout.write(draft)
         sys.exit(0)
     try:
         final = build_refiner(
             config_path=args.config,
-            cli_token=args.token,
-            token_path=args.token_path,
         ).refine(req)
     except MissingDependencyError as e:
         # Missing dependency: fail explicitly, never silently fall back to draft (else the user thinks the answer came from Coze)
         sys.stderr.write(
-            f"[ct-advisor][FATAL] refiner dependency missing: {e}\n"
-            "this issue will NOT silently fall back; install per the command above and retry. / "
-            "精校依赖缺失；此问题不会静默回退；请按上述命令安装后重试。\n"
+            t("error.dependency_fatal",
+              cmd='python -m pip install "requests==2.32.3"') + "\n"
         )
         sys.exit(1)
     except Exception as e:  # noqa: BLE001
         # Any non-dependency exception (network/timeout/Coze 5xx etc.) is labelled as fallback to avoid being mistaken for a Coze-refined answer
         sys.stderr.write(
-            f"[ct-advisor][coze] FALLBACK_TO_LOCAL_DRAFT "
-            f"reason={type(e).__name__}; not retrying coze; returning local draft_answer\n"
+            t("error.fallback_local", reason=type(e).__name__, timeout=60) + "\n"
         )
         final = draft
     sys.stdout.write(final or draft)

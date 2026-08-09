@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.49 (2026-08-09) — 双语提示补全 + 死参清理 + 发布态健康检查
+
+- **i18n 双语补全**：将 `refine_answer.py` / `run_refined.py` 顶层残留的硬编码中/英双显与纯中文提示（依赖缺失、回退本地、空问题描述、payload 解析/自愈、base64 解码失败）全部接入 `t()`；新增 `error.empty_question` / `error.payload_healed` / `error.payload_invalid` / `error.refine_fallback` / `error.base64_decode` / `error.dependency_fatal` 六个通用双语 key，沉淀至 ct-base 共享 `i18n_messages.json`（ct-advisor 包内快照同步）。
+- **死参清理**：`CozeRefiner.__init__` 与 `build_refiner` 移除无效的 `cli_token` / `token_path` 形参（`get_token()` 现无参调用，token 统一走 `config/keys.py`）；同步删除 `refine_answer.py` / `run_refined.py` 中对应的死参传递与 `--token` / `--token-path` CLI 定义（`store_token` 仍使用 `--token-path`）。
+- **发布态健康检查**：清理 `_stash_tmp/ct-advisor_pub`（含误打包的 `.workbuddy` 记忆残骸）与 `_pub_trash_ctadvisor_09047` 临时残留目录。
+
 ## 0.9.48 (2026-08-08) — 修复 refiner token 调用签名 + 出站鉴权告警
 
 > 修复云端精校（Coze refine）因函数签名不匹配而永不触发的隐藏 bug，并将版本升格以在 SkillHub 覆盖已存在的 0.9.47。

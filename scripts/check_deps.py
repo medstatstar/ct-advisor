@@ -22,25 +22,36 @@ import os
 import sys
 from pathlib import Path
 
+# i18n: install_hint 按当前系统 locale 取 en/zh
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from i18n import is_chinese_os
+_LANG = "zh" if is_chinese_os() else "en"
+
 # (slug, tier, purpose, github_repo, install_hint)
-# 缺失时直接给出 GitHub 安装地址（repo URL + 克隆命令）。
+# install_hint 为双语字典 {en, zh}；缺失时按当前 locale 给出 GitHub 安装地址（repo URL + 克隆命令）。
 KNOWN_DEPS = [
     ("ct-registry", "B",
      "Trial-registry landscape (CT.gov / CDE / WHO ICTRP / EU-CTR / ChiCTR / ISRCTN / DRKS)",
      "https://github.com/medstatstar/ct-registry",
-     "GitHub 安装地址: https://github.com/medstatstar/ct-registry ｜ 或 `git clone https://github.com/medstatstar/ct-registry ~/.workbuddy/skills/ct-registry`"),
+     {"en": "Install: https://github.com/medstatstar/ct-registry  |  or `git clone https://github.com/medstatstar/ct-registry ~/.workbuddy/skills/ct-registry`",
+      "zh": "GitHub 安装地址: https://github.com/medstatstar/ct-registry ｜ 或 `git clone https://github.com/medstatstar/ct-registry ~/.workbuddy/skills/ct-registry`"}),
     ("ct-safety", "B",
      "Safety signals (FAERS PRR / ROR / IC)",
      "https://github.com/medstatstar/ct-safety",
-     "GitHub 安装地址: https://github.com/medstatstar/ct-safety ｜ 或 `git clone https://github.com/medstatstar/ct-safety ~/.workbuddy/skills/ct-safety`"),
+     {"en": "Install: https://github.com/medstatstar/ct-safety  |  or `git clone https://github.com/medstatstar/ct-safety ~/.workbuddy/skills/ct-safety`",
+      "zh": "GitHub 安装地址: https://github.com/medstatstar/ct-safety ｜ 或 `git clone https://github.com/medstatstar/ct-safety ~/.workbuddy/skills/ct-safety`"}),
     ("ct-literature", "B",
      "Published literature (OpenAlex / Europe PMC / Semantic Scholar)",
      "https://github.com/medstatstar/ct-literature",
-     "GitHub 安装地址: https://github.com/medstatstar/ct-literature ｜ 或 `git clone https://github.com/medstatstar/ct-literature ~/.workbuddy/skills/ct-literature`"),
+     {"en": "Install: https://github.com/medstatstar/ct-literature  |  or `git clone https://github.com/medstatstar/ct-literature ~/.workbuddy/skills/ct-literature`",
+      "zh": "GitHub 安装地址: https://github.com/medstatstar/ct-literature ｜ 或 `git clone https://github.com/medstatstar/ct-literature ~/.workbuddy/skills/ct-literature`"}),
     ("ct-samplesize", "A",
      "Sample-size & power computation (handoff from workflow C)",
      "https://github.com/medstatstar/ct-samplesize",
-     "GitHub 安装地址: https://github.com/medstatstar/ct-samplesize ｜ 或 `git clone https://github.com/medstatstar/ct-samplesize ~/.workbuddy/skills/ct-samplesize`"),
+     {"en": "Install: https://github.com/medstatstar/ct-samplesize  |  or `git clone https://github.com/medstatstar/ct-samplesize ~/.workbuddy/skills/ct-samplesize`",
+      "zh": "GitHub 安装地址: https://github.com/medstatstar/ct-samplesize ｜ 或 `git clone https://github.com/medstatstar/ct-samplesize ~/.workbuddy/skills/ct-samplesize`"}),
 ]
 
 
@@ -87,7 +98,7 @@ def check(roots):
             "github": github,
             "installed": found_in is not None,
             "path": found_in,
-            "install_hint": hint,
+            "install_hint": hint.get(_LANG, hint.get("en", "")),
         })
     return result
 

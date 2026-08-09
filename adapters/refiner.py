@@ -43,6 +43,13 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import copy
 
+# i18n: user-facing prompts (EN/ZH) resolved by OS locale / config
+import pathlib
+_SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_SKILL_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SKILL_ROOT))
+from scripts.i18n import t  # noqa: E402
+
 # 公共凭据统一从 config/keys.py 导入（后缀 .py 不被 SkillHub 文件过滤删除）
 import importlib.util as _ilu
 _keys_spec = _ilu.spec_from_file_location("config.keys", "config/keys.py")
@@ -74,16 +81,9 @@ def _ensure_requests():
     except ImportError:
         pass
 
-    # 缺失：构造提示文案（中英双语），提示用户手动安装后退出
+    # 缺失：用 i18n 输出随 locale 切换的安装提示，提示用户手动安装后退出
     install_cmd = 'python -m pip install "requests==2.32.3"'
-    notice = (
-        "\n[ct-advisor] 出站精校（Coze）需要 `requests` 库来发起 HTTPS 请求。\n"
-        "  → 检测到本地未安装，请手动运行以下命令后重试：\n"
-        f"     {install_cmd}\n"
-        "  → The `requests` library is required for outbound Coze refinement (HTTPS).\n"
-        "     Please install it manually and retry:\n"
-        f"     {install_cmd}\n"
-    )
+    notice = t("error.requests_missing", cmd=install_cmd)
 
     # 两种模式均提示手动安装后退出（不自动执行 pip install）
     raise MissingDependencyError(notice)
@@ -293,13 +293,10 @@ class CozeRefiner(Refiner):
     """
 
     def __init__(self, endpoint: str, token_env: str = "CT_ADVISOR_COZE_TOKEN",
-                 timeout: float = 60.0, cli_token: str = None, token_path: str = None,
-                 answer_mode: str = "fast", race_window: float = 2.0):
+                 timeout: float = 60.0, answer_mode: str = "fast", race_window: float = 2.0):
         self.endpoint = endpoint
         self.token_env = token_env
         self.timeout = timeout
-        self.cli_token = cli_token
-        self.token_path = token_path
         # answer_mode 已固定为 fast（2026-08-05 删除 precise）；按难度分流：
         #   simple/middle = race 竞速（早发 / 速度优先，详见 refine_fire_only + collect_race）：
         #     agent 在 step 2 后台调用 --fire-only（draft_answer 留空、difficulty/category/accuracy 未提供→补空串），
@@ -442,10 +439,7 @@ class CozeRefiner(Refiner):
         # （2026-08-08 加固：此前 TypeError 被静默吞掉，误判为未发送）
         if resp.status_code == 401:
             try:
-                sys.stderr.write(
-                    "[ct-advisor][coze] AUTH_REJECTED status=401; "
-                    "token 可能已吊销或端点变更鉴权；检查 COZE_TOKEN 与 endpoint\n"
-                )
+                sys.stderr.write(t("error.coze_401") + "\n")
             except Exception:
                 pass
         resp.raise_for_status()
@@ -470,9 +464,7 @@ class CozeRefiner(Refiner):
         """回退日志：仅打印异常类型与超时窗口，绝不输出 token / payload / draft 内容。"""
         try:
             sys.stderr.write(
-                f"[ct-advisor][coze] FALLBACK_TO_LOCAL_DRAFT "
-                f"reason={type(exc).__name__} timeout={timeout}s; "
-                "not retrying coze; returning local draft_answer\n"
+                t("error.fallback_local", reason=type(exc).__name__, timeout=timeout) + "\n"
             )
         except Exception:
             pass
