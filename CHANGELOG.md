@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.52 (2026-08-09) — 安全审计修复（ClawHub SkillSpector 重审）
+
+- **承接 0.9.51（此前未发布）一并发布**：0.9.51 的 simple-local-only / 三流程重构、逻辑修正、英文化、README 同步全部随本版本首次上线。
+- **清 2× Critical `suspicious.dynamic_code_execution`**：`adapters/refiner.py` 与 `scripts/refine_answer.py` 原用 `importlib.spec_from_file_location()` + `loader.exec_module()` 动态加载 `config/keys.py`；改为标准 `from config.keys import get_token`（ROOT 已在 sys.path），消除动态代码执行启发式命中。
+- **清 1× Medium 凭据存储面**：移除 `refine_answer.py` 的 `--store-token` / `--token-path` CLI 参数及其 importlib 落盘块（token 已内嵌 `config/keys.py`，无需运行时写盘）；`keys.py` 的 `store_token()` 函数保留为惰性向后兼容、不再经 CLI 暴露。
+- **降 1× Medium 主机归因**：`compute_machine_id()` 由 `sha256(hostname + salt)` 稳定主机标识改为**每进程随机 seed**（`sha256(os.urandom(16))`），去掉跨会话/设备的机器归因与关联，仍满足 `query_origin` 契约（sha256:64hex），Coze 侧仍可单请求级限流；同步移除 `import socket` 与 `MACHINE_SALT` 常量，更新 frontmatter `permissions.data` 描述与模块 docstring。
+- **发布**：升 0.9.52 推送 GitHub + SkillHub + ClawHub，触发 ClawHub 重新跑 SkillSpector 安全审计。
+
+## 0.9.51 (2026-08-09) — simple 拆分出 local-only 模式（不发送 Coze）
+
+- **simple 独立 local 模式**：将 `simple` 从 race 拆分出独立列 `Local(simple)`。simple 难度问题**不 fire Coze**、**不做出站授权**、直接以本地 `knowledge/` 完整作答（Step 0 → Step 2 本地作答 → Step 6）。Step 2 的 Local(simple) 列由 `collect → 6` 修正为 `local answer → 6`；Step 6 同步标注 `from local answer (step 2)`。
+- **全局描述同步**：frontmatter `network_note`、Requirements 的 Coze 行 / Network 行、Anti-shortcut、Performance HARD GATE 全部由"simple/middle 必须 fire / 无 local 模式"改为"simple 走 local-only、仅 middle/complex 走 Coze"，消除自相矛盾。
+- **Difficulty bias 调整**：纯方法论问题由"总是判 middle"改为"总是判 simple 或 middle（绝不判 complex）"，并明确单一事实/定义/标准操作判 simple（local-only），解释/比较/多步推理判 middle（race），使 simple-local 真正可触发。
+- **未发布**：本次仅本地文件改动（本地升 0.9.51），未推送 SkillHub / ClawHub / GitHub，待确认后发布。
+- **同步 `references/steps.md`**：Step 0 难度表（simple 下游改为 → step 2→6 local-only）、Difficulty bias（纯方法论判 simple/middle）、Anti-shortcut、Interaction strategy（simple 不 fire）、Step 1 behavior 表（simple 标 skipped）、Step 2 拆分出 Local-only mode (simple) / Race mode (middle) / Serial mode (complex) 三段、Step 6 来源表与 Final pre-output check 表，全部对齐三流程新设想；文件 version 升 2026-08-09。
+- **逻辑矛盾修正（规则 8 / 检索分工红线 vs complex Step 3）**：Knowledge Map 规则 8 与 Routing 检索分工红线新增 **complex Step 3/4 同胞出站豁免**——原"本地检索后严禁外部网络数据检索"字面会误中 complex 的 Step 3 设计内真实数据供给（complex 在 Step 2 做本地 Route 后 Step 3 出站）；明确该红线仅防 simple/middle 的"本地兜底 + 外部叠加"，complex 的同胞出站是 Coze 串行整合前的设计内主流程，不在禁止之列。
+- **正文英文化（对齐 ct-base agent-facing 全英文规范）**：SKILL.md 残留中文正文——Knowledge Map 规则 3 / 7 / 8、Answer Workflow 表 Auth 行与 Step 5 行中文标注、出站授权门控整段（模板仅留英文）、检索分工红线——全部改为英文；`references/steps.md` 两处中文残留块（L65-68、L150 出站授权门控说明）同步英文化。frontmatter 规范中文（cn_name / summary / description 双语）、displayName、trigger_scope 双语、Serial-mode 双语用户通知予以保留；trigger_scope 英文翻译夹带的中文"主动"修正为 `does NOT proactively match`。
+- **同步双语 README（用户向 walkthrough）**：`README.md` / `README_zh-CN.md` 全面同步三流程设想——性能提示（race 仅 middle、simple 本地零出站）、概述 Note、隐私提示（仅 middle/complex 出站、simple 零出站）、FAQ「纯方法学要联网吗」（按难度区分）、§4 出站与隐私（标题/正文改为仅 middle/complex 走 Coze、step 2/6 调用）、§5 Coze 模式行 / config.json 注释 / 扫描器误报说明均补 simple 例外（simple 本地零出站、不连 Coze），middle/complex 仍走 Coze；两份版本号由 v0.9.38 升 v0.9.51。
+
 ## 0.9.50 (2026-08-09) — 本地检索纪律红线（单检 + 禁外部叠加）
 
 - **本地检索硬性上限**：每轮仅允许检索 1 次（原"≤2 knowledge reads"收紧为"1 次"），无论命中与否，检索后立即进入下一步流程，禁止第二次本地检索、多步本地 read 串联、把简单问题展开成复杂检索流水线（Knowledge Map 规则 3）。

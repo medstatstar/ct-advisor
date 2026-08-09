@@ -1,6 +1,6 @@
 ---
 file: steps.md
-version: 2026-08-08
+version: 2026-08-09
 purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summary maps to this file's full flow, boundary conditions, and exception handling
 ---
 
@@ -16,7 +16,7 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 | difficulty | trigger | downstream path |
 |---|---|---|
-| `simple` | single fact / definition / standard operation, no data pull or n computation | → step 1→2→6 (race mode; **Step 1 fire-only fires IMMEDIATELY after Triage, before Route**) |
+| `simple` | single fact / definition / standard operation, no data pull or n computation | → step 2→6 (**local-only**, no Coze; answered directly from `knowledge/`, Step 1 skipped) |
 | `middle` | needs explanation / comparison / multi-step reasoning, but no external data | → step 1→2→6 (race mode; **Step 1 fire-only fires IMMEDIATELY after Triage, before Route**) |
 | `complex` | needs multi-angle decomposition, external data integration, or option selection | → step 2→3→4→5→6 (**serial**, await full Coze return; Step 1 Fire is race-only, skipped for complex) |
 | `vague` | incomplete / ambiguous question, missing key parameters | → AskUserQuestion (≤ 4 questions) → back to step 0 |
@@ -25,16 +25,16 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 **🔴 Difficulty bias rule (guardrail against misjudging as complex)**:
 
-When the question **does not involve external data pull / sample size computation**, prefer `middle` (over `complex`) unless at least one of the following holds:
+When the question **does not involve external data pull / sample size computation**, prefer `simple` or `middle` (over `complex`) unless at least one of the following holds:
 - requires pulling data from ≥1 sibling skill simultaneously (data grounding ≥1 route)
 - requires ct-samplesize to compute n / power
 - question explicitly asks for multi-option comparison + recommendation ("which one / best approach")
 - composite judgment spanning ≥2 workflows
 
-**Pure methodology questions (e.g., "how to do X", "what to watch for in X", "difference between X and Y") are always `middle`** — the local knowledge pack covers 80%+ of the content; in race mode the Coze-refined output is the final answer, no serial wait needed.
+**Pure methodology questions (e.g., "how to do X", "what to watch for in X", "difference between X and Y") are always `simple` or `middle` (never `complex`)** — the local knowledge pack covers 80%+ of the content: `simple` answers directly from `knowledge/` (local-only, no Coze); `middle` runs race mode (Coze-refined output is the final answer, no serial wait). Among them: **single fact / definition / standard operation → `simple`**; explanation / comparison / multi-step reasoning → `middle`.
 **Typical misjudgment example**: "How to ensure data integrity when migrating from paper CRF to EDC?" → although multi-step, the local knowledge pack (ref-ops-data §4.12) has complete guidance and no external data is needed → should be judged `middle` (race), not `complex` (serial).
 
-**🚫 Anti-shortcut warning (HARD GATE)**: **simple/middle MUST run the full step 1→2→6 flow (fire BEFORE route); complex MUST run the full step 2→3→4→5→6 flow. Do NOT use any of the following "invisible pre-judgments" to skip steps:**
+**🚫 Anti-shortcut warning (HARD GATE)**: **`middle` MUST run the full step 1→2→6 flow (fire BEFORE route); `complex` MUST run the full step 2→3→4→5→6 flow; `simple` runs step 2→6 local-only (Step 1 skipped, no Coze).** Do NOT use any of the following "invisible pre-judgments" to skip steps (applies to `middle`/`complex`; `simple` is local-only by design, not a shortcut):
 - ❌ "the knowledge base already has a clear answer, just retrieve and output it"
 - ❌ "search_refs.py found it, no need to refine"
 - ❌ "the question is too simple, Coze would just repeat"
@@ -43,7 +43,7 @@ When the question **does not involve external data pull / sample size computatio
 **Coze is the referee, not the backup**: the race design lets Coze and the local answer run in parallel, with the winner outputting — **not letting the agent pre-judge "Coze is useless" and skip it.**
 
 **Interaction strategy**:
-- `simple` → answer directly (meaning: don't pop a clarification menu first; Coze refinement still requires step 1 fire-only, no exemption)
+- `simple` → answer directly from local `knowledge/` (don't pop a clarification menu first; **no Coze — local-only mode, Step 1 skipped entirely**)
 - `complex` → show the clarification menu (`scripts/menu.json` via `scripts/i18n.py`)
 - `vague` → grill-me style `AskUserQuestion` (≤ 4 questions)
 - when unsure between simple/middle/complex → brief direct answer + optional deep-dive menu
@@ -52,27 +52,34 @@ When the question **does not involve external data pull / sample size computatio
 
 ## Step 1 — Fire Gate
 
-**Goal**: 🔴 for `simple`/`middle`, fire the Coze refinement request in the background **IMMEDIATELY after Step 0 Triage — BEFORE Step 2 local retrieval**. This is the single most important latency gate: Coze (≈20s) must start racing the local loop from T+0, not after Route / pre-reading.
+**Goal**: 🔴 for `middle`, fire the Coze refinement request in the background **IMMEDIATELY after Step 0 Triage — BEFORE Step 2 local retrieval**. This is the single most important latency gate: Coze (≈20s) must start racing the local loop from T+0, not after Route / pre-reading. `simple` never enters this step (local-only — see Step 2 Local-only mode).
 
 | difficulty | behavior |
 |---|---|
-| `simple`/`middle` | 🔴 **HARD GATE**: **immediately** fire `refine_answer.py --fire-only` via background (`run_in_background`, stdin pipe), passing `original_question` + `query_meta.difficulty` (the Triage-judged `simple`/`middle`); leave `category`/`accuracy`/`draft_answer` empty. **No temp files**; **do not skip this step and write the local answer directly**. |
+| `simple` | **skipped (local-only)** — never fire Coze; go straight to Step 2 local answer. No outbound call, no authorization gate. |
+| `middle` | 🔴 **HARD GATE**: **immediately** fire `refine_answer.py --fire-only` via background (`run_in_background`, stdin pipe), passing `original_question` + `query_meta.difficulty` (the Triage-judged `middle`); leave `category`/`accuracy`/`draft_answer` empty. **No temp files**; **do not skip this step and write the local answer directly**. |
 | `complex` | do not fire; await the serial call in step 5. |
 
-> 🔴 **Key**: this step is the start of race mode and MUST execute right after Triage. simple/middle MUST fire fire-only here (before any local retrieval), so Coze is already computing while the agent does local work; by Step 2 `--collect` it is very likely already back (cache hit → verbatim ship). Firing late (after Route / pre-reading knowledge) is the #1 measured latency failure mode.
+> 🔴 **Key**: this step is the start of race mode (`middle`) and MUST execute right after Triage for `middle`. `simple` is exempt (local-only, never fires); `complex` awaits Step 5. For `middle`, firing here (before any local retrieval) means Coze is already computing while the agent does local work; by Step 2 `--collect` it is very likely already back (cache hit → verbatim ship). Firing late (after Route / pre-reading knowledge) is the #1 measured latency failure mode.
 
-> 🔴 **出站授权门控（自动执行）**：`--fire-only` 出站前由脚本自动检查授权：
-> - 端点在 `config.json` `auto_approve_endpoints` 白名单中 → 直接放行
-> - 本会话已授权过 → 直接放行（脚本内存记忆）
-> - 未授权 → 脚本返回空串（本地胜出），agent 应提示用户确认后将端点加入白名单
+> 🔴 **Outbound Authorization Gate (auto-executed)**: the script checks authorization automatically before the `--fire-only` outbound call:
+> - endpoint is in `config.json` `auto_approve_endpoints` allowlist → allow directly
+> - already authorized this session → allow directly (script in-memory memory)
+> - not authorized → script returns empty string (local wins); agent should prompt the user to confirm and then add the endpoint to the allowlist
 
 ---
 
-## Step 2 — Collect + Route + Local Answer (race core)
+## Step 2 — Collect + Route + Local Answer
 
-**Goal**: 🔴 The single most important race step. **Begin by calling `--collect --wait=race_window` (the main blocking point)**; do lightweight local work (Route match + prepare fallback) *within* the collect wait window. Coze hit → verbatim ship (see HARD GATE below); timeout → use local fallback.
+**Goal**: For `middle` (race) this is the single most important race step — **Begin by calling `--collect --wait=race_window` (the main blocking point)**; do lightweight local work (Route match + prepare fallback) *within* the collect wait window. Coze hit → verbatim ship; timeout → use local fallback. For `simple` (local-only) this step *is* the local answer itself (no collect, no Coze). For `complex` (serial) this step writes the local answer that feeds Step 5.
 
-### Race mode (simple/middle)
+### Local-only mode (simple)
+
+- `simple` never fires Coze and never calls `--collect`. After Step 0 Triage, do **ONE** local retrieval (Knowledge Map rule 3 — single search only, no chaining) from `knowledge/` or `search_refs.py`, then write the complete local answer (conclusion-first + regulatory citations) → step 6.
+- No outbound call, no authorization gate, zero network.
+- Local retrieval is capped at ONE per turn (Knowledge Map rules 3 / 7 / 8); do NOT chain multi-step reads or route to sibling skills — simple must never become a complex chain.
+
+### Race mode (middle)
 
 ```
 step 1 fired fire-only → Coze running in background
@@ -140,7 +147,7 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 
 **Output**: await Coze's refined result; on timeout return local answer + external data results 1 and 2.
 
-> 🔴 **出站授权门控（自动执行）**：串行精校出站前由脚本自动检查授权（同 Step 1 规则）。未授权时直接回退本地草稿，agent 应提示用户确认。
+> 🔴 **Outbound Authorization Gate (auto-executed)**: the script checks authorization automatically before the serial refinement outbound call (same rules as Step 1). If unauthorized, it falls back to the local draft directly; agent should prompt the user to confirm.
 
 ```
 step 2 local answer + step 3/4 external data → foreground serial call to refine_answer.py (with draft_answer)
@@ -168,7 +175,8 @@ echo '{"original_question":"…","draft_answer":"…"}' | python scripts/refine_
 
 | mode | source |
 |---|---|
-| Race (simple/middle) | the result from step 2 |
+| Local-only (simple) | the local answer from step 2 |
+| Race (middle) | the result from step 2 |
 | Serial (complex) | the result from step 5 |
 
 **Output**: the formal result returned to the user.
@@ -179,8 +187,9 @@ Before outputting **any** answer content, confirm item by item:
 
 | difficulty | check items |
 |---|---|
-| `simple`/`middle` | ☐ **Step 1 fired Coze fire-only** (the most easily skipped gate) → ☐ step 2 already collected → ☐ winner decided → output = winner content |
-| `simple`/`middle` (fallback) | ☐ if `--collect` errored / failed / returned empty → local answer adopted, **no appended Coze wait** |
+| `middle` | ☐ **Step 1 fired Coze fire-only** (the most easily skipped gate) → ☐ step 2 already collected → ☐ winner decided → output = winner content |
+| `middle` (fallback) | ☐ if `--collect` errored / failed / returned empty → local answer adopted, **no appended Coze wait** |
+| `simple` (local-only) | ☐ Step 0 classified `simple` → Step 2 local answer written from `knowledge/` (single retrieval, no Coze, no collect) → output = local answer |
 | `complex` | ☐ step 5 already called Coze serially in foreground (with draft_answer) or timed out and fell back → output = winner content |
 | in-session follow-up (not a new question) | ☐ step 0 classified as **not a new question** (a follow-up / clarification on an existing answer) → output local answer directly (difficulty no longer constrained) |
 

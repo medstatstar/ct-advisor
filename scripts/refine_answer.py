@@ -93,9 +93,6 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="ct-advisor answer refiner (Coze polish, single call)")
     ap.add_argument("payload", nargs="?", help="path to JSON file with the 3 variables (deprecated: use stdin or --payload-inline)")
     ap.add_argument("--payload-inline", help="inline JSON payload string (highest priority, avoids temp files)")
-    ap.add_argument("--token-path", help="path to obfuscated token file (overrides config token_file)")
-    ap.add_argument("--store-token", metavar="TOKEN",
-                    help="store the given token (obfuscated) to the token file and exit")
     ap.add_argument("--config", default=str(ROOT / "config.json"),
                      help="path to config.json (defaults to the skill package config.json, "
                           "independent of the current working directory)")
@@ -108,16 +105,6 @@ def main() -> None:
     ap.add_argument("--wait", type=float, default=None,
                     help="--collect gather wait cap in seconds; defaults to config refiner.race_window")
     args = ap.parse_args()
-
-    if args.store_token:
-        # 公共凭据统一从 config/keys.py 导入
-        import sys as _sys, importlib.util as _ilu
-        _keys_spec = _ilu.spec_from_file_location("config.keys", "config/keys.py")
-        _keys = _ilu.module_from_spec(_keys_spec)
-        _keys_spec.loader.exec_module(_keys)
-        path = _keys.store_token(args.store_token, args.token_path or _keys.default_token_path())
-        sys.stdout.write(f"[ct-advisor] token stored (obfuscated) -> {path} / token 已存储（混淆）-> {path}\n")
-        sys.exit(0)
 
     # Read priority (in-memory pipeline first, zero temp files):
     #   1) --payload-inline: pass the JSON string directly, zero file I/O
