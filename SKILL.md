@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
 cn_name: 临床试验总顾问
-version: 0.9.49
+version: 0.9.50
 invocable: true
 required_commands: [python]
 summary: 面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。
@@ -73,11 +73,12 @@ Single entry point for the ct-series across the full clinical-development lifecy
 
 1. **Locate before reading** — match the question against `reference-index.md`, or run `python3 scripts/search_refs.py "<keyword>" --context 3` (returns hit lines + context; often sufficient without any Read).
 2. **Single Read ≤ 60 lines** per knowledge file (use offset/limit); never read a full `ref-*` file.
-3. **≤ 2 knowledge reads per turn**; beyond that switch to `search_refs.py`.
+3. **🔴 本地检索硬性上限：每轮仅允许检索 1 次（HARD GATE）**。本地数据库（`knowledge/` + `search_refs.py`）只做一次定位/检索即止，**无论命中与否**，检索后立即进入下一步流程（Coze fire / collect 或本地草稿兜底），**严禁**：第二次本地检索、多步本地 read 串联、把简单问题展开成复杂检索流水线。
 4. `knowledge/system_prompt.md` is a **Coze-side deployment copy — do not read locally**; `knowledge/prompts.md` only when canonical menu strings are needed.
 5. After editing any `ref-*` file, run `python3 scripts/update_reference_index.py` to rebuild the index.
-6. **External search fallback**: When `knowledge/` search yields no hits AND Coze refinement still lacks grounding, output the authoritative site list from `references/search-sites.md` categorized by workflow, directing the user to consult themselves. **Prohibited**: visiting sites on behalf of the user, fabricating site content, outputting irrelevant sites.
-7. **No-match escape hatch (mandatory)**: When `search_refs.py` returns no match on first run → **stop word-switching immediately**, switch to Read `reference-index.md` to locate target file → directly Read that file (≤60 lines). Prohibit more than 2 word-switch searches within the same turn. Rationale: The knowledge base has many "same-concept-different-expression" cases (e.g., "window period" appears in files as "visit window" or only in descriptive paragraphs), line-level exact match hit rate is low; exhaustive searching is the #2 measured latency failure mode.
+6. **External search fallback**: When local retrieval misses AND Coze refinement still lacks grounding, output the authoritative site list from `references/search-sites.md` categorized by workflow, directing the user to consult themselves. **Prohibited**: visiting sites on behalf of the user, fabricating site content, outputting irrelevant sites.
+7. **🔴 未命中直走 Coze（HARD GATE）**：本地检索（含 `search_refs.py` 或任一次 Read）一旦做完这一次即止。未命中时**严禁**继续读 `reference-index.md` 或再 Read 任何 `ref-*` 文件，直接把原始问题交给 Coze 远端处理 —— Coze 是信息主力，本地库只是兜底。
+8. **🔴 本地检索后严禁外部网络数据检索（HARD GATE）**：一旦本轮做了本地检索，**严禁**再触发任何外部网络数据检索（含通过 Skill 工具路由到 `ct-registry` / `ct-safety` / `ct-literature` 等兄弟技能的出站调用）。一切信息以 **Coze 远端处理为主**；不得把"本地检索一次 + 外部兄弟技能出站"串成双检索流水线——本地兜底与外部分离，二者不叠加。
 
 ## Answer Workflow (steps 0–6)
 
@@ -146,6 +147,7 @@ Allow this send? You will not be asked again this session.
 
 ### 🔴 Anti-shortcut & verbatim HARD GATES (summary)
 - **Anti-shortcut**: simple/middle MUST run step 1 fire-only; complex MUST run step 5 serial foreground. Never skip Coze via "KB already has the answer" / "local answer is good enough" — Coze is the referee, not the backup.
+- **Local-retrieval discipline (HARD GATE)**: local DB retrieval capped at **ONE search per turn** — never chain multi-step local reads, never combine local retrieval with sibling-skill outbound (external network) retrieval. Coze remote is the single information authority; local lookup is a one-shot fallback only.
 - **Race verbatim**: when step 2 `--collect` returns a Coze cache hit, ship the Coze stdout **as-is** (no re-write / re-order / injecting `knowledge/` citations / re-format / appended summary). The step-2 local answer is a **fallback only**, never merged into the Coze-winning output.
 - Full lists + failure-mode notes → `references/steps.md` Step 0 (anti-shortcut) & Step 2 (verbatim).
 
@@ -174,7 +176,7 @@ Once `@skill:ct-advisor` is invoked, its instructions + `knowledge/` stay in thr
 ### Performance discipline (latency guards — keep these, they are why this skill is fast)
 
 - **🔴 HARD GATE: nothing before `--fire-only`** — for `simple`/`middle`, the ONLY local action between receiving the question and firing Coze is **Step 0 Triage** (judged from `original_question` surface features alone — never read `knowledge/`, never run `search_refs.py`, never open `reference-index.md`). Step 2 is **post-fire**. Pre-fire reads historically cost 10–20 tool round-trips (≈3–4 min) — the #1 measured latency failure mode. Fire `refine_answer.py --fire-only` via `run_in_background` the instant Triage returns simple/middle; Coze computes during your local work, so by Step 2 `--collect` it is likely already back (cache hit → verbatim ship).
-- **Search backoff**: on `search_refs.py` 0 hits, follow the no-match escape hatch in *Knowledge Map rule 7* (semantic-retry once → Read `reference-index.md` → Read target file ≤60 lines). Do not exhaust word-switching.
+- **Search backoff**: on `search_refs.py` 0 hits → do NOT chain more local reads; directly hand the original question to Coze remote (the single information authority). Local retrieval is capped at ONE per turn (Knowledge Map rules 3 / 7 / 8).
 - **Long sessions**: per-turn latency grows with conversation length. If it creeps up, prune context before step 2: keep only the most recent turns + final conclusion, drop stale tool output and earlier drafts. Never prune info still needed for the current question.
 
 ## 🔴 Difficulty bias rule (against misjudging as complex)
@@ -197,6 +199,8 @@ Rationale + typical misjudgment example → `references/steps.md` Step 0.
 | Meta-analysis plots | `meta-analysis` (R + RevMan templates) |
 
 Broad ask → trio once each, never redundant; narrow ask → the single matching skill only. A missing sibling skill → state what is required + **directly give its GitHub install address** (see the canonical repos in `knowledge/system_prompt.md` §Missing a sibling skill — `ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` / `meta-analysis`, all under `https://github.com/medstatstar/<slug>`); do the methodology prep you can, and label the reply **"data not retrieved"** (never fabricate). Topic-level routing inside `knowledge/` → see `knowledge/reference-index.md`.
+
+> **🔴 检索分工红线（HARD GATE，覆盖本表）**：兄弟技能出站（ct-registry / ct-safety / ct-literature 等外部网络数据检索）**只**在"本轮未做任何本地检索"的纯数据需求下使用；若本轮已做本地检索（Knowledge Map 规则 3/7/8），则**禁止**再路由到兄弟技能出站，一切信息以 Coze 远端处理为主。本地检索与同胞出站**不得叠加**为双检索流水线。简单问题尤其不得走成"本地多步 + 外部出站"的复杂链。
 
 ## Boundaries with Sibling Skills
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.50 (2026-08-09) — 本地检索纪律红线（单检 + 禁外部叠加）
+
+- **本地检索硬性上限**：每轮仅允许检索 1 次（原"≤2 knowledge reads"收紧为"1 次"），无论命中与否，检索后立即进入下一步流程，禁止第二次本地检索、多步本地 read 串联、把简单问题展开成复杂检索流水线（Knowledge Map 规则 3）。
+- **未命中直走 Coze**：本地检索未命中时严禁继续读 `reference-index.md` 或再 Read 任何 `ref-*` 文件，直接把原始问题交给 Coze 远端处理（原"no-match escape hatch"多步本地兜底删除，规则 7）。
+- **本地检索后严禁外部网络数据检索**：一旦本轮做了本地检索，禁止再触发任何外部网络数据检索（含 Skill 路由到 ct-registry / ct-safety / ct-literature 等兄弟技能出站），一切信息以 Coze 远端处理为主；本地兜底与同胞出站不得叠加为双检索流水线（新增规则 8 + 路由表红线注释）。
+- **配套收敛**：Anti-shortcut HARD GATES 新增 local-retrieval discipline 条目；Performance discipline 的 search-backoff 改为"0 命中直走 Coze、不再链式本地 read"。
+
 ## 0.9.49 (2026-08-09) — 双语提示补全 + 死参清理 + 发布态健康检查
 
 - **i18n 双语补全**：将 `refine_answer.py` / `run_refined.py` 顶层残留的硬编码中/英双显与纯中文提示（依赖缺失、回退本地、空问题描述、payload 解析/自愈、base64 解码失败）全部接入 `t()`；新增 `error.empty_question` / `error.payload_healed` / `error.payload_invalid` / `error.refine_fallback` / `error.base64_decode` / `error.dependency_fatal` 六个通用双语 key，沉淀至 ct-base 共享 `i18n_messages.json`（ct-advisor 包内快照同步）。
