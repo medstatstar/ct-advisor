@@ -63,7 +63,8 @@
 - `permissions` block declared in SKILL.md top-level.
 
 ### 5. Reuse from base
-- ct-advisor ships its own `scripts/i18n.py` (advisor-specific user prompts); reuses ct-base `i18n.py` / `excel_style.py` for generic & Excel strings where applicable.
+- ct-advisor ships its own `scripts/i18n.py` (advisor-specific user prompts); reuses **vendored copies** of `i18n.py` / `excel_style.py` (from ct-base) for generic & Excel strings where applicable.
+- **IMPORTANT (2026-08-11): ct-base is NEVER published.** All shared assets must be vendored into this skill directory. Runtime imports resolve from this skill's own `scripts/` only — never fall back to a ct-base sibling.
 - Bilingual single source of truth: the embedded dict in `scripts/i18n.py` (no separate json file; `knowledge/prompts.md` is the agent-facing mirror of the key table and MUST stay in sync).
 
 ### 6. Interaction / Menu Design

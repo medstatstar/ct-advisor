@@ -41,12 +41,11 @@ timing_parallel_step7_err.txt
 # Empty runtime output dir (created on first Q&A persist)
 data/
 
-# coze 接口文档：发布时一律不打包（用户 2026-08-03 明确要求；2026-08-05 扩展至全部三个接口文档）。
-# 含入参/出参接口契约、Coze system prompt、执行细则；ClawHub 走本 .clawhubignore 剔除。
-# GitHub 发布走 .gitignore。
-coze/refiner_contract.md
-coze/coze_system_prompt_v1.4.md
-coze/subagent_prompt.md
+# coze 接口/内部文档：发布时一律不打包（用户 2026-08-03 明确要求；2026-08-05 扩展至全部接口文档；
+# 2026-08-09 复排查发现 coze/knowledge2/ 参考库亦属同类，故整目录排除，避免新增文件漏网）。
+# 含入参/出参接口契约、Coze system prompt、执行细则、knowledge2 参考库；ClawHub 走本 .clawhubignore 剔除。
+# GitHub 发布走 .gitignore（coze 段已同步为整目录排除）。
+coze/
 references/ops.md
 
 # Race-mode runtime cache (created on every fire-only/collect round-trip;

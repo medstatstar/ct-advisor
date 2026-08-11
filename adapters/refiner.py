@@ -148,6 +148,10 @@ class RefineRequest:
     query_meta: dict = field(default_factory=dict)  # 包含 difficulty / category / accuracy / query_origin 的字典
     original_question: str = ""
     draft_answer: str = ""
+    # 增量兼容字段（P0-A 本地澄清循环）：澄清子流程产出的问题画像与确认摘要。
+    # 默认空 dict，下游（Coze 精校 / 本地草稿）忽略；原三字段契约完全不变。
+    question_profile: dict = field(default_factory=dict)
+    confirmation: dict = field(default_factory=dict)
     max_items: Optional[int] = None  # 已废弃且无操作：条目数量不再校验上限，统一直接发送 coze。
 
     def normalize(self) -> List[str]:
@@ -214,6 +218,13 @@ class RefineRequest:
                 notes.append("original_question(filled from draft_answer)")
             # 两者皆空时不兜底，留给 validate 显式报错
 
+        # 4) question_profile / confirmation（P0-A 增量字段）：非 dict 一律归一为空 dict，
+        #    保证 to_payload() 外发的 JSON 始终合法、下游兼容。
+        if not isinstance(self.question_profile, dict):
+            self.question_profile = {}
+        if not isinstance(self.confirmation, dict):
+            self.confirmation = {}
+
         # 3) query_origin：脚本会盖章，写入 query_meta 字典（不再另设顶层字段）
         qm = self.query_meta if isinstance(self.query_meta, dict) else {}
         if not qm.get("query_origin") or not str(qm.get("query_origin", "")).strip():
@@ -273,6 +284,9 @@ class RefineRequest:
             "query_meta": self.query_meta,
             "original_question": self.original_question,
             "draft_answer": self.draft_answer,
+            # 增量兼容（P0-A）：澄清循环字段随契约外发，下游未使用则自然忽略。
+            "question_profile": self.question_profile,
+            "confirmation": self.confirmation,
         }
 class Refiner(ABC):
     @abstractmethod

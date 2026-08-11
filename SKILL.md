@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
 cn_name: 临床试验总顾问
-version: 0.9.52
+version: 0.9.54
 invocable: true
 required_commands: [python]
 summary: 面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。
@@ -22,7 +22,7 @@ triggers:
   - "临床试验情报"
   - "临床试验顾问"
   - "临床试验总顾问"
-trigger_scope: "触发词仅限临床试验方法学/法规/设计/合规/QC/情报类问题；不主动匹配非临床类通用问答；不含文件系统写入与系统级 API 调用。 / Trigger phrases fire ONLY for clinical-trial methodology / regulatory / design / compliance / QC / intelligence questions; does NOT proactively match non-clinical general Q&A; contains no filesystem writes or system-level API calls."
+trigger_scope: "触发词仅限临床试验方法学/法规/设计/合规/QC/情报类问题；不主动匹配非临床类通用问答；不含文件系统写入与系统级 API 调用。"
 metadata:
   openclaw: { emoji: "🛠️", icon: "assets/icon.svg" }
   authors: ["medstatstar", "phoe-zip"]
@@ -31,16 +31,15 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "controlled-coze-opt-in"
-  network_note: "Methodology knowledge (workflows A–J) is retrieved locally from `knowledge/`. Difficulty-aware routing: `simple` runs **local-only** (no Coze, answered directly from `knowledge/`); `middle` fires Coze race mode; `complex` uses serial Coze mode. Coze is the only outbound path for `middle`/`complex` answer content."
-  filesystem: "read-only to its own files; writes only to config.json (user-editable) and optional data/qa_log.jsonl (off by default)"
-  data: "no external transmission of confidential data; Coze refinement payloads sanitized; query_origin is a per-process random sha256 id (non-PII, not host-derived)"
+  network_note: "Methodology (A–J) runs local-only from `knowledge/`; `simple` answers locally (no Coze), `middle` fires Coze race, `complex` serial Coze — Coze is the sole outbound path for `middle`/`complex`."
+  filesystem: "Read-only to own files (writes only config.json + optional data/qa_log.jsonl, off by default); no confidential data leaves locally — Coze payloads sanitized, query_origin is a per-process random sha256 (non-PII, not host-derived)."
 adapted_from: "https://github.com/A-xin946/clinical-trial-advisor"
 dependencies:
-  - {slug: ct-registry,   tier: B, purpose: "Trial-registry landscape (CT.gov / CDE / WHO ICTRP / EU-CTR / ChiCTR / ISRCTN / DRKS)"}
-  - {slug: ct-safety,     tier: B, purpose: "Safety signals (FAERS PRR / ROR / IC)"}
-  - {slug: ct-literature, tier: B, purpose: "Published literature (OpenAlex / Europe PMC / Semantic Scholar)"}
-  - {slug: ct-samplesize, tier: A, purpose: "Sample-size & power computation (handoff from workflow C)"}
-  - {slug: meta-analysis, tier: B, purpose: "Meta-analysis synthesis & plots (forest / funnel / rob2)"}
+  - {slug: ct-registry,   tier: B}
+  - {slug: ct-safety,     tier: B}
+  - {slug: ct-literature, tier: B}
+  - {slug: ct-samplesize, tier: A}
+  - {slug: meta-analysis, tier: B}
 tier: B
 ---
 
@@ -142,6 +141,9 @@ Allow this send? You will not be asked again this session.
 
 → Step definitions, exception handling, invocation → `references/steps.md`
 
+### Step 0.5 · Local Clarify Loop (pure-local, zero-outbound)
+After **Step 0 Triage**, when the question is `vague` or ambiguity would change the conclusion, run `python scripts/clarify_loop.py` (stdin / `--payload-inline`, same in-memory pipeline as `refine_answer.py`) **before** entering the local / Coze branch. It asks only **1–3** high-value questions per round, maintains `question_profile` + `confirmation`, and hard-caps at **3 rounds** (hitting the cap still proceeds with `question_profile`, never loops). This replaces ad-hoc grill-me probing for composite / ambiguous asks so the answer is not misjudged or dropped. The two fields are also carried in the `RefineRequest` JSON contract (added incrementally; original fields unchanged, downstream-compatible).
+
 | Priority | Method | Command Template | When to Use |
 |---|---|---|---|
 | **1 (preferred)** | stdin pipe | `echo '{…}' \| python refine_answer.py` | **All** fire-only & serial calls — zero encoding risk, Chinese punctuation (quotes, commas, etc.) passes through directly |
@@ -177,7 +179,7 @@ Rationale + typical misjudgment example → `references/steps.md` Step 0.
 | Need | Route |
 |---|---|
 | Methodology / design / stats / estimand / GCP / DSUR / CSR / QC / tone | In-house, workflows A–J (from `knowledge/`) |
-| Unsure what you need / scoping help | Clarify mode (grill-me), no network |
+| Unsure what you need / scoping help | Local clarify loop (`scripts/clarify_loop.py`), no network |
 | Registered-trial landscape (competitor) | `ct-registry` (CT.gov / CDE / WHO ICTRP / EU-CTR / ChiCTR / ISRCTN / DRKS) |
 | Safety signals (FAERS PRR / ROR / IC) | `ct-safety` |
 | Published literature | `ct-literature` (OpenAlex / Europe PMC / Semantic Scholar) |
