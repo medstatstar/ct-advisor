@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.9.57 (2026-08-12) — 路由层定稿：route.py 四档 + SIMPLE_TOPICS 白名单（Mode B 落地）
+
+- **`scripts/route.py` 新增 `SIMPLE_TOPICS` 白名单**：取自 `knowledge/reference-index.md` 覆盖主题的标准操作/定义类短语（ALCOA / SAE 报告时限 / 药物计数 / 急救揭盲 / 筛选日志 / 数据库锁定 / 知情同意撤回 / 怀孕 / 筛选失败 / CRF 填写等 40+ 词）。`is_simple` 判定增加"白名单命中 且 无 CPLX/EXCL 信号 → simple"，是确定性查找表（不受提问句式漂移影响）。四库联合验证：simple 召回 桌面 20→22 / 第二版 3→12 / 全新 11→12 / D库 7→12，**0 漏发车**（非 simple 题误判 simple = 漏发 Coze 收集，红线）。
+- **迭代剔除 9 个过宽词**（跨库撞中等题）：方案 / 系统 / 应.*?记录 / 如何记录 / 需要满足哪些条件 / 需要完成哪些(收窄为核心|关键) / 裸"定义"(收窄为查询式) / 源数据 / 交通补贴 / 误工补偿 / 温度记录 / susar / icf / query / 方案偏离（桌面 Q62 中等题会漏发车）。
+- **`references/steps.md` Step 0**：simple 行加"or knowledge whitelist hit (SIMPLE_TOPICS)"；新增白名单说明段（维护约定：加词须跑 self-test + 题库评测确认不漏发车）。
+- **`SKILL.md` Answer Workflow 同步**：Step 0 Triage 改为"run `route.py` (deterministic, zero-LLM)；agent MUST NOT self-judge"；Performance HARD GATE 的 Step 0 描述同步；difficulty bias rule 的 simple 定义补白名单 + 明确"middle/complex 均发车，simple/非simple 是语义分水岭"。版本 0.9.56 → 0.9.57。
+- **端到端实测（真调 Coze，三案例）**：middle（race）fire-only → collect 0.63s cache hit verbatim；complex（serial）本地初步 → Coze 精校 20.6s（Coze 纠正本地初步偏差）；simple 本地直答秒级。**3–5 min 循环根除，最慢 20.6s**。
+- **未发布**：本次仅本地文件改动（本地升 0.9.57），未推送 SkillHub / ClawHub / GitHub，待确认后发布。
+
+## 0.9.53 (2026-08-12) — P0-B 语气写作 + P1-D 本地用户记忆（ct-update 自动实施）
+
+- **P0-B 语气写作（clarify_loop 增强版）**：新增 `scripts/tone_matcher.py`，从用户写作样本提取**仅表达风格**的 `tone_profile.json`（句式长度 / 正式度 / 人称 / 段落结构 / 修辞 / 连接词 / 术语风格 / emoji / 标点），经 `refine_answer.py --tone <profile>` 注入 Coze 精校契约的 `tone_profile` 字段。新增 `references/tone_writing.md` 说明文档。
+- **🔴 风格硬闸（B）**：提取阶段正则识别并剔除日期 / 项目名 / 机构名 / 人名 / 指标数字，事实绝不进入 `features`；注入时附 `[HARD GATE]` 风格硬闸指令；Coze 契约（v1.6 输入 + 规则 6）明确仅沿用表达风格、不复用样本事实。理由：样本可能含过时信息。
+- **P1-D 本地用户记忆**：新增 `scripts/memory_manager.py`，支持 `add/list/load/prune/clear`，写入 `~/.workbuddy/ct-advisor-memory.json`（**刻意避开** `MEMORY.md` 以免冲突）；默认 **TTL 90 天**（过期由 `prune` 清理）；`add` 非交互模式强制 `--confirm`、`clear` 强制 `--confirm`（用户确认机制）；`refine_answer.py --memory <path>` 注入契约的 `memory_context` 字段，Coze 仅作背景上下文（契约规则 7）。
+- **契约增量（adapters/refiner.py）**：`RefineRequest` 新增 `tone_profile` / `memory_context` 两个 `dict` 字段（默认空），`normalize()` 容错归一、`to_payload()` 随契约外发；原三字段 + 澄清字段完全不变，下游兼容。
+- **Coze 契约同步（coze/coze_system_prompt_v1.4.md）**：`## 输入` 新增 `tone_profile` / `memory_context` 两个可选字段说明；`## 核心作答规则` 新增规则 6（风格硬闸）/ 规则 7（记忆边界）。⚠️ 此文件为契约 doc 快照；线上 Coze Bot 的 prompt 需另行 redeploy 才会生效（发布动作，待确认）。
+- **SKILL.md**：Answer Workflow 新增 `### Personalization（tone writing + local user memory）` 小节，给出两项的调用方式与硬闸提示。
+- **未发布**：本次仅本地文件改动（本地升 0.9.53），未推送 SkillHub / ClawHub / GitHub，待确认后发布。
+
 ## 0.9.52 (2026-08-09) — 安全审计修复（ClawHub SkillSpector 重审）
 
 - **承接 0.9.51（此前未发布）一并发布**：0.9.51 的 simple-local-only / 三流程重构、逻辑修正、英文化、README 同步全部随本版本首次上线。

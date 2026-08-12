@@ -170,7 +170,7 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 
 ### 出站与隐私（中等/复杂问题答案精校走 Coze）
 - **出站路径 = 答案精校（Coze，仅中等/复杂）**：简单问题本地作答、无出站调用。对中等/复杂问题，由于临床试验对答案质量要求很高，本技能会将你的问题发送到服务器 **`https://ct-advisor.coze.site/run`** 在完整数据库中对答案做精校（step 2 / step 6 调用 `scripts/refine_answer.py`，外发 `query_meta`（含 `query_origin` 机器标识）+ `original_question` + `draft_answer`，出站前先经 `sanitize()` 脱敏）。随技能发布的 `config/coze.dat` 是访问该端点的**必须公开凭证**（作者公开发布），请原样保留、勿替换为自有 token。Coze 超时/出错时才会降级为本地草稿，但**仅为故障降级**。因此 **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据** 。
-- **机器标识已哈希、非 PII**：`query_origin`（嵌套在 `query_meta` 内）为 `sha256(hostname + "ct-advisor-query-origin-v1")`——稳定的按机器标识符，仅用于按机器的审计与归因及 Coze 侧限流。**不含明文主机名、IP 或其他 PII**。盐值为固定命名空间分隔符，非保密信息。
+- **机器标识已哈希、非 PII**：`query_origin`（嵌套在 `query_meta` 内）为 `sha256(hostname)`——稳定的按机器标识符，仅用于按机器的审计与归因及 Coze 侧限流。**不含明文主机名、IP 或其他 PII**。
 - **默认不写本地磁盘**：`qa_store` 默认 `noop`，不保留任何问答记录；可选 `qa_store.mode: local` 才会将完整问答追加写入本机 `data/qa_log.jsonl`（未加密，请视为敏感文件并加入 `.gitignore`）。
 - **关于记忆（自改进系统）**：ct-advisor 遵循 WorkBuddy 自改进系统。同类问题出现 ≥ 3 次且跨 ≥ 2 个任务时，规则被**自动**晋升至长期记忆：行为/沟通规则 → `~/.workbuddy/SOUL.md`；工作流/工具规则 → 项目 `AGENTS.md`；跨项目用户偏好 → `~/.workbuddy/MEMORY.md`；项目级记录 → `.workbuddy/memory/MEMORY.md`。这些文件存放在你本机。想看存储内容，说"给我看你的 MEMORY.md"；想删除，说"忘掉我所有偏好"或手动 `rm ~/.workbuddy/MEMORY.md`（全局）/ `rm -rf .workbuddy/memory/`（项目级）。晋升过程静默，以免打断你工作。
 
@@ -224,7 +224,7 @@ python3 scripts/menu.py --tier data_skill --human --lang zh   # 预览单个 tie
 
 ## 保密声明
 
-> CT 全系列技能由 16 余个专用行业技能构成，按「保密信息出域风险 + 是否对外检索」分为 A、B、C、D 四级，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
+> CT 全系列技能由 20+ 个技能构成，按「保密信息出域风险 + 是否对外检索」分为 A、B、C、D 四级，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
 
 > - **A 级 / B 级（不涉密）**：完全本地运行、仅使用普通数据；B 级虽需对外公开检索，但不涉及任何保密信息。这两级技能均会在 GitHub 公开发布。
 > - **C 级 / D 级（涉密）**：涉及药企需严格保密的临床试验数据、内部资讯等敏感内容（如 ct-analysis、ct-sdtm 等）；C 级在本地处理、数据不出域，D 级还需政策审批。这两级技能仅限企业内部使用，目前不对外公开发布。

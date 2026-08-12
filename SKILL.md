@@ -3,10 +3,10 @@ slug: ct-advisor
 name: ct-advisor
 displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
 cn_name: 临床试验总顾问
-version: 0.9.54
+version: 0.9.57
 invocable: true
 required_commands: [python]
-summary: 面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。
+summary: "面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。"
 description: "面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据与实操细节的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize；原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。 / The ct-series TOTAL ENTRY POINT across the full clinical-development lifecycle — your overall advisor for methodology, regulatory evidence, and hands-on operational detail. Methodology / design / compliance / QC / tone questions are answered in-house through workflows A–J; sample-size computation is handed to ct-samplesize; raw-data and competitive-intel needs are routed via the Skill tool to the three sibling data skills (ct-registry / ct-safety / ct-literature)."
 license: MIT
 triggers:
@@ -32,7 +32,7 @@ permissions:
   scope: "user-space-only"
   network: "controlled-coze-opt-in"
   network_note: "Methodology (A–J) runs local-only from `knowledge/`; `simple` answers locally (no Coze), `middle` fires Coze race, `complex` serial Coze — Coze is the sole outbound path for `middle`/`complex`."
-  filesystem: "Read-only to own files (writes only config.json + optional data/qa_log.jsonl, off by default); no confidential data leaves locally — Coze payloads sanitized, query_origin is a per-process random sha256 (non-PII, not host-derived)."
+  filesystem: "Read-only to own files (writes only config.json + optional data/qa_log.jsonl, off by default); no confidential data leaves locally — Coze payloads sanitized, query_origin is a stable per-machine sha256 hash (sha256 of hostname + salt, non-PII, not host-readable)."
 adapted_from: "https://github.com/A-xin946/clinical-trial-advisor"
 dependencies:
   - {slug: ct-registry,   tier: B}
@@ -86,7 +86,7 @@ Single entry point for the ct-series across the full clinical-development lifecy
 
 | Step | Responsibility | Local(simple) | Race(middle) | Serial(complex) |
 |---|---|---|---|
-| **0 Triage** | Judge difficulty + pre-intercept | → 2→6 | → Auth→1→2→6 | → Auth→2→3→4→5→6 |
+| **0 Triage** | 🔴 run `route.py` (deterministic, zero-LLM) → label; agent MUST NOT self-judge difficulty | → 2→6 | → Auth→1→2→6 | → Auth→2→3→4→5→6 |
 | **Auth Outbound Check** | 🔴 confirm if first / outside allowlist | skip → 2 | check auth → 1 | check auth → 2→5 |
 | **1 Fire Gate** | 🔴 fire Coze in background right after Triage (no local lookup first) | — | fire-only → 2 | skip → 5 |
 | **2 Collect + Route + Local Answer** | 🔴 collect --wait=race_window (spine) + Route match + local fallback | local answer → 6 | collect → 6 | Route + local answer |
@@ -104,36 +104,22 @@ Single entry point for the ct-series across the full clinical-development lifecy
 2. **Session memory**: a server already authorized earlier this session → allow directly (recorded in the in-session authorization set).
 3. **First-time confirmation**: neither on the allowlist nor in session memory → **must** present a confirmation request to the user.
 
-**Confirmation prompt** (shown on first call to an endpoint; must NOT expose step / workflow / trigger / internal terminology — avoid confusing the user):
+**Confirmation prompt** (first call only; must NOT expose step / workflow / trigger / internal terminology):
 
 ```
 ⚠️ ct-advisor needs to send your question to an external server for intelligent analysis:
    Target server: https://ct-advisor.coze.site/run
    Content sent: your original question (no personal identifying information)
-
-⚠️ Note: This skill's local reference library is limited. Most domain expertise relies on
-   cloud-based search and analysis. If you decline, the cloud database will be unavailable,
-   and answer quality & coverage will be significantly reduced.
-
+⚠️ Note: the local reference library is limited; most domain expertise relies on cloud-based
+   search and analysis. If you decline, answer quality & coverage will be significantly reduced.
 Allow this send? You will not be asked again this session.
 ```
 
-**Implementation**: the authorization check is executed automatically by `refine_answer.py` before the outbound HTTP call — the agent does not trigger it manually. The allowlist lives in `config.json`:
-```json
-{
-  "auto_approve_endpoints": [
-    "https://ct-advisor.coze.site/run"
-  ]
-}
-```
-
-**Configuration**:
-- **Method 1 (recommended)**: confirm via the prompt on first run; the skill auto-adds the endpoint to the `config.json` allowlist.
-- **Method 2 (manual)**: edit `config.json` directly and add the target URL to the `auto_approve_endpoints` array.
+**Implementation**: the authorization check runs automatically inside `refine_answer.py` before the outbound HTTP call (the agent never triggers it manually). The allowlist lives in `config.json` → `auto_approve_endpoints`; the skill auto-adds an endpoint on first confirmation, or you can add the URL manually.
 
 ### 🔴 Anti-shortcut & verbatim HARD GATES (summary)
 - **Anti-shortcut**: `middle` MUST run step 1 fire-only; `complex` MUST run step 5 serial foreground; `simple` runs **local-only** (step 1 skipped entirely, answered from `knowledge/`). Never skip Coze for `middle`/`complex` via "KB already has the answer" — Coze is the referee, not the backup.
-- **Local-retrieval discipline (HARD GATE)**: local DB retrieval capped at **ONE search per turn** — never chain multi-step local reads, never combine local retrieval with sibling-skill outbound (external network) retrieval. Coze remote is the single information authority; local lookup is a one-shot fallback only.
+- **Local-retrieval discipline (HARD GATE)**: local DB retrieval capped at **ONE per turn** — never chain multi-step local reads, never stack local lookup with sibling-skill outbound (Knowledge Map rules 3/7/8; complex Step 3/4 exempt).
 - **Race verbatim**: when step 2 `--collect` returns a Coze cache hit, ship the Coze stdout **as-is** (no re-write / re-order / injecting `knowledge/` citations / re-format / appended summary). The step-2 local answer is a **fallback only**, never merged into the Coze-winning output.
 - Full lists + failure-mode notes → `references/steps.md` Step 0 (anti-shortcut) & Step 2 (verbatim).
 
@@ -144,33 +130,29 @@ Allow this send? You will not be asked again this session.
 ### Step 0.5 · Local Clarify Loop (pure-local, zero-outbound)
 After **Step 0 Triage**, when the question is `vague` or ambiguity would change the conclusion, run `python scripts/clarify_loop.py` (stdin / `--payload-inline`, same in-memory pipeline as `refine_answer.py`) **before** entering the local / Coze branch. It asks only **1–3** high-value questions per round, maintains `question_profile` + `confirmation`, and hard-caps at **3 rounds** (hitting the cap still proceeds with `question_profile`, never loops). This replaces ad-hoc grill-me probing for composite / ambiguous asks so the answer is not misjudged or dropped. The two fields are also carried in the `RefineRequest` JSON contract (added incrementally; original fields unchanged, downstream-compatible).
 
-| Priority | Method | Command Template | When to Use |
-|---|---|---|---|
-| **1 (preferred)** | stdin pipe | `echo '{…}' \| python refine_answer.py` | **All** fire-only & serial calls — zero encoding risk, Chinese punctuation (quotes, commas, etc.) passes through directly |
-| **2** | `--payload-inline` | `python refine_answer.py --payload-inline '{…}'` | Only when JSON **contains no Chinese punctuation** (pure English / digits / underscores) |
-| **3 (fallback)** | file path | `python refine_answer.py /path/to/file.json` | **Only** `--collect` (backward compat) |
-
-**Prohibited**:
-- ❌ `Write`/`Bash cat >` temporary JSON files (encoding risk: Chinese quotes/BOM/newlines)
-- ❌ `/tmp` paths (Windows Git Bash ↔ Python path mismatch)
-- ❌ file path for fire-only/serial (unnecessary)
-
-**Encoding caveat**: `--payload-inline` breaks on Chinese punctuation (curly quotes `""` / commas `，`) → **default to stdin pipe**; PowerShell uses here-string `@'…'@`. Full encoding strategy → `references/steps.md` "Call-style summary".
+**Call style (zero temp files)**: priority ① stdin pipe `echo '{…}' | python refine_answer.py` (all fire-only & serial calls — Chinese punctuation safe); ② `--payload-inline` only when the JSON has **no** Chinese punctuation (curly quotes / Chinese commas break it); ③ file path only for `--collect` back-compat. **Forbidden**: Write/Bash temp JSON files, `/tmp` paths, file paths in fire-only/serial. PowerShell: here-string `@'…'@`. Full rules + encoding caveat → `references/steps.md` "Call-style summary".
 
 ---
 
 ### Session continuity
-Once `@skill:ct-advisor` is invoked, its instructions + `knowledge/` stay in thread — **do NOT re-invoke the skill on follow-ups**; re-run gate 0 each turn. Clinical-trial-scope follow-ups stay in this workflow. Off-topic / meta requests (e.g. "modify this skill") drop the framing and are handled as normal assistant work (no methodology workflow, no Coze refine).
+Once `@skill:ct-advisor` is invoked, its instructions + `knowledge/` stay in thread — **do NOT re-invoke the skill on follow-ups**; re-run gate 0 each turn. Off-topic / meta requests (e.g. "modify this skill") drop the framing and are handled as normal assistant work (no methodology workflow, no Coze refine).
+
+### Personalization（tone writing + local user memory）
+
+Two opt-in, **pure-local, zero-outbound** hooks injected via `refine_answer.py` (`tone_profile` / `memory_context` fields); neither changes the default flow unless explicitly enabled.
+
+1) **Tone writing（P0-B）** — match the user's writing voice: `python scripts/tone_matcher.py --samples-inline '["..."]' --out tone_profile.json`, inject via `refine_answer.py --tone <profile>`. 🔴 **Hard gate**: style only — never dates / project names / people / opinions / numbers from the samples; the Coze contract (v1.6 rule 6) enforces the same. Full spec → `references/tone_writing.md`.
+2) **Local user memory（P1-D）** — persist stable preferences across sessions: `python scripts/memory_manager.py add --category pref --content "…" --confirm` (non-interactive must pass `--confirm`; `clear` requires it too), inject via `refine_answer.py --memory ~/.workbuddy/ct-advisor-memory.json`. 🔴 Stored at `~/.workbuddy/ct-advisor-memory.json` (deliberately **not** `MEMORY.md`); default TTL 90 days (pruned by `memory_manager.py prune`); Coze treats it as background context only, never as fact (contract v1.6 rule 7).
 
 ### Performance discipline (latency guards — keep these, they are why this skill is fast)
 
-- **🔴 HARD GATE: nothing before `--fire-only` (for `middle`)** — for `middle`, the ONLY local action between receiving the question and firing Coze is **Step 0 Triage** (judged from `original_question` surface features alone — never read `knowledge/`, never run `search_refs.py`, never open `reference-index.md`). Step 2 is **post-fire**. Pre-fire reads historically cost 10–20 tool round-trips (≈3–4 min) — the #1 measured latency failure mode. Fire `refine_answer.py --fire-only` via `run_in_background` the instant Triage returns middle; Coze computes during your local work, so by Step 2 `--collect` it is likely already back (cache hit → verbatim ship). **`simple` is exempt**: it never fires Coze — go straight to Step 2 local answer from Triage.
-- **Search backoff**: on `search_refs.py` 0 hits → do NOT chain more local reads; directly hand the original question to Coze remote (the single information authority). Local retrieval is capped at ONE per turn (Knowledge Map rules 3 / 7 / 8).
+- **🔴 HARD GATE: nothing before `--fire-only` (for `middle`)** — for `middle`, the ONLY local action between receiving the question and firing Coze is **Step 0 Triage**: run `python scripts/route.py "<question>"` to get the deterministic label (zero-LLM code routing; NEVER read `knowledge/`, never run `search_refs.py`, never open `reference-index.md`, never judge difficulty yourself). Step 2 is **post-fire**. Pre-fire reads historically cost 10–20 tool round-trips (≈3–4 min) — the #1 measured latency failure mode. Fire `refine_answer.py --fire-only` via `run_in_background` the instant Triage returns middle; Coze computes during your local work, so by Step 2 `--collect` it is likely already back (cache hit → verbatim ship). **`simple` is exempt**: it never fires Coze — go straight to Step 2 local answer from Triage.
+- **Search backoff**: on `search_refs.py` 0 hits → do NOT chain more local reads; hand the original question straight to Coze remote (Knowledge Map rule 7 — Coze is the single information authority).
 - **Long sessions**: per-turn latency grows with conversation length. If it creeps up, prune context before step 2: keep only the most recent turns + final conclusion, drop stale tool output and earlier drafts. Never prune info still needed for the current question.
 
 ## 🔴 Difficulty bias rule (against misjudging as complex)
 
-**Pure methodology questions → always judge `simple` or `middle` (never `complex`)**, unless ≥1 of: pulls data from ≥1 sibling skill / needs ct-samplesize n-power / asks multi-option comparison + recommendation / composite judgment spanning ≥2 workflows. Within pure methodology: **single fact / definition / standard-operation → `simple` (local-only, no Coze)**; explanation / comparison / multi-step reasoning → `middle` (race).
+**Pure methodology questions → always judge `simple` or `middle` (never `complex`)**, unless ≥1 of: pulls data from ≥1 sibling skill / needs ct-samplesize n-power / asks multi-option comparison + recommendation / composite judgment spanning ≥2 workflows. Within pure methodology: **single fact / definition / standard-operation → `simple` (local-only, no Coze)** — `simple` also fires on the knowledge whitelist `SIMPLE_TOPICS` in `route.py` (standard-operation phrases verified covered by `knowledge/`; whitelist hit + no complex/exclude signal → local-only, deterministic, phrasing-drift-proof); explanation / comparison / multi-step reasoning → `middle` (race). **Semantic split: `middle` + `complex` both fire Coze** — they differ only in firing mode (race vs serial), the real binary is `simple` (local-only) vs non-simple (fire Coze).
 
 Rationale + typical misjudgment example → `references/steps.md` Step 0.
 
@@ -202,7 +184,7 @@ Broad ask → trio once each, never redundant; narrow ask → the single matchin
 
 ## China Regulatory Depth (C-layer)
 
-CTA / IND 60-day tacit approval, communication meetings (Type A / B / C), registration ≠ tacit approval, etc. — see `knowledge/ref-regulatory-versions.md` (controlled version quick-reference) + `knowledge/reference-index.md`. Any version / status / deadline conclusion must be verified in real time against the official original.
+CTA / IND 60-day tacit approval, communication meetings (Type A/B/C), registration ≠ tacit approval, etc. — see `knowledge/ref-regulatory-versions.md` + `knowledge/reference-index.md`. Any version / status / deadline conclusion must be verified in real time against the official original.
 
 ## Quality Gate & Stop Rules
 
@@ -215,6 +197,4 @@ Pre-delivery checks and stop conditions live in `knowledge/system_prompt.md` "Qu
 
 (English: `Your question is fairly complex; the analysis needs model refinement — please wait.`) Do **NOT** repeat it, do **NOT** add any other process chatter. simple / middle (race) mode must stay completely silent on process.
 
-## Changelog
-
-Full version history (0.8.0 → 0.9.30) lives in **[CHANGELOG.md](CHANGELOG.md)**.
+## Changelog — full history (0.8.0 → 0.9.30+) → **[CHANGELOG.md](CHANGELOG.md)**

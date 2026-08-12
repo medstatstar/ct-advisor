@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -105,17 +106,12 @@ DIFFICULTY_ENUM = ("simple", "middle", "complex", "vague")
 # accuracy 枚举（good/normal）—— good = 精确，normal = 一般
 ACCURACY_ENUM = ("good", "normal")
 
-# query_origin 的请求标识：每进程随机生成（sha256:64hex），非主机派生。
-# 替换旧版「sha256(hostname + 盐)」稳定主机标识——不再支持跨会话/设备的机器归因与关联，
-# 仍满足 query_origin 契约（sha256:<64 hex>），Coze 侧仍可据此做单请求级限流。
 def compute_machine_id() -> str:
-    """Per-process random, non-host-derived request id (sha256:64hex).
+    """稳定、不可逆的机器标识，由脚本在调用时自动盖章（覆盖输入，agent 不应手写）。
 
-    Replaces the old stable hostname-derived id: no cross-session/device
-    correlation, no host attribution. Still satisfies the query_origin
-    contract (sha256:<64 hex>) and lets Coze do per-request rate-limiting.
+    同一台机器每次返回相同值（便于 Coze 侧按机器做审计/归因/限流），但拿不到真实主机名或 IP。
     """
-    return "sha256:" + hashlib.sha256(os.urandom(16)).hexdigest()
+    return "sha256:" + hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()
 
 
 def _parse_query_meta(query_meta: Any) -> Dict[str, Any]:
@@ -152,6 +148,12 @@ class RefineRequest:
     # 默认空 dict，下游（Coze 精校 / 本地草稿）忽略；原三字段契约完全不变。
     question_profile: dict = field(default_factory=dict)
     confirmation: dict = field(default_factory=dict)
+    # 增量兼容字段（P0-B 语气写作）：tone_matcher.py 产出的风格 profile（仅风格、无事实）。
+    # 默认空 dict；非空时随契约外发，Coze 按风格硬闸书写答案，绝不搬用样本事实。
+    tone_profile: dict = field(default_factory=dict)
+    # 增量兼容字段（P1-D 本地用户记忆）：memory_manager.py 产出的跨会话记忆上下文。
+    # 默认空 dict；非空时随契约外发，仅作背景上下文，不得当作当前问题的事实。
+    memory_context: dict = field(default_factory=dict)
     max_items: Optional[int] = None  # 已废弃且无操作：条目数量不再校验上限，统一直接发送 coze。
 
     def normalize(self) -> List[str]:
@@ -224,6 +226,11 @@ class RefineRequest:
             self.question_profile = {}
         if not isinstance(self.confirmation, dict):
             self.confirmation = {}
+        # 5) tone_profile / memory_context（P0-B / P1-D 增量字段）：非 dict 一律归一为空 dict。
+        if not isinstance(self.tone_profile, dict):
+            self.tone_profile = {}
+        if not isinstance(self.memory_context, dict):
+            self.memory_context = {}
 
         # 3) query_origin：脚本会盖章，写入 query_meta 字典（不再另设顶层字段）
         qm = self.query_meta if isinstance(self.query_meta, dict) else {}
@@ -287,6 +294,10 @@ class RefineRequest:
             # 增量兼容（P0-A）：澄清循环字段随契约外发，下游未使用则自然忽略。
             "question_profile": self.question_profile,
             "confirmation": self.confirmation,
+            # 增量兼容（P0-B 语气写作 / P1-D 本地记忆）：风格 profile 与记忆上下文随契约外发，
+            # Coze 端按硬闸仅使用表达风格、仅把记忆当背景上下文。
+            "tone_profile": self.tone_profile,
+            "memory_context": self.memory_context,
         }
 class Refiner(ABC):
     @abstractmethod

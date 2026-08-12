@@ -104,6 +104,12 @@ def main() -> None:
                          "hit returns Coze result (Coze wins, local interrupted), miss returns empty (local wins)")
     ap.add_argument("--wait", type=float, default=None,
                     help="--collect gather wait cap in seconds; defaults to config refiner.race_window")
+    # P0-B 语气写作：注入 tone_matcher.py 生成的 tone_profile.json（仅风格、无事实）
+    ap.add_argument("--tone", default=None,
+                    help="path to tone_profile.json (from scripts/tone_matcher.py); injects style-only tone into Coze prompt")
+    # P1-D 本地用户记忆：注入 memory_manager.py 维护的 ct-advisor-memory.json 上下文
+    ap.add_argument("--memory", default=None,
+                    help="path to ct-advisor-memory.json (from scripts/memory_manager.py); injects local user memory context")
     args = ap.parse_args()
 
     # Read priority (in-memory pipeline first, zero temp files):
@@ -131,6 +137,28 @@ def main() -> None:
             original_question=str(obj.get("original_question", "")),
             draft_answer=str(obj.get("draft_answer", "")),
         )
+        # P0-B 语气写作 / P1-D 本地记忆：注入 tone_profile / memory_context（CLI 优先，其次 payload 内联）。
+        # 两者均为纯本地生成的风格/上下文，仅随契约外发给 Coze，符合风格硬闸与记忆 TTL 设计。
+        if args.tone:
+            try:
+                tp = json.loads(Path(args.tone).read_text(encoding="utf-8"))
+                if isinstance(tp, dict):
+                    req.tone_profile = tp
+                    sys.stderr.write(f"[ct-advisor] tone profile injected: {args.tone}\n")
+            except Exception as e:  # noqa: BLE001
+                sys.stderr.write(f"[ct-advisor] tone profile load failed: {e}\n")
+        elif isinstance(obj.get("tone_profile"), dict):
+            req.tone_profile = obj["tone_profile"]
+        if args.memory:
+            try:
+                mc = json.loads(Path(args.memory).read_text(encoding="utf-8"))
+                if isinstance(mc, dict):
+                    req.memory_context = mc
+                    sys.stderr.write(f"[ct-advisor] memory context injected: {args.memory}\n")
+            except Exception as e:  # noqa: BLE001
+                sys.stderr.write(f"[ct-advisor] memory context load failed: {e}\n")
+        elif isinstance(obj.get("memory_context"), dict):
+            req.memory_context = obj["memory_context"]
         # query_origin is auto-stamped into query_meta by normalize(); no top-level field.
     except Exception as e:
         # JSON parse failed: distinguish --collect mode (cache lookup) from other modes

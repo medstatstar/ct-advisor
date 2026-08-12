@@ -1,6 +1,6 @@
 ---
 file: steps.md
-version: 2026-08-09
+version: 2026-08-12
 purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summary maps to this file's full flow, boundary conditions, and exception handling
 ---
 
@@ -12,14 +12,35 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 ## Step 0 — Triage (Gate 0)
 
-**Goal**: classify difficulty + run pre-routing interception, deciding the downstream path.
+**Goal**: obtain the difficulty label from the **deterministic router** `scripts/route.py` (zero LLM). **The agent MUST NOT judge difficulty itself** — running `route.py` is the only allowed path. This is the root-cause fix for the prior "local model answers directly / 3–5 min loop" failure (decision to fire Coze no longer lives in the LLM).
 
 | difficulty | trigger | downstream path |
 |---|---|---|
-| `simple` | single fact / definition / standard operation, no data pull or n computation | → step 2→6 (**local-only**, no Coze; answered directly from `knowledge/`, Step 1 skipped) |
+| `simple` | single fact / definition / standard operation **or knowledge whitelist hit** (`SIMPLE_TOPICS`), no data pull or n computation | → step 2→6 (**local-only**, no Coze; answered directly from `knowledge/`, Step 1 skipped) |
 | `middle` | needs explanation / comparison / multi-step reasoning, but no external data | → step 1→2→6 (race mode; **Step 1 fire-only fires IMMEDIATELY after Triage, before Route**) |
 | `complex` | needs multi-angle decomposition, external data integration, or option selection | → step 2→3→4→5→6 (**serial**, await full Coze return; Step 1 Fire is race-only, skipped for complex) |
 | `vague` | incomplete / ambiguous question, missing key parameters | → AskUserQuestion (≤ 4 questions) → back to step 0 |
+
+> **Semantic split**: `middle` + `complex` **both fire Coze** — they differ only in firing mode (race vs serial). The real binary is `simple` (local-only, no Coze) vs non-simple (fire Coze).
+
+**🔴 Run the router (mandatory, code-only)**:
+
+```bash
+# 主 Agent 第一步必须运行（不要自己理解问题判断难度）：
+python scripts/route.py "用户问题原文"
+#   → 打印一个标签：simple | vague | middle | complex
+# 调试：python scripts/route.py --json "…"   /   回归：python scripts/route.py --self-test
+
+# 路由后分流：
+#   simple  → 本地直答（可挂参考文档），不发车 Coze。
+#             判定 = 句式词典(定义/标准操作) 或 knowledge 白名单 SIMPLE_TOPICS 命中
+#             且 无 CPLX/EXCL 信号（白名单不会把设计/统计/监管类拉进 simple）。
+#   vague   → AskUserQuestion 澄清 → 重跑 route.py
+#   middle  → 立即后台 fire Coze（race），collect 后 verbatim 呈现
+#   complex → 本地出初步（挂参考文档、单次生成）→ 串行 fire Coze 精校 → 呈现 Coze
+```
+
+**📖 `simple` whitelist (SIMPLE_TOPICS)**: `route.py` ships a built-in `SIMPLE_TOPICS` whitelist — standard-operation / definition phrases taken from `knowledge/reference-index.md` coverage topics (e.g. ALCOA, SAE reporting timeline, drug accountability, emergency unblinding, screening log, DB lock, informed-consent withdrawal). A whitelist hit with no complex / exclude signal → `simple`; it is a **deterministic lookup table** (immune to phrasing drift). **Maintenance rule**: any new entry MUST pass `python scripts/route.py --self-test` + bank eval confirming zero leak-to-simple (a non-simple question pulled into `simple` = missing the Coze fire/collection — red line).
 
 **⚠️ Pre-routing interception (mandatory)**: when classifying difficulty, analyze the intent of `original_question` — if it requires calling an external skill for data (ct-registry / ct-safety / ct-literature → step 3 handoff) or computing sample size / power (→ step 4 handoff), **difficulty MUST NOT be simple/middle; only complex is allowed** (vague never reaches this gate). Reason: data pull / n computation depends on real external output and must await Coze's full return to integrate into the answer; a race-mode local fallback would lose that data.
 
@@ -34,7 +55,7 @@ When the question **does not involve external data pull / sample size computatio
 **Pure methodology questions (e.g., "how to do X", "what to watch for in X", "difference between X and Y") are always `simple` or `middle` (never `complex`)** — the local knowledge pack covers 80%+ of the content: `simple` answers directly from `knowledge/` (local-only, no Coze); `middle` runs race mode (Coze-refined output is the final answer, no serial wait). Among them: **single fact / definition / standard operation → `simple`**; explanation / comparison / multi-step reasoning → `middle`.
 **Typical misjudgment example**: "How to ensure data integrity when migrating from paper CRF to EDC?" → although multi-step, the local knowledge pack (ref-ops-data §4.12) has complete guidance and no external data is needed → should be judged `middle` (race), not `complex` (serial).
 
-**🚫 Anti-shortcut warning (HARD GATE)**: **`middle` MUST run the full step 1→2→6 flow (fire BEFORE route); `complex` MUST run the full step 2→3→4→5→6 flow; `simple` runs step 2→6 local-only (Step 1 skipped, no Coze).** Do NOT use any of the following "invisible pre-judgments" to skip steps (applies to `middle`/`complex`; `simple` is local-only by design, not a shortcut):
+**🚫 Anti-shortcut warning (HARD GATE)**: **`middle` MUST run the full step 1→2→6 flow (fire BEFORE Step 2 local Route matching); `complex` MUST run the full step 2→3→4→5→6 flow; `simple` runs step 2→6 local-only (Step 1 skipped, no Coze).** Do NOT use any of the following "invisible pre-judgments" to skip steps (applies to `middle`/`complex`; `simple` is local-only by design, not a shortcut):
 - ❌ "the knowledge base already has a clear answer, just retrieve and output it"
 - ❌ "search_refs.py found it, no need to refine"
 - ❌ "the question is too simple, Coze would just repeat"
@@ -144,6 +165,13 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 **Trigger**: `complex` difficulty.
 
 **Input**: local answer + external data results 1 and 2.
+
+> 🔴 **Local preliminary lock (complex only — anti-loop, with reference docs attached)**:
+> The complex path **keeps reference docs / `knowledge/` / `search_refs.py`** (the local draft must stay precise), but the preliminary must be locked to a **single-pass generation**:
+> - Reference docs may be attached / searched, but the preliminary is produced **exactly once** — never enter a "retrieve → integrate → re-retrieve" multi-round loop;
+> - Preliminary output hard-capped at **≤200-character key points**; **no "wait for Coze to return, then polish / re-integrate" look-back action**;
+> - The preliminary serves only as the `draft_answer` **input** to Coze serial refinement; the final presented answer is **always Coze's output** — the local preliminary is never shown to the user directly.
+> The 3–5 min loop was caused by "local + Coze dual reasoning streams interfering + agent self-deciding whether to fire"; this lock + code-forced firing + Coze as final source together eliminate it.
 
 **Output**: await Coze's refined result; on timeout return local answer + external data results 1 and 2.
 
