@@ -1,5 +1,7 @@
 # Tone Writing — ct-advisor personalized output
 
+> ⚠️ **DEFERRED (2026-08-12)**: this feature is **temporarily disabled** — the deployed Coze workflow (v1.5 contract) does not implement the `tone_profile` field, so injection is silently ignored. `tone_matcher.py` and `refine_answer.py --tone` must **not** be invoked until the Coze workflow ships the v1.6 contract fields. Spec retained for future re-enable.
+
 > Upgrade item: **P0-B · clarify_loop enhancement: user tone-writing mode**
 > Implementation: `scripts/tone_matcher.py` + `refine_answer.py --tone` + contract field `tone_profile`
 

@@ -79,6 +79,11 @@ When the question **does not involve external data pull / sample size computatio
 |---|---|
 | `simple` | **skipped (local-only)** — never fire Coze; go straight to Step 2 local answer. No outbound call, no authorization gate. |
 | `middle` | 🔴 **HARD GATE**: **immediately** fire `refine_answer.py --fire-only` via background (`run_in_background`, stdin pipe), passing `original_question` + `query_meta.difficulty` (the Triage-judged `middle`); leave `category`/`accuracy`/`draft_answer` empty. **No temp files**; **do not skip this step and write the local answer directly**. |
+
+```bash
+# fire-only 示例（race，只发 original_question + difficulty；category/accuracy/draft_answer 留空）：
+echo '{"query_meta":"{\"difficulty\":\"middle\",\"category\":\"\",\"accuracy\":\"\"}","original_question":"…","draft_answer":""}' | python scripts/refine_answer.py --fire-only
+```
 | `complex` | do not fire; await the serial call in step 5. |
 
 > 🔴 **Key**: this step is the start of race mode (`middle`) and MUST execute right after Triage for `middle`. `simple` is exempt (local-only, never fires); `complex` awaits Step 5. For `middle`, firing here (before any local retrieval) means Coze is already computing while the agent does local work; by Step 2 `--collect` it is very likely already back (cache hit → verbatim ship). Firing late (after Route / pre-reading knowledge) is the #1 measured latency failure mode.
@@ -185,13 +190,15 @@ step 2 local answer + step 3/4 external data → foreground serial call to refin
 
 ### Serial call style (stdin pipe preferred)
 
+🔴 **payload MUST include `query_meta` with `difficulty`** (missing/illegal difficulty falls back to `complex` in the script, but always pass the Triage label explicitly — a blank difficulty breaks server-side routing and leaves the Feishu collection blank):
+
 ```bash
 # Bash / Git Bash — stdin pipe (zero encoding risk; handles Chinese punctuation in draft_answer)
-echo '{"original_question":"…","draft_answer":"…"}' | python scripts/refine_answer.py
+echo '{"query_meta":"{\"difficulty\":\"complex\",\"category\":\"methodology:B\",\"accuracy\":\"normal\"}","original_question":"…","draft_answer":"…"}' | python scripts/refine_answer.py
 
 # PowerShell here-string (recommended, no escaping needed)
 @'
-{"original_question":"…","draft_answer":"…"}
+{"query_meta":"{\"difficulty\":\"complex\",\"category\":\"methodology:B\",\"accuracy\":\"normal\"}","original_question":"…","draft_answer":"…"}
 '@ | python scripts/refine_answer.py
 ```
 

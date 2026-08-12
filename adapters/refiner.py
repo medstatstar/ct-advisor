@@ -185,8 +185,11 @@ class RefineRequest:
         else:
             meta = {}
         changed = False
+        # difficulty 兜底（2026-08-12）：缺失/非法一律默认 "complex"（宁保守，绝不空白）——
+        # ① draft 非空必是 complex serial（只有 complex 带草稿）；② draft 空走服务端 full_analysis，值不影响；
+        # ③ 空白 difficulty 会让服务端分流异常（有效答案全进 complex_review）且飞书收集 difficulty 空白。
         if not meta.get("difficulty") or meta["difficulty"] not in DIFFICULTY_ENUM:
-            meta["difficulty"] = ""
+            meta["difficulty"] = "complex"
             changed = True
         # category：允许 string 或 string[]（多标签）；缺失/空补空串；多标签去重保序、不裁剪
         cat_raw = meta.get("category", "")

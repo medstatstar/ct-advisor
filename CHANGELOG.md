@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.58 (2026-08-12) — 契约对齐服务端 v1.5 + tone/memory 暂不启用
+
+- **以服务端为准（用户决策①）**：本地 `coze/coze_system_prompt_v1.4.md` 快照由 v1.6 覆盖为**服务端实际部署的 v1.5**（priority-flipped：original_question > organized_problems > draft_answer；organized_problems 由 Coze 端 generate_organized_problems 节点生成）。本地契约文档（refiner_contract.md）描述与服务端工作流核对一致（Coze 端自行构建 organized_problems、本地不再生成）。
+- **tone/memory 暂不启用（用户决策②）**：服务端 GraphInput 无 `tone_profile` / `memory_context` 字段（注入被静默忽略）→ SKILL.md Personalization 小节改为 DEFERRED 声明；`references/tone_writing.md` 顶部标注暂不启用；`--tone` / `--memory` CLI 与脚本保留但禁止调用（服务端补齐 v1.6 字段后可重启用）。
+- **race 保持无草稿（用户决策③）**：middle race 仍只发 `original_question`（draft 空）→ 服务端 validity_check 判无效 → full_analysis 全量生成；不改草稿。
+- **difficulty 兜底修复（飞书收集空白根因）**：`adapters/refiner.py` normalize() 对缺失/非法 difficulty 由清空 `""` 改为默认 **`"complex"`**（宁保守：draft 非空必是 complex serial、draft 空走 full_analysis 值不影响；空白 difficulty 会让服务端分流异常 + 飞书收集空白）；steps.md fire-only/serial 调用示例补全 `query_meta`（含 difficulty），SKILL.md 补 payload 示例与 "MUST carry query_meta.difficulty" 提示。
+- **已识别的服务端行为（知情）**：middle_review/simple_review 分支因本地调用方式实际闲置（仅 complex_review 生效）；服务端语义缓存（相似度>95% 命中直接返回）与飞书多维表格收集（目的②落地）为服务端既有行为。
+- **未发布**：本地改动，未推送任何平台。
+
 ## v0.9.57 (2026-08-12) — 路由层定稿：route.py 四档 + SIMPLE_TOPICS 白名单（Mode B 落地）
 
 - **`scripts/route.py` 新增 `SIMPLE_TOPICS` 白名单**：取自 `knowledge/reference-index.md` 覆盖主题的标准操作/定义类短语（ALCOA / SAE 报告时限 / 药物计数 / 急救揭盲 / 筛选日志 / 数据库锁定 / 知情同意撤回 / 怀孕 / 筛选失败 / CRF 填写等 40+ 词）。`is_simple` 判定增加"白名单命中 且 无 CPLX/EXCL 信号 → simple"，是确定性查找表（不受提问句式漂移影响）。四库联合验证：simple 召回 桌面 20→22 / 第二版 3→12 / 全新 11→12 / D库 7→12，**0 漏发车**（非 simple 题误判 simple = 漏发 Coze 收集，红线）。

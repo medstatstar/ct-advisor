@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
 cn_name: 临床试验总顾问
-version: 0.9.57
+version: 0.9.58
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。"
@@ -131,18 +131,16 @@ Allow this send? You will not be asked again this session.
 After **Step 0 Triage**, when the question is `vague` or ambiguity would change the conclusion, run `python scripts/clarify_loop.py` (stdin / `--payload-inline`, same in-memory pipeline as `refine_answer.py`) **before** entering the local / Coze branch. It asks only **1–3** high-value questions per round, maintains `question_profile` + `confirmation`, and hard-caps at **3 rounds** (hitting the cap still proceeds with `question_profile`, never loops). This replaces ad-hoc grill-me probing for composite / ambiguous asks so the answer is not misjudged or dropped. The two fields are also carried in the `RefineRequest` JSON contract (added incrementally; original fields unchanged, downstream-compatible).
 
 **Call style (zero temp files)**: priority ① stdin pipe `echo '{…}' | python refine_answer.py` (all fire-only & serial calls — Chinese punctuation safe); ② `--payload-inline` only when the JSON has **no** Chinese punctuation (curly quotes / Chinese commas break it); ③ file path only for `--collect` back-compat. **Forbidden**: Write/Bash temp JSON files, `/tmp` paths, file paths in fire-only/serial. PowerShell: here-string `@'…'@`. Full rules + encoding caveat → `references/steps.md` "Call-style summary".
+**🔴 Payload MUST carry `query_meta.difficulty`** (blank breaks server-side routing + leaves Feishu collection blank; script defaults to `complex` when missing). Example: `echo '{"query_meta":"{\"difficulty\":\"middle\",\"category\":\"\",\"accuracy\":\"\"}","original_question":"…"}' | python refine_answer.py --fire-only`
 
 ---
 
 ### Session continuity
 Once `@skill:ct-advisor` is invoked, its instructions + `knowledge/` stay in thread — **do NOT re-invoke the skill on follow-ups**; re-run gate 0 each turn. Off-topic / meta requests (e.g. "modify this skill") drop the framing and are handled as normal assistant work (no methodology workflow, no Coze refine).
 
-### Personalization（tone writing + local user memory）
+### Personalization（tone writing + local user memory）— ⚠️ DEFERRED (not enabled)
 
-Two opt-in, **pure-local, zero-outbound** hooks injected via `refine_answer.py` (`tone_profile` / `memory_context` fields); neither changes the default flow unless explicitly enabled.
-
-1) **Tone writing（P0-B）** — match the user's writing voice: `python scripts/tone_matcher.py --samples-inline '["..."]' --out tone_profile.json`, inject via `refine_answer.py --tone <profile>`. 🔴 **Hard gate**: style only — never dates / project names / people / opinions / numbers from the samples; the Coze contract (v1.6 rule 6) enforces the same. Full spec → `references/tone_writing.md`.
-2) **Local user memory（P1-D）** — persist stable preferences across sessions: `python scripts/memory_manager.py add --category pref --content "…" --confirm` (non-interactive must pass `--confirm`; `clear` requires it too), inject via `refine_answer.py --memory ~/.workbuddy/ct-advisor-memory.json`. 🔴 Stored at `~/.workbuddy/ct-advisor-memory.json` (deliberately **not** `MEMORY.md`); default TTL 90 days (pruned by `memory_manager.py prune`); Coze treats it as background context only, never as fact (contract v1.6 rule 7).
+Tone writing (`tone_profile`) and local user memory (`memory_context`) are **temporarily disabled**: the deployed Coze workflow (v1.5 contract) does not implement these fields, so local injection is silently ignored. The scripts (`tone_matcher.py` / `memory_manager.py`) and the `--tone` / `--memory` CLI flags remain in place for future use but **MUST NOT be invoked**. Re-enable only after the Coze workflow ships the v1.6 contract fields (2026-08-12 decision).
 
 ### Performance discipline (latency guards — keep these, they are why this skill is fast)
 
