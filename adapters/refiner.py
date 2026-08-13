@@ -109,7 +109,11 @@ ACCURACY_ENUM = ("good", "normal")
 def compute_machine_id() -> str:
     """稳定、不可逆的机器标识，由脚本在调用时自动盖章（覆盖输入，agent 不应手写）。
 
-    同一台机器每次返回相同值（便于 Coze 侧按机器做审计/归因/限流），但拿不到真实主机名或 IP。
+    同一台机器每次返回相同值（便于 Coze 侧按机器做审计/归因/限流）——实现为
+    sha256(hostname)，属**主机派生的稳定标识**：不含明文主机名/IP，但低熵主机名
+    理论上可被暴力猜测；且稳定值意味着外部服务可跨请求关联同一设备（已在 README
+    隐私段向用户披露，属接受的设计权衡——若要完全消除设备关联须改用每请求随机值，
+    见 CHANGELOG 0.9.52 曾改随机后被回退的往复）。
     """
     return "sha256:" + hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()
 
@@ -290,17 +294,14 @@ class RefineRequest:
     def to_payload(self) -> Dict[str, Any]:
         self.normalize()  # 出站前自愈：任何外发路径都先补全缺失/非法字段
         self.validate()  # 契约校验前置：经自愈后此处应当通过
+        # 仅发送 3 变量（query_meta / original_question / draft_answer）：服务端 GraphInput
+        # 只接收这三字段；question_profile / confirmation / tone_profile / memory_context
+        # 保留在 RefineRequest 内但不再外发（服务端未实现，外发徒增数据面且 SkillSpector
+        # 标"超过 3 变量契约"；待服务端补齐 v1.6 字段后再恢复发送）。
         return {
             "query_meta": self.query_meta,
             "original_question": self.original_question,
             "draft_answer": self.draft_answer,
-            # 增量兼容（P0-A）：澄清循环字段随契约外发，下游未使用则自然忽略。
-            "question_profile": self.question_profile,
-            "confirmation": self.confirmation,
-            # 增量兼容（P0-B 语气写作 / P1-D 本地记忆）：风格 profile 与记忆上下文随契约外发，
-            # Coze 端按硬闸仅使用表达风格、仅把记忆当背景上下文。
-            "tone_profile": self.tone_profile,
-            "memory_context": self.memory_context,
         }
 class Refiner(ABC):
     @abstractmethod
@@ -449,15 +450,28 @@ class CozeRefiner(Refiner):
         payload = sanitize(req.to_payload())  # 出站前脱敏（ct-base §11）
         # token 解析：统一从 config/keys.py 明文常量 COZE_TOKEN 取（无参）
         token = get_token()
-        resp = requests.post(
-            self.endpoint,
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            timeout=timeout,
-        )
+        _headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = requests.post(
+                self.endpoint, json=payload, headers=_headers, timeout=timeout,
+            )
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+            # 系统代理残留（Windows：HTTP_PROXY/HTTPS_PROXY 指向无监听端口）→ requests 走死代理
+            # → WinError 10061。自动绕过系统代理直连重试一次：直连可达即恢复（本端点实测直连正常）；
+            # 直连也不可达则继续抛给上层 fallback。
+            try:
+                sys.stderr.write(
+                    f"[ct-advisor] 代理连接失败({type(e).__name__})，尝试绕过系统代理直连重试...\n"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            resp = requests.post(
+                self.endpoint, json=payload, headers=_headers, timeout=timeout,
+                proxies={"http": None, "https": None},
+            )
         # 显式暴露鉴权/服务错误：4xx/5xx 不应被上层 except 静默成「超时/没发」
         # （2026-08-08 加固：此前 TypeError 被静默吞掉，误判为未发送）
         if resp.status_code == 401:

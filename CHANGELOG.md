@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.9.60 (2026-08-13) — Coze 调用失败防护：死代理自动绕过 + fallback 诊断输出
+
+- **根因（用户实测排查）**：Windows 系统代理残留（`HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:10808/` 无监听）→ requests 走死代理 → WinError 10061 → ProxyError → fallback；叠加"串行 payload 未带 draft_answer"→ fallback 输出为空（只有报错、没有答案）。
+- **① 出站代理容错（`adapters/refiner.py` `_call_coze`）**：`requests.post` 捕获 `ProxyError`/`ConnectionError` 后**自动绕过系统代理直连重试一次**（`proxies={"http":None,"https":None}`）——死代理场景通常一次重试即恢复；直连也不可达才继续抛给上层 fallback。单测验证：2 次调用（ProxyError→直连成功）✓。
+- **② fallback 诊断输出（`scripts/refine_answer.py`）**：serial 失败且 draft 为空时，stdout 输出友好询问 `Coze 云端服务暂时不可用（原因），本次回答可能不够完善。是否允许我自动进行问题诊断排查？`（i18n 键 `error.fallback_diagnose`，en/zh 成对；不再暴露脚本路径/技术细节）；fire-only 失败时 stderr 提示诊断入口。
+- **③ 新增 `scripts/check_coze.py` 一键诊断**：四查（token 就位 / 环境代理变量与端口可达性 / 绕过代理直连 / 按代理请求）+ 修复指引（死代理→关系统代理或 NO_PROXY；断网→查网络；token→重装）。实测本机：token ✓ 无代理 ✓ 直连 HTTP 401（端点可达+鉴权生效）✓。
+- **④ 诊断规则入档（user-friendly）**：SKILL.md（Call style 段）与 steps.md（Step 5）更新为——fallback 触发时**先友好询问用户"是否允许自动诊断排查"**，允许→自动跑 check_coze.py 定位根因并修复重试；拒绝→交付本地答案+**重提示**「无法连接 Coze 服务，答案未经过精校，请谨慎使用」。
+- **未发布**：本地改动，未推送任何平台。
+
+## v0.9.59 (2026-08-13) — ClawHub SkillSpector 审计修复（49 findings 处置）
+
+- **compute_machine_id 文档诚实化（审计"主机派生标识与文档矛盾"命中）**：docstring 明确 `query_origin` 为 `sha256(hostname)` 主机派生稳定标识（同一机器跨请求一致，用于审计/归因/限流），承认低熵可猜测与跨请求设备关联属性；**实现保持稳定标识不变**（用户需求：每机器固定 sha256；0.9.52 曾改每进程随机后被回退，CHANGELOG 已留痕）。
+- **to_payload 精简回 3 变量契约（审计"超过 3 变量契约"命中）**：外发仅 `query_meta` / `original_question` / `draft_answer`；`question_profile` / `confirmation` / `tone_profile` / `memory_context` 保留在 RefineRequest 内但**不再外发**（服务端 GraphInput 未实现，待 v1.6 字段补齐后恢复）。
+- **prompts.md 去指令化（审计"prompt mirror 含运行时指令"命中）**：语言规则移除"顾问运行 `switch_lang.py`"可执行指令，仅保留纯 UI 语义（switch_lang 执行细节归 SKILL.md/steps.md）。
+- **README 首屏隐私披露补强（审计"Missing User Warnings"）**：两份 README 隐私段明确 `query_origin` 为"同一设备每次请求一致的稳定标识"（stable per-device，用于审计/限流），安装前知情。
+- **已披露的接受风险（SkillSpector 仍可能标 Medium）**：内嵌共享凭据（用户拍板允许发布）、稳定机器标识（用户需求）——属知情设计权衡，非隐藏行为。
+- **SKILL.md 安全压缩（加载优化，198→174 行 / -12%）**：仅压缩说明性区块（Overview / Requirements / Knowledge Map 辅助条 / Auth Gate 确认模板 / Clarify Loop / Routing / Boundaries / China / Performance 句），**防回归红线全保留**（Step 0 跑 route.py、simple local-only、fire-only、HARD GATE、Knowledge Map 单检、输出纪律、SIMPLE_TOPICS、query_meta.difficulty 必传）；评估确认"核心规则下沉 references 靠 agent 按需读"方案有回归风险（历史 3–5min 循环根因），未采纳。回归：self-test 18/18、桌面库 78%、0 漏发车、markdown 完整。
+- **未发布**：本地改动，未推送任何平台。
+
 ## v0.9.58 (2026-08-12) — 契约对齐服务端 v1.5 + tone/memory 暂不启用
 
 - **以服务端为准（用户决策①）**：本地 `coze/coze_system_prompt_v1.4.md` 快照由 v1.6 覆盖为**服务端实际部署的 v1.5**（priority-flipped：original_question > organized_problems > draft_answer；organized_problems 由 Coze 端 generate_organized_problems 节点生成）。本地契约文档（refiner_contract.md）描述与服务端工作流核对一致（Coze 端自行构建 organized_problems、本地不再生成）。

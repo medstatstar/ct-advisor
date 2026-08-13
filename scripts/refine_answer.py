@@ -218,7 +218,11 @@ def main() -> None:
                   cmd='python -m pip install "requests==2.32.3"') + "\n"
             )
             sys.exit(1)
-        except Exception:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(
+                f"[ct-advisor] race fire-only 失败（{type(e).__name__}）：本次本地兜底；"
+                f"若持续失败可运行 `python scripts/check_coze.py` 诊断代理/网络。\n"
+            )
             final = ""
         sys.stdout.write(final or "")
         sys.exit(0)
@@ -251,6 +255,7 @@ def main() -> None:
         sys.stderr.write(t("auth.serial_blocked") + "\n")
         sys.stdout.write(draft)
         sys.exit(0)
+    last_error = ""
     try:
         final = build_refiner(
             config_path=args.config,
@@ -264,11 +269,19 @@ def main() -> None:
         sys.exit(1)
     except Exception as e:  # noqa: BLE001
         # Any non-dependency exception (network/timeout/Coze 5xx etc.) is labelled as fallback to avoid being mistaken for a Coze-refined answer
+        last_error = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
         sys.stderr.write(
             t("error.fallback_local", reason=type(e).__name__, timeout=60) + "\n"
         )
         final = draft
-    sys.stdout.write(final or draft)
+    # 诊断兜底（2026-08-13）：Coze 失败且无本地草稿时输出友好询问（agent 应征得用户同意后
+    # 自动运行 check_coze.py 诊断），而非空输出——空输出会被误判为"没有答案"。
+    if not (final or "").strip():
+        sys.stdout.write(
+            t("error.fallback_diagnose", error=last_error or "unknown") + "\n"
+        )
+    else:
+        sys.stdout.write(final)
     sys.exit(0)
 
 

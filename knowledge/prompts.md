@@ -6,7 +6,7 @@
 
 ## Language rule / 语言规则（来自 ct-base `references/language_policy.md`）
 
-- **Default: follow OS locale.** Chinese on `zh-*` OS or when the user writes in Chinese; English otherwise — no explicit request needed. One-sentence switch: say "switch to English" / "用中文回复" (this conversation) or "always use X" / "永久用X" (`--permanent` → writes `config.json` `language`); the advisor runs `python scripts/switch_lang.py <lang> [--permanent]`. / 默认跟随系统区域：`zh-*` 系统或用户用中文时输出中文，否则英文，无需显式要求。一句话切换：说「用中文回复」/"switch to English"（仅本次对话），或「永久用X」/"always use X"（`--permanent` 写 `config.json` `language`）；顾问运行 `python scripts/switch_lang.py <lang> [--permanent]`。
+- **Default: follow OS locale.** Chinese on `zh-*` OS or when the user writes in Chinese; English otherwise — no explicit request needed. One-sentence switch: say "switch to English" / "用中文回复" (this conversation) or "always use X" / "永久用X" (persists the preference across sessions). / 默认跟随系统区域：`zh-*` 系统或用户用中文时输出中文，否则英文，无需显式要求。一句话切换：说「用中文回复」/"switch to English"（仅本次对话），或「永久用X」/"always use X"（跨会话持久化偏好）。
 - **Render only the active language.** Do not mechanically append an English translation after a Chinese heading (and vice versa). / 只输出当前语言；不要在中文标题后机械附带英文翻译（反之亦然）。
 - **Code output (R / Python) is always English** and unaffected by this policy. / 代码输出（R / Python）始终为英文，不受本策略影响。
 - In any bilingual doc, join EN and ZH on the same line with ` / ` (slash, spaces both sides); never use `|` (Markdown column delimiter). / 双语文档中，中英文一律用 ` / `（斜杠，两侧空格）连同一行；不要用 `|`。

@@ -976,6 +976,10 @@
     "en": "[coze] FALLBACK_TO_LOCAL_DRAFT reason={reason} timeout={timeout}s; not retrying; returning local draft_answer",
     "zh": "[coze] FALLBACK_TO_LOCAL_DRAFT 原因={reason} 超时={timeout}s；不重试；返回本地 draft_answer"
   },
+  "error.fallback_diagnose": {
+    "en": "[ct-advisor] The Coze cloud service is temporarily unavailable ({error}), so the local answer may be less complete. May I run an automatic diagnostic check to find and fix the cause?",
+    "zh": "[ct-advisor] Coze 云端服务暂时不可用（{error}），本次回答可能不够完善。是否允许我自动进行问题诊断排查？"
+  },
   "error.empty_question": {
     "en": "[ct-advisor] cannot generate answer: the problem description is empty, please provide a specific clinical-trial question.",
     "zh": "[ct-advisor] 无法生成答案：问题描述为空，请提供具体的临床试验问题。"

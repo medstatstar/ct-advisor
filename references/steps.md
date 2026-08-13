@@ -180,6 +180,8 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 
 **Output**: await Coze's refined result; on timeout return local answer + external data results 1 and 2.
 
+> 🔴 **Coze failure diagnosis (2026-08-13, user-friendly)**: when fallback triggers (stderr shows `FALLBACK` / `ProxyError` / `Timeout`, or stdout carries the friendly ask "是否允许我自动进行问题诊断排查？"), **first ask the user** whether they allow an automatic diagnostic check; if allowed, run `python scripts/check_coze.py` once to locate the root cause (stale system proxy / offline / token), fix it, and retry; if declined, deliver the local answer **with a prominent warning**: 「无法连接 Coze 服务，答案未经过精校，请谨慎使用」. **v0.9.60+ auto-retries by bypassing the system proxy on `ProxyError`/`ConnectionError`**, so the common Windows "dead proxy" case usually recovers without user action — still surface the diagnostic ask if the retry also fails.
+
 > 🔴 **Outbound Authorization Gate (auto-executed)**: the script checks authorization automatically before the serial refinement outbound call (same rules as Step 1). If unauthorized, it falls back to the local draft directly; agent should prompt the user to confirm.
 
 ```
