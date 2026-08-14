@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.63 (2026-08-14) — 转发提示中立化 + 安全审计整改（发布前 §16 复核）
+
+- **转发提示文案中立化**（commit 2e8a91e）：全量转发后所有问题不再预设"复杂/精校"难度，统一为"正在调用云端分析引擎，请稍候…"（SKILL.md + Coze 端 prompts.md 同步）。
+- **ct-base §16 发布前安全审计整改**（commit 916afba，审计 `clawhub_security_audit.py` STILL_PRESENT 由 6 → 0）：
+  - AGENTS.md 删除与"禁用 python -c"硬性禁令矛盾的陈旧 Option B 段落（文档自相矛盾消除）。
+  - `adapters/refiner.py` `query_origin` 模块级 docstring 改为"主机派生稳定标识"（与 `compute_machine_id()`=sha256(hostname) 实现一致，消除 HIGH Intent-Code Divergence）。
+  - README 两份出站披露补 `draft_answer` 一并外发云端精校（消除 Missing User Warnings 缺口）。
+  - 密钥扫描 `publish_secret_scan.py` exit=0（47 WARN 均为 XOR+base64 混淆 blob + 变量名误报，无 P0/P1）。
+
 ## v0.9.62 (2026-08-14) — 全量直发架构 + need_tool 技能缝合 + 发布前合规整改
 
 - **架构升级：全量直发（Forward）取代 race/serial/本地答三档分流**（用户决策 2026-08-14：本地大模型原则上不再回答问题，全部问题单次转发 Coze，仅作失败兜底）：
