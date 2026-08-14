@@ -4,9 +4,10 @@ data/
 err.txt
 .coze_race_cache/
 
-# coze 接口/内部文档：发布（GitHub/ClawHub/SkillHub）时一律不打包（用户 2026-08-03 明确要求；
-# 2026-08-05 扩展至全部接口文档；2026-08-09 复排查发现 coze/knowledge2/ 参考库亦属同类，整目录排除）
-coze/
+# coze 云端部署项目（2026-08-14 起合并入 adapters/coze/）：发布（GitHub/ClawHub/SkillHub）时一律不打包。
+# 历史：2026-08-03 明确要求不打包接口文档；2026-08-05 扩展至全部接口文档；
+# 2026-08-09 复排查发现 knowledge2/ 参考库亦属同类；2026-08-14 目录移动后规则同步为 adapters/coze/。
+adapters/coze/
 references/ops.md
 
 # 明文 JWT 本地辅助（§5 合规：凭据一律走 adapters/coze_token_embedded.py 混淆内嵌，不发布明文）
