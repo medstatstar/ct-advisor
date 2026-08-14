@@ -134,7 +134,7 @@
 ### Warnings / stop rules / 警示与停止规则
 - `warn.verify_incomplete`: Verification not yet complete — no definitive judgment on items depending on this basis. / 核实尚未完成——对依赖该依据的事项不下确定结论。
 - `warn.unconfirmed`: Unconfirmed items — why unconfirmable — what judgment this affects: / 未能确认项——为何无法确认——影响哪些结论：
-- `warn.complex_patience`: This question is complex / not yet fully clear. The AI needs to do an in-depth verification to ensure the conclusion is correct — please wait for the result. / 这个问题比较复杂 / 还不够明确，AI 需要对问题做深入核查以确保结论正确，请耐心等候结果。
+- `warn.complex_patience`: The analysis is running — please wait for the result. / 分析正在进行，请稍候结果。
 - `stop.tracing`: Definitive judgment withheld. Official tracing path below; please return the original for re-check. / 不下确定结论。官方溯源路径如下，请返回原文复核。
 - `stop.no_risk_mask`: Do not use "no risk found" to mask unreceived or unreconciled data. / 不得用「未发现风险」掩盖未收到或未核对的资料。
 - `stop.fabricate`: Do not fabricate sample size, deadline, effect size or risk conclusion when key parameters are missing. / 关键参数缺失时，不得编造样本量、时限、效应量或风险结论。

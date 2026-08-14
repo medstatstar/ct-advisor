@@ -161,7 +161,7 @@ Pre-delivery checks and stop conditions live in `knowledge/system_prompt.md` "Qu
 **Presentation rules (user-mandated, hard)** — deliver only the answer (refined stdout) + essential cited basis. **Never emit any workflow / process narration to the user** — this explicitly covers: step 0–6 labels ("Step 2", "Gate 0", "Step 6"), difficulty tags (`simple` / `middle` / `complex` / `vague`), forward / need_tool / fallback mechanics, routing / triage narration, progress / status broadcasts, self-process recaps, memory / CHANGELOG housekeeping notes, follow-up CTAs, redundant closing summaries, internal-pipeline wording ("refined by Coze", "assembling payload"), and disclosure of internal knowledge sources. Internal reasoning may still use these labels freely — they just must **never** appear in user-visible text. See ct-base §6.2 / §6.3.
 
 **🔔 Forward-mode user notice (the ONLY allowed process message)** — before the Coze call (all questions; response takes seconds), emit **exactly one** brief user-facing notice, e.g.:
-> 您的这个问题比较复杂，分析结果需要做模型精校，请耐心等候。
+> 正在调用云端分析引擎，请稍候…
 
 (English: `Please wait while the cloud analysis runs…`) Do **NOT** repeat it, do **NOT** add any other process chatter.
 
