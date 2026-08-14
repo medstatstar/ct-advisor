@@ -24,14 +24,14 @@ from .data_context import (
     LocalDiskDataContext,
 )
 from .qa_store import JsonlStore, NoOpStore, QARecord, QASessionStore, RemoteDbStore
-from .refiner import CozeRefiner, RefineRequest, Refiner, compute_machine_id, ACCURACY_ENUM, DIFFICULTY_ENUM, _parse_query_meta, strip_display_tags, MissingDependencyError
+from .refiner import CozeRefiner, RefineRequest, RefineResult, Refiner, compute_machine_id, ACCURACY_ENUM, DIFFICULTY_ENUM, _parse_query_meta, strip_display_tags, MissingDependencyError
 from .sanitize import sanitize
 
 __all__ = [
     "AdvisorBackend", "AdvisorRequest", "AdvisorResponse", "LocalBackend", "CozeBackend",
     "DataContextProvider", "DataRef", "LocalDiskDataContext", "CozeApiDataContext",
     "QASessionStore", "QARecord", "JsonlStore", "NoOpStore", "RemoteDbStore", "sanitize",
-    "Refiner", "RefineRequest", "CozeRefiner", "compute_machine_id",
+    "Refiner", "RefineRequest", "RefineResult", "CozeRefiner", "compute_machine_id",
     "ACCURACY_ENUM", "DIFFICULTY_ENUM", "_parse_query_meta",
     "build_backend", "build_data_context", "build_qa_store", "build_refiner", "MissingDependencyError",
 ]

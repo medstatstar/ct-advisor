@@ -50,9 +50,9 @@ if str(_SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(_SKILL_ROOT))
 from scripts.i18n import t  # noqa: E402
 
-# 公共凭据统一从 config/keys.py 导入（后缀 .py 不被 SkillHub 文件过滤删除）。
-# 用标准 import（ROOT 已在 sys.path）替代 importlib 动态加载模块，避免被静态扫描判定为动态代码执行。
-from config.keys import get_token
+# 公共凭据统一从 adapters/coze_token_embedded.py 导入（XOR+base64 混淆内嵌，ct-base §5 合规；
+# .py 后缀不被 SkillHub 文件过滤删除；禁明文 JWT 落盘）。
+from adapters.coze_token_embedded import get_token
 
 
 class MissingDependencyError(Exception):
@@ -141,6 +141,21 @@ def _parse_query_meta(query_meta: Any) -> Dict[str, Any]:
     qo = meta.get("query_origin", "")
     result["query_origin"] = str(qo).strip() if qo else ""
     return result
+
+
+@dataclass
+class RefineResult:
+    """Coze 单次调用的结构化结果（全量直发方案，2026-08-14）。
+
+    兼容旧调用方：final_answer 始终有值（need_tool 分支下为 Coze 草稿），
+    cache_hit 字段保留；新字段 need_tool / params 供本地执行器识别。
+    """
+    final_answer: str = ""            # Coze 最终答案；need_tool 分支下=Coze 草稿（缝合基底）
+    cached_answer: str = ""           # 缓存命中答案（兼容旧字段）
+    cache_hit: bool = False           # 是否命中缓存
+    need_tool: Optional[str] = None   # 需要本地执行的技能标识（None=无需技能）
+    params: dict = field(default_factory=dict)  # 技能入参
+    run_id: str = ""                  # 追踪用
 
 
 @dataclass
@@ -334,20 +349,14 @@ class CozeRefiner(Refiner):
         self.answer_mode = "fast"  # 2026-08-05 删除 precise，仅保留 fast 单一模式
         self.race_window = race_window  # race 竞速：step 4 收集 Coze 后台结果的等待上限（秒）；超时即放弃、用本地
 
-    def refine(self, req: RefineRequest, timeout: float = None) -> str:
+    def refine(self, req: RefineRequest, timeout: float = None) -> RefineResult:
         # 依赖保障：在出站 try 之外执行。缺失且自动安装失败 → 向上抛 MissingDependencyError，
         # 由 refine_answer.py 显式退出（绝不静默回退草稿，否则用户误以为答案经 Coze 精校）。
         _ensure_requests()
         timeout = timeout or self.timeout
-        # 模式路由（2026-08-05 重构：删除 precise，仅保留难度驱动的单一 fast 模式）：
-        # simple/middle → 后台竞速（race 并行，Coze 优先）；complex/vague → 前台串行（更慢但 Coze 优先）。
-        # （与 SKILL.md:94 / references/ops.md:150 一致）
-        diff = (req.query_meta or {}).get("difficulty", "") \
-            if isinstance(req.query_meta, dict) else ""
-        # 单发入口（refine_answer.py 非 --fire-only/--collect 时）：complex/vague 走此串行路径，
-        # 前台等 Coze 完整返回（draft 兜底）；simple/middle 正常不走此处（agent 用 --fire-only
-        # 早发 + --collect 收集）。此处对 simple/middle 也走串行仅作防御性兜底。
-        return self._refine_serial(req, timeout)
+        # 全量直发（2026-08-14）：不再按难度分流，一律单次转发 Coze，返回结构化结果。
+        # 兼容旧调用方：仍可通过 .final_answer 取文本；旧 fire-only/collect（race）保留不删。
+        return self.refine_forward(req, timeout)
 
     def refine_fire_only(self, req: RefineRequest) -> str:
         """Race 早发模式（agent 在 step 3 调用，对应 SKILL.md step 3 Fire Gate）。
@@ -436,8 +445,13 @@ class CozeRefiner(Refiner):
                 return ""
             time.sleep(0.1)
 
-    def _call_coze(self, req: RefineRequest, timeout: float) -> str:
+    def _call_coze(self, req: RefineRequest, timeout: float) -> RefineResult:
         """真正发起一次 Coze 调用；任何失败都向上抛（由调用方决定回退/退出）。
+
+        返回结构化 RefineResult（2026-08-14 全量直发改造）：
+          - 普通路径：final_answer = Coze 答案；need_tool = None
+          - need_tool 路径：final_answer = Coze 草稿（缝合基底）；need_tool/params 填充
+          - 缓存命中：cache_hit=True，final_answer=cached_answer
 
         requests 已在 refine() 经 _ensure_requests() 保障可用。
         """
@@ -481,20 +495,50 @@ class CozeRefiner(Refiner):
                 pass
         resp.raise_for_status()
         data = resp.json()
+        # 全量直发（2026-08-14）：解析结构化返回，透出 need_tool 分支
         final = data.get("final_answer") or req.draft_answer
-        # 展示前剥离 <source> 标签（标签仅用于 coze 端识别，用户不需要看到）
-        return strip_display_tags(final)
+        result = RefineResult(
+            final_answer=strip_display_tags(final),
+            cached_answer=data.get("cached_answer") or "",
+            cache_hit=bool(data.get("cache_hit", False)),
+            need_tool=data.get("need_tool") or None,
+            params=data.get("params") or {},
+            run_id=str(data.get("run_id") or ""),
+        )
+        return result
 
-    def _refine_serial(self, req: RefineRequest, timeout: float) -> str:
-        """串行路径（serial）：前台串行等待 Coze 完整返回（直到 timeout）；超时/失败才回退草稿。
-        complex/vague 走此路径（更慢，但 Coze 优先）。"""
+    def refine_forward(self, req: RefineRequest, timeout: float = None) -> RefineResult:
+        """全量直发主链路（2026-08-14）：单次调用 Coze，返回结构化结果。
+
+        与旧 serial 的差异：
+          - 不做难度分流（所有问题一律直发，difficulty 由本地 normalize 兜底 complex）；
+          - 返回 RefineResult（可透出 need_tool 执行卡）而非纯文本；
+          - 失败/超时仍回退（final_answer=req.draft_answer），由调用方判定走本地兜底。
+
+        本地大模型原则上不回答——本方法只负责「转发 + 结果结构化」，不生成草稿。
+        """
+        _ensure_requests()
+        timeout = timeout or self.timeout
         try:
             return self._call_coze(req, timeout)
         except MissingDependencyError:
             raise  # 致命依赖错误，向上传播
         except Exception as e:  # noqa: BLE001
             self._log_fallback(e, timeout)
-            return req.draft_answer
+            return RefineResult(final_answer=req.draft_answer, need_tool=None)
+
+    def _refine_serial(self, req: RefineRequest, timeout: float) -> RefineResult:
+        """⚠️ 已废弃（2026-08-14 全量直发改造）：保留仅为旧调用方兼容，返回 RefineResult。
+
+        串行路径（serial）：前台串行等待 Coze 完整返回（直到 timeout）；超时/失败才回退草稿。
+        """
+        try:
+            return self._call_coze(req, timeout)
+        except MissingDependencyError:
+            raise  # 致命依赖错误，向上传播
+        except Exception as e:  # noqa: BLE001
+            self._log_fallback(e, timeout)
+            return RefineResult(final_answer=req.draft_answer, need_tool=None)
 
     @staticmethod
     def _log_fallback(exc: Exception, timeout: float) -> None:

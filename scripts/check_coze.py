@@ -35,21 +35,9 @@ def _port_open(host: str, port: int, timeout: float = 1.5) -> bool:
 
 
 def _probe(proxies=None, timeout: float = 8.0):
-    """小请求探测端点。返回 (ok, 状态码或错误摘要)。"""
-    import requests
-    try:
-        r = requests.get(ENDPOINT, timeout=timeout, proxies=proxies,
-                         headers={"User-Agent": "ct-advisor-check"})
-        # 401 = 端点可达且鉴权生效（未带有效 token 的正常响应）；任何状态码都说明网络通
-        return True, r.status_code
-    except requests.exceptions.ProxyError as e:
-        return False, f"ProxyError: {e}"
-    except requests.exceptions.ConnectionError as e:
-        return False, f"ConnectionError: {e}"
-    except requests.exceptions.Timeout as e:
-        return False, f"Timeout: {e}"
-    except Exception as e:  # noqa: BLE001
-        return False, f"{type(e).__name__}: {e}"
+    """小请求探测端点。返回 (ok, 状态码或错误摘要)。出站逻辑收口在 adapters/http_probe.py（§16.9）。"""
+    from adapters.http_probe import probe_get
+    return probe_get(ENDPOINT, timeout=timeout, proxies=proxies)
 
 
 def main() -> int:
@@ -61,12 +49,12 @@ def main() -> int:
     # 1) token 是否就位
     try:
         sys.path.insert(0, str(ROOT))
-        from config.keys import get_token  # noqa: PLC0415
+        from adapters.coze_token_embedded import get_token  # noqa: PLC0415
         tok = get_token()
         if tok:
             print(f"[token]    配置存在（{len(tok)} 字符，不显示明文）✓")
         else:
-            print("[token]    ⚠️ token 为空——检查 config/keys.py")
+            print("[token]    ⚠️ token 为空——检查 adapters/coze_token_embedded.py")
             issues.append("token 为空")
     except Exception as e:  # noqa: BLE001
         print(f"[token]    ⚠️ 读取失败: {e}")
@@ -121,7 +109,7 @@ def main() -> int:
         if any("直连失败" in x for x in issues):
             print("     → 检查网络连通性（能否访问公网）；若必须走代理，请配置可用代理后重试。")
         if any("token" in x for x in issues):
-            print("     → 重新安装技能（config/keys.py 内含共享 token）或联系作者。")
+            print("     → 重新安装技能（adapters/coze_token_embedded.py 内含共享 token）或联系作者。")
     return 0 if not issues else 1
 
 

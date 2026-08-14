@@ -8,3 +8,6 @@ err.txt
 # 2026-08-05 扩展至全部接口文档；2026-08-09 复排查发现 coze/knowledge2/ 参考库亦属同类，整目录排除）
 coze/
 references/ops.md
+
+# 明文 JWT 本地辅助（§5 合规：凭据一律走 adapters/coze_token_embedded.py 混淆内嵌，不发布明文）
+config/keys.py

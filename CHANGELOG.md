@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.9.62 (2026-08-14) — 全量直发架构 + need_tool 技能缝合 + 发布前合规整改
+
+- **架构升级：全量直发（Forward）取代 race/serial/本地答三档分流**（用户决策 2026-08-14：本地大模型原则上不再回答问题，全部问题单次转发 Coze，仅作失败兜底）：
+  1. `adapters/refiner.py`：新增 `RefineResult` 数据类（final_answer/cached_answer/cache_hit/need_tool/params）；`_call_coze` 改结构化返回（透出 need_tool 分支）；新增 `refine_forward()` 全量直发方法；`refine()` 兼容改道；`_refine_serial` 标记废弃。
+  2. `scripts/refine_answer.py`：新增 `--forward` 主链路模式（单次调用 Coze，返回结构化 JSON，need_tool 分支透出执行卡，失败 FALLBACK 标记）；旧 fire-only/collect/serial 保留兼容。
+  3. `scripts/handle_need_tool.py` + `scripts/tool_mapping.json`：本地技能执行器（4 技能映射 + `--yes` 自动确认）；新增 `_infer_missing_params` 缺参检查——`required_params` + samplesize `test_hints` 配置化推断 + 效应量缺失返回 `status: need_params`（由本地大模型追问用户、不编造）。
+  4. **文档同步**：SKILL.md Answer Workflow 改为 forward 主链路（1 Forward → 2 收结果 → 3a 直接交付 / 3b need_tool 执行缝合 / 3c 失败本地兜底）；ops.md cookbook/behavior 改 forward；steps.md 顶部 mode-change notice + Step 0 改写（旧 race/serial 标 deprecated）；README 两份更新为全量转发描述（§16.6 文档-行为一致性）。
+- **发布前合规整改（ct-base §16 检查清单，2026-08-14）**：
+  - **【安全】config/keys.py 明文 JWT 移出发布**（§5 违反）：`adapters/refiner.py` / `scripts/check_coze.py` 凭据导入改走 `adapters/coze_token_embedded.py`（XOR+base64 混淆内嵌）；`config/keys.py` 加入 `.gitignore` / `.clawhubignore` 并 `git rm --cached`（本地保留作测试辅助，不再发布）。
+  - **【架构】§16.9 出站收口**：`scripts/check_coze.py` 的 `requests.get` 抽到 `adapters/http_probe.py`（新增），scripts/ 层零出站。
+  - **【对齐】README 两份**：保密声明口径 16+ → 20+（§13.1 定稿）；首屏 CLI 命令移入进阶参考（§13.3）；隐私/出站段更新为全量转发 + coze_token_embedded 描述。
+  - **未发布**：以上均为本地改动，未推送任何平台（git push / ClawHub / SkillHub 仍待用户授权）。
+
+## v0.9.61 (2026-08-13) — 兄弟技能调用协议：披露 5 要素 + 确认门 + 回灌 advisor
+
+- **SKILL.md Routing 段 + steps.md Step 3 新增「Sibling-skill call protocol (MUST)」**（实测复盘：PD-1 间质性肺炎文献检索暴露"路由静默切换 / preview 确认门被跳过 / 结果独立产出未回灌"）：
+  1. **披露 5 要素**（调谁 + 原因 + 动作与外部数据源 + 预计耗时 + 结果如何回灌），示例模板内置；
+  2. **执行计划 + 一次确认**（Quick Mode 例外：用户请求已明确关键参数可免确认，仍须展示计划）；
+  3. **Return-to-advisor**：调用完毕后结构化结果回到本工作流——窄口径作为回答主体（标注数据源+溯源）/ 宽口径就地缝合战略 brief / 链式需求继续决策下一技能（如文献安全信号 → ct-safety FAERS 定量互证），不得在兄弟技能处终结线程。
+- **README 协同调用示例（并入）**：README.md / README_zh-CN.md 各新增 2 个兄弟技能协同调用示例（现共 8 个）——示例 7 已发表安全性证据核查（ct-literature --safety + ct-safety 互补）、示例 8 方案写作证据基础 + 样本量协同（ct-literature + ct-samplesize 跨档协同）。
+- **ct-base 联动**：§15 同步新增「路由披露 + 执行确认 + 结果回灌」全库统一规范（ct-base v1.1.33）。
+
 ## v0.9.60 (2026-08-13) — Coze 调用失败防护：死代理自动绕过 + fallback 诊断输出
 
 - **根因（用户实测排查）**：Windows 系统代理残留（`HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:10808/` 无监听）→ requests 走死代理 → WinError 10061 → ProxyError → fallback；叠加"串行 payload 未带 draft_answer"→ fallback 输出为空（只有报错、没有答案）。

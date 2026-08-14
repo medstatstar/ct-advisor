@@ -29,7 +29,7 @@ from typing import Set
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from adapters import build_refiner, RefineRequest, MissingDependencyError
+from adapters import build_refiner, RefineRequest, RefineResult, MissingDependencyError
 from scripts.i18n import t  # noqa: E402  (user-facing prompts EN/ZH, locale-resolved)
 
 def _load_auto_approve_endpoints(config_path: str) -> Set[str]:
@@ -104,6 +104,10 @@ def main() -> None:
                          "hit returns Coze result (Coze wins, local interrupted), miss returns empty (local wins)")
     ap.add_argument("--wait", type=float, default=None,
                     help="--collect gather wait cap in seconds; defaults to config refiner.race_window")
+    ap.add_argument("--forward", action="store_true",
+                    help="全量直发主链路（2026-08-14）：单次调用 Coze，返回结构化 RefineResult JSON。"
+                         "本地大模型原则上不回答——本模式只转发；need_tool 分支透出执行卡供本地执行技能。"
+                         "失败/超时回退 draft_answer（final_answer 字段），由调用方判定本地兜底")
     # P0-B 语气写作：注入 tone_matcher.py 生成的 tone_profile.json（仅风格、无事实）
     ap.add_argument("--tone", default=None,
                     help="path to tone_profile.json (from scripts/tone_matcher.py); injects style-only tone into Coze prompt")
@@ -197,6 +201,50 @@ def main() -> None:
             sys.stdout.write(t("error.empty_question") + "\n")
         else:
             sys.stdout.write(draft)
+        sys.exit(0)
+
+    if args.forward:
+        # 全量直发主链路（2026-08-14）：单次调用 Coze，返回结构化 RefineResult JSON。
+        # 不做难度分流、不生成本地草稿（本地大模型原则上不回答）；need_tool 分支透出执行卡。
+        # 失败/超时：final_answer 回退 draft（调用方判定走本地知识库兜底），并输出 FALLBACK 标记。
+        if not _check_outbound_authorization(
+            _get_endpoint_from_config(args.config), args.config
+        ):
+            # 未授权出站：输出兜底结果（final_answer=draft）+ 明确标记
+            sys.stdout.write(json.dumps({
+                "final_answer": draft, "need_tool": None, "cache_hit": False,
+                "fallback": "auth_blocked",
+            }, ensure_ascii=False))
+            sys.exit(0)
+        try:
+            result = build_refiner(
+                config_path=args.config,
+            ).refine_forward(req)
+        except MissingDependencyError as e:
+            sys.stderr.write(
+                t("error.dependency_fatal",
+                  cmd='python -m pip install "requests==2.32.3"') + "\n"
+            )
+            sys.exit(1)
+        except Exception as e:  # noqa: BLE001
+            # 兜底：任何异常 → draft + FALLBACK 标记（本地知识库兜底由调用方触发）
+            sys.stderr.write(
+                f"[ct-advisor] forward 失败（{type(e).__name__}）：本次本地兜底；"
+                f"若持续失败可运行 `python scripts/check_coze.py` 诊断代理/网络。\n"
+            )
+            result = RefineResult(final_answer=draft, need_tool=None)
+        out = {
+            "final_answer": result.final_answer,
+            "cached_answer": result.cached_answer,
+            "cache_hit": result.cache_hit,
+            "need_tool": result.need_tool,
+            "params": result.params or {},
+            "run_id": result.run_id,
+        }
+        # 失败回退标记（stderr 同时输出，供 agent 判定是否本地兜底）
+        if result.need_tool is None and not result.cache_hit and not result.final_answer.strip():
+            sys.stderr.write("[ct-advisor][FALLBACK] Coze 返回空/失败，建议本地知识库兜底\n")
+        sys.stdout.write(json.dumps(out, ensure_ascii=False))
         sys.exit(0)
 
     if args.fire_only:

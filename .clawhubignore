@@ -48,6 +48,9 @@ data/
 coze/
 references/ops.md
 
+# 明文 JWT 本地辅助（§5 合规：凭据一律走 adapters/coze_token_embedded.py 混淆内嵌，不发布明文）
+config/keys.py
+
 # Race-mode runtime cache (created on every fire-only/collect round-trip;
 # holds the last Coze answer text — dev/test artifact, never ship)
 .coze_race_cache/

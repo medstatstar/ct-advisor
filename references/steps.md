@@ -6,22 +6,24 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 # Answer Workflow — Steps 0-6 (Detailed)
 
+> **🔴 2026-08-14 mode change — FORWARD REPLACES RACE/SERIAL**: the local skill no longer triages or answers — **every** question is forwarded to Coze once (`refine_answer.py --forward`); local `knowledge/` answers only as the Coze-failure fallback; sibling skills run **only** on the Coze-issued `need_tool` card (execute `scripts/handle_need_tool.py` + stitch locally, never re-send). Steps 0–5 below are **legacy race/serial detail kept for back-compat reference only** — do NOT run `route.py`, `--fire-only`, or `--collect` in forward mode. The authoritative current flow is the SKILL.md Answer Workflow table + `ops.md` §step-7-cookbook.
+
 > **Core principle**: payload always travels through the in-memory pipeline (`--payload-inline` or stdin), **never** Write/Bash temp JSON files.
 
 ---
 
-## Step 0 — Triage (Gate 0)
+## Step 0 — No local triage (forward mode, 2026-08-14)
 
-**Goal**: obtain the difficulty label from the **deterministic router** `scripts/route.py` (zero LLM). **The agent MUST NOT judge difficulty itself** — running `route.py` is the only allowed path. This is the root-cause fix for the prior "local model answers directly / 3–5 min loop" failure (decision to fire Coze no longer lives in the LLM).
+**Goal**: NONE — the local skill makes **no difficulty/category judgment** and runs **no router**. Between receiving the question and firing Coze there is **zero local work** (no `route.py`, no `knowledge/` read, no `search_refs.py`). `query_meta.difficulty` may stay empty (script defaults to `complex`); Coze-side workflow routes internally.
 
-| difficulty | trigger | downstream path |
+Legacy triage table (race/serial) — **deprecated, never invoked**; kept for history:
+
+| difficulty | legacy trigger | legacy path |
 |---|---|---|
-| `simple` | single fact / definition / standard operation **or knowledge whitelist hit** (`SIMPLE_TOPICS`), no data pull or n computation | → step 2→6 (**local-only**, no Coze; answered directly from `knowledge/`, Step 1 skipped) |
-| `middle` | needs explanation / comparison / multi-step reasoning, but no external data | → step 1→2→6 (race mode; **Step 1 fire-only fires IMMEDIATELY after Triage, before Route**) |
-| `complex` | needs multi-angle decomposition, external data integration, or option selection | → step 2→3→4→5→6 (**serial**, await full Coze return; Step 1 Fire is race-only, skipped for complex) |
-| `vague` | incomplete / ambiguous question, missing key parameters | → AskUserQuestion (≤ 4 questions) → back to step 0 |
-
-> **Semantic split**: `middle` + `complex` **both fire Coze** — they differ only in firing mode (race vs serial). The real binary is `simple` (local-only, no Coze) vs non-simple (fire Coze).
+| `simple` | single fact / definition / standard operation | local-only (no Coze) — **replaced by forward** |
+| `middle` | explanation / comparison / multi-step | race (fire-only + collect) — **replaced by forward** |
+| `complex` | multi-angle / external data | serial (await Coze) — **replaced by forward** |
+| `vague` | incomplete / ambiguous | clarify loop (`scripts/clarify_loop.py`, still pure-local) → then forward |
 
 **🔴 Run the router (mandatory, code-only)**:
 
@@ -150,6 +152,20 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 3. pure-methodology questions may skip (label "no data grounding performed")
 
 **Note**: keep it light; Coze handles expansion and integration.
+
+**🔀 Sibling-skill call protocol (MUST, before ANY sibling invocation — ct-registry / ct-safety / ct-literature / ct-samplesize)**:
+1. **Disclose in chat (5 elements)**: ① skill + one-line role ② why (what local `knowledge/` & Coze can't answer) ③ actions + external sources (read-only public APIs, zero confidential outbound) ④ expected duration (mirror the sibling's printed time estimate; >2 min → run in background and say so up front) ⑤ how results return. Example:
+   > 🔀 正在调用 ct-literature（临床试验文献检索专家）
+   >    原因：本地知识包无实时文献；大模型直接回答具体引文会幻觉
+   >    动作：检索 OpenAlex + Europe PMC 公开文献库（外部只读，零保密外发）
+   >    耗时：约 1–4 分钟（含逐篇引文验证）
+   >    回灌：产出可引用证据摘要 → 汇入本流程继续
+2. **Show the execution plan + one confirmation**: topic / params / sources — ask **"确认执行？"**. One confirmation, NOT per-param. **Quick Mode exception**: skip the ask only when the user's request already states the key params (e.g. "近 5 年 PD-1 肺炎安全文献") — still show the plan once before running.
+3. **Return-to-advisor (MUST after the sibling returns)**: bring its structured output (JSON / report) back into THIS workflow — never end the thread at the sibling:
+   - **narrow ask** → surface as the answer body, labeled `Data source: ct-xxx on <date>` + provenance (evidence log / verification status);
+   - **broad ask** → stitch in-house (trio once each → strategic brief);
+   - **chained need** → decide the next sibling and disclose the chain (e.g. literature safety signal → `ct-safety` FAERS quantitative cross-check);
+   - **follow-ups** on the same topic stay in this workflow — no re-invocation, no re-route.
 
 ---
 

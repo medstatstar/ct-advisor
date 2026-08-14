@@ -6,13 +6,13 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-advisor logo"/>
 </div>
 
-> **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor that also routes real-data / competitive-intel asks to sibling data skills.**
+> **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor. Every question is answered by the Coze cloud workflow (single forward); when a sibling data skill (ct-registry / ct-safety / ct-literature / ct-samplesize) is needed, Coze issues a `need_tool` card, the skill runs locally, and the result is stitched in; local `knowledge/` serves only as the Coze-failure fallback.**
 
-> 💡 **Performance Tip**: By design, **simple** questions are answered locally with no outbound call — no need to wait for Coze. **Middle** and **complex** questions are mainly refined by the Coze endpoint (usually returns in **~20s**), so the skill's dependence on the local model's performance is low. That said, reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to spend a lot of time on meaningless deep thinking when running this skill locally. **If a single reply routinely takes longer than 3 minutes, we recommend switching to a simple standard / flash model to speed things up.**
+> 💡 **Performance Tip**: Every question is forwarded to the Coze endpoint in a **single call** (usually returns in **~20s**), so the skill's dependence on the local model's performance is low. That said, reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to spend a lot of time on meaningless deep thinking when running this skill locally. **If a single reply routinely takes longer than 3 minutes, we recommend switching to a simple standard / flash model to speed things up.**
 
-> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor answers methodology / design / statistics / GCP / safety / regulatory / QC / tone questions in-house, and for real-data or competitive-intel needs, routes you to the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) or stitches a full competitive-intel brief from the three data sources. It **re-implements no** retrieval or computation logic. B-tier. **Note: middle/complex answers are refined via the Coze endpoint (see the privacy notice below); simple questions are answered locally with no outbound call.**
+> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor forwards it to the Coze cloud workflow, which answers methodology / design / statistics / GCP / safety / regulatory / QC / tone questions and, for real-data or competitive-intel needs, issues a `need_tool` card so the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) runs **locally** and the result is stitched in. It **re-implements no** retrieval or computation logic. B-tier. **Note: every question is sent to the Coze endpoint for analysis (see the privacy notice below); local `knowledge/` is only the fault fallback when Coze is unavailable.**
 
-> ⚠️ **Data outbound & privacy notice — read before installing.** For **middle / complex** questions, your input is sent over the network to the author-hosted endpoint **`https://ct-advisor.coze.site/run`** for answer refinement — this is the one outbound path. Before sending, `sanitize()` automatically strips PII (ID numbers, phone numbers, emails, and a small set of sensitive keywords), and a non-reversible sha256 machine id is attached as `query_origin` (no plaintext; **stable per-device — identical on every request from the same machine**, used for audit / attribution / rate-limiting). **Auto-redaction is not bulletproof — do NOT enter other sensitive or confidential information**: real patient names, unpublished trial data, trade secrets, passwords, API keys, or any other personally identifiable / restricted content. The shipped `config/coze.dat` is the **required public credential** for that endpoint (published by the author) — keep it as-is; do not replace it with your own token. See §5 for details.
+> ⚠️ **Data outbound & privacy notice — read before installing.** Your question is sent over the network to the author-hosted endpoint **`https://ct-advisor.coze.site/run`** for analysis — this is the one outbound path (**every** question, no difficulty split). Before sending, `sanitize()` automatically strips PII (ID numbers, phone numbers, emails, and a small set of sensitive keywords), and a non-reversible sha256 machine id is attached as `query_origin` (no plaintext; **stable per-device — identical on every request from the same machine**, used for audit / attribution / rate-limiting). **Auto-redaction is not bulletproof — do NOT enter other sensitive or confidential information**: real patient names, unpublished trial data, trade secrets, passwords, API keys, or any other personally identifiable / restricted content. The public credential for that endpoint is embedded (obfuscated, XOR+base64) in `adapters/coze_token_embedded.py` (published by the author) — keep it as-is; do not replace it with your own token. See §5 for details.
 
 ---
 
@@ -103,8 +103,28 @@ switch to English.  /  > Always reply in English.
 Sure, I'll answer in English from now on. (Output language auto-follows your OS by default — Chinese OS → Chinese, otherwise English — but you can switch with one sentence.)
 
 **📌 Note:** Language is one-sentence switchable:
-- **This conversation only** — say "switch to English" / "用中文回复" → advisor runs `python scripts/switch_lang.py en` (or `zh-CN`).
-- **Permanently (all future sessions)** — say "always reply in English" / "永久用中文" → advisor runs `python scripts/switch_lang.py en --permanent`, writing `config.json` `language`. Re-run with the other language to reset.
+- **This conversation only** — say "switch to English" / "用中文回复".
+- **Permanently (all future sessions)** — say "always reply in English" / "永久用中文" (the choice is remembered).
+
+---
+
+### Example 7 · A published-safety evidence check (ct-literature --safety)
+**You say:** 
+One of our PD-1 products has case reports of interstitial lung disease; QA suspects a new safety signal. Search the **published literature** (case reports, pharmacovigilance studies, reviews) for how much support this signal has, and give me a citable evidence summary for the signal-evaluation meeting.
+
+**Assistant replies (sketch):** 
+This needs *published* evidence, so I'll route to **ct-literature --safety** (OpenAlex + Europe PMC/MeSH, 2021–2026, CSM bias focused on case reports / PV studies / reviews) and hand you a de-duplicated, citation-verified evidence base — layered by evidence strength (systematic reviews / cohort / case series / case reports), each entry with a verifiable DOI/PMID.
+
+**📌 Note:** **ct-safety** gives structured FAERS numbers (PRR/ROR/IC); **ct-literature** surfaces **qualitative published evidence** — they complement each other: a signal is strongest when the spontaneous-report statistics *and* the published case literature point the same way. Citation verification + a provenance log make every reference clickable (anti-hallucination).
+
+### Example 8 · Protocol background evidence + sample-size handoff (ct-literature + ct-samplesize)
+**You say:** 
+We're drafting a phase-3 protocol in this indication. Give me the published RCT + systematic-review evidence from the last 5 years for the introduction, then compute the sample size for a superiority design using the key assumptions I'll provide.
+
+**Assistant replies (sketch):** 
+Two handoffs: (1) **ct-literature** for the evidence base (RCTs + systematic reviews, 2021–2026, de-duplicated, citation-linked) for the introduction; (2) **ct-samplesize** for the n computation once you confirm assumptions (α, power, effect size, dropout). The advisor carries the evidence-derived parameter framework (e.g. expected event rates) straight into the computation.
+
+**📌 Note:** Cross-tier collaboration — literature evidence (B-tier retrieval) feeds the protocol background, and the same evidence-based assumptions flow into the sample-size calculation (C-tier compute). Every claim is labeled with its data source and date.
 
 ---
 
@@ -157,7 +177,7 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 **Q: How is the full competitive-intel brief generated now?** A: The advisor calls **ct-registry + ct-safety + ct-literature** once each and **stitches the Strategic Brief itself** — no separate `ct-pipeline` orchestrator. This keeps the same three-source coverage while removing the extra dependency.
 
-**Q: Does pure methodology need the network?** A: It depends on difficulty. **Simple** methodology questions (a definition, a single standard operation, a fact) are answered **entirely locally** from the `knowledge/` pack — **no network call at all**, no Coze. **Middle / complex** questions additionally send the answer to the Coze endpoint (`https://ct-advisor.coze.site/run`) for refinement — this is the only outbound path for those answers.
+**Q: Does pure methodology need the network?** A: Yes — every question is sent to the Coze endpoint (`https://ct-advisor.coze.site/run`) for analysis in a **single call**. The local `knowledge/` pack is the **fault fallback only**: if Coze is unreachable you still get an offline answer, marked as not cloud-refined.
 
 ---
 
@@ -168,8 +188,9 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 - **Traceable, not fabricated:** Every factual / normative claim carries a source citation or an `⚠️ needs official verification` marker; it never fills factual gaps with fluent prose.
 - Outputs are for reference only; validate against official sources before regulatory submissions.
 
-### Outbound & Privacy (answer refinement via Coze for middle/complex)
-- **The outbound path = answer refinement (Coze), for middle/complex:** Simple questions are answered locally with no outbound call. For middle/complex questions, because clinical trials demand high answer quality, the advisor sends your question to **`https://ct-advisor.coze.site/run`** for refinement against the full database (step 2 / step 6 invokes `scripts/refine_answer.py`, POSTing `query_meta` (incl. `query_origin` machine id) + `original_question` + `draft_answer`; outbound payloads pass through `sanitize()` first). The shipped `config/coze.dat` is the **required public credential** for that endpoint (published by the author) — keep it as-is and do not replace it with your own token. On Coze timeout/error it degrades to the local draft, but **only as a fault fallback**. **Do not paste confidential trial / patient / sponsor data** into any prompt.
+### Outbound & Privacy (every question → Coze; data skills run locally via need_tool)
+- **The outbound path = cloud analysis (Coze), for every question:** because clinical trials demand high answer quality, the advisor forwards your question to **`https://ct-advisor.coze.site/run`** for analysis against the full database (one call; `scripts/refine_answer.py --forward` POSTs `query_meta` (incl. `query_origin` machine id) + `original_question`; outbound payloads pass through `sanitize()` first). The public credential is embedded (obfuscated, XOR+base64) in `adapters/coze_token_embedded.py` (published by the author) — keep it as-is and do not replace it with your own token. On Coze timeout/error it falls back to the local `knowledge/` answer, but **only as a fault fallback**. **Do not paste confidential trial / patient / sponsor data** into any prompt.
+- **Sibling data skills run locally:** when the question needs registry / safety / literature / sample-size data, Coze returns a `need_tool` card; the skill then executes **locally** (its own public-source retrieval / computation) and the result is stitched into the Coze draft — only card parameters and the draft cross the boundary, so confidential data never leaves the machine.
 - **Machine id is hashed, non-PII:** `query_origin` (nested inside `query_meta`) is `sha256(hostname)` — a stable per-machine identifier used only for per-machine audit/attribution and Coze-side rate limiting. It contains **no plaintext hostname, IP, or any other PII**.
 - **Nothing written to disk by default:** `qa_store` defaults to `noop` — no Q&A record is kept. Only `qa_store.mode: local` appends full Q&A to `data/qa_log.jsonl` on your machine (unencrypted, treat as sensitive, add to `.gitignore`).
 - **About memory (self-improving agent):** ct-advisor follows the WorkBuddy self-improving system. Recurring patterns (same issue ≥ 3 times across ≥ 2 tasks) are **automatically** promoted to long-term memory: behavior/communication rules → `~/.workbuddy/SOUL.md`; workflow/tool rules → project `AGENTS.md`; cross-project user preferences → `~/.workbuddy/MEMORY.md`; project-level notes → `.workbuddy/memory/MEMORY.md`. These files live on your machine. To review what's stored, say "show me your MEMORY.md"; to delete, say "forget all my preferences" or manually `rm ~/.workbuddy/MEMORY.md` (global) / `rm -rf .workbuddy/memory/` (project-level). The promotion is silent to avoid interrupting your workflow.
@@ -186,7 +207,7 @@ CLI helpers, runtime requirements, the architecture tree, and scanner false-posi
 | Runtime | The agent reads `knowledge/` directly — **no mandatory dependency**. |
 | Optional CLI helpers | `python3` (stdlib only). `scripts/*.py` load `scripts/*.json` via `json` — **no PyYAML**. |
 | Sibling skills | `ct-registry`, `ct-safety`, `ct-literature`, `ct-samplesize` (only for data routing / grounding; the competitive-intel brief is stitched in-house from the three; missing ones degrade gracefully). They install from GitHub — `ct-registry`→`https://github.com/medstatstar/ct-registry`, `ct-safety`→`https://github.com/medstatstar/ct-safety`, `ct-literature`→`https://github.com/medstatstar/ct-literature`, `ct-samplesize`→`https://github.com/medstatstar/ct-samplesize` (clone into `~/.workbuddy/skills/<slug>`). When one is missing, the advisor prints its GitHub address directly. |
-| Coze mode (opt-in · advisor backend only) | Optionally enable `backend: coze` + `coze.bot_id` to route Q&A through a Coze bot; **answer refinement for middle/complex needs `requests`** (auto-installed if missing). Simple questions never call Coze. |
+| Cloud analysis (Coze) | **Every** question is sent to the Coze endpoint once for analysis — needs `requests` (auto-installed if missing). Local `knowledge/` is the fault fallback only. |
 
 ### Architecture
 ```
@@ -201,7 +222,7 @@ ct-advisor/
 │   ├── check_deps.py     # local-only capability probe
 │   └── search_refs.py    # topic-reference locator
 ├── adapters/             # reasoning-exit / data-grounding / Q&A seams (swappable)
-└── config.json           # runtime backend selector (methodology knowledge retrieved locally from `knowledge/`; simple questions answered locally with no outbound call; middle/complex answer refinement calls Coze remotely)
+└── config.json           # runtime backend selector (every question forwarded to Coze; sibling skills executed locally via need_tool; local knowledge/ fallback on Coze failure)
 ```
 
 ### CLI examples (developers)
@@ -212,11 +233,11 @@ python3 scripts/menu.py --tier data_skill --human --lang zh   # preview one tier
 ```
 
 ### Security scanner false positives 
-Some automated scanners flag `adapters/` because it contains strings that look network- or credential-related. Distinguish two paths: (1) the **advisor backend** `CozeBackend.advise()` / `_post()` are inert stubs that raise `NotImplementedError` and are never executed unless you explicitly implement and enable Coze routing in `config.json` — no token read, no HTTP request on that path. (2) **Answer refinement uses Coze for middle/complex questions**: `scripts/refine_answer.py` POSTs the 5 variables to the Coze refiner on every middle/complex answer, so `requests` is imported by the always-active refiner (not just an inactive path). **Simple** questions are answered locally and make **no** outbound call, so running the skill on a simple question is zero-outbound. For middle/complex, running the skill as shipped is **not** zero-outbound — methodology knowledge is retrieved locally from `knowledge/`, but each refined answer is sent to `ct-advisor.coze.site/run` (PII sanitized via `sanitize()`; `query_origin` is a non-PII `sha256` machine id). No secrets are in the repo (the Coze token is read from `config/coze.dat` / env var, only when refinement runs).
+Some automated scanners flag `adapters/` because it contains strings that look network- or credential-related. Distinguish two paths: (1) the **advisor backend** `CozeBackend.advise()` / `_post()` are inert stubs that raise `NotImplementedError` and are never executed unless you explicitly implement and enable Coze routing in `config.json` — no token read, no HTTP request on that path. (2) **Answer analysis uses Coze for every question**: `scripts/refine_answer.py --forward` POSTs the payload to the Coze refiner on every answer, so `requests` is imported by the always-active refiner (not just an inactive path). Running the skill **is** outbound for every question — the question text is sent to `ct-advisor.coze.site/run` (PII sanitized via `sanitize()`; `query_origin` is a non-PII `sha256` machine id). The public credential is embedded (obfuscated, XOR+base64) in `adapters/coze_token_embedded.py` — **no plaintext secrets** in the repo.
 
 ---
 
-**Version**: v0.9.51 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.9.62 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang).
 
@@ -224,7 +245,7 @@ For feature requests, bug reports, or other feedback, please contact the author 
 
 ## Confidentiality Notice
 
-> The CT series consists of 16+ specialized domain skills, organized into four tiers — A, B, C, D — by "confidential-data-exfiltration risk + whether external retrieval is needed", providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
+> The CT series consists of 20+ specialized domain skills, organized into four tiers — A, B, C, D — by "confidential-data-exfiltration risk + whether external retrieval is needed", providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
 
 > - **Tier A / B (non-confidential)**: run fully locally using only ordinary data; Tier B may need external public retrieval but involves no confidential information. These skills are published openly on GitHub.
 > - **Tier C / D (confidential)**: involve strictly confidential clinical-trial data and internal information from pharma sponsors (e.g., ct-analysis, ct-sdtm); Tier C is processed locally and never leaves the boundary, while Tier D additionally requires policy approval. These skills are designated for internal enterprise use only and are not publicly released at present.

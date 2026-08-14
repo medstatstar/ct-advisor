@@ -8,11 +8,11 @@
 
 > **整个 `ct-*` 临床试验技能家族的统一入口 —— 既是方法学与法规证据顾问，也把真实数据 / 竞品情报类需求路由到兄弟数据技能。**
 
-> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清你的试验问题：顾问在内部作答方法学 / 设计 / 统计 / GCP / 安全性 / 法规 / QC / 语气类问题，并在你需要真实数据或竞品情报时，把你导向正确的兄弟技能（`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`），或用三大数据源**自行缝合**完整竞品情报简报。它**不重复实现**任何检索或计算逻辑。B 档。**注意：中等/复杂问题的答案会经 Coze 端点精校（详见下方隐私提示）；简单问题本地作答、零出站。**
+> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清你的试验问题：顾问会将问题**单次转发**给 Coze 云端工作流作答方法学 / 设计 / 统计 / GCP / 安全性 / 法规 / QC / 语气类问题；当需要真实数据或竞品情报时，Coze 会下发 `need_tool` 执行卡，对应的兄弟技能（`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`）在**本地**执行并把结果缝合进来。它**不重复实现**任何检索或计算逻辑。B 档。**注意：所有问题都会发往 Coze 端点分析（详见下方隐私提示）；本地 `knowledge/` 仅在 Coze 不可用时作为故障兜底。**
 
-> 💡 **性能提示**：本技能在设计架构上，**简单**问题在本地直接作答、零出站，无需等待 Coze。**中等**问题和**复杂**问题的答案主要依靠 Coze 端点完成精校（通常coze **约 20 秒**返回结果），因此对本地大模型的性能依赖很低。但目前已发现推理模型（如 Hunyuan-3、DeepSeek-R1）在本地运行本技能时会耗费大量时间进行毫无意义的深度思考。**如果单次回复等待时间经常超过 3 分钟，建议切换到简单的普通/flash大模型以加快处理速度。**
+> 💡 **性能提示**：所有问题都会**单次转发**到 Coze 端点分析（通常 **约 20 秒**返回结果），因此对本地大模型的性能依赖很低。但目前已发现推理模型（如 Hunyuan-3、DeepSeek-R1）在本地运行本技能时会耗费大量时间进行毫无意义的深度思考。**如果单次回复等待时间经常超过 3 分钟，建议切换到简单的普通/flash大模型以加快处理速度。**
 
-> ⚠️ **数据出域与隐私提示 —— 安装前请阅读。** 对**中等 / 复杂**问题，你的输入内容会经网络发往作者托管的端点 **`https://ct-advisor.coze.site/run`** 进行答案精校——这是唯一的出域路径。出站前 `sanitize()` 会自动脱敏身份证号、手机号、邮箱及少量敏感词，并附带一个不可逆的 sha256 机器标识 `query_origin`（不含明文；**同一设备每次请求一致，属稳定标识，用于审计 / 归因 / 限流**）。**自动脱敏并非万无一失——请勿输入其他敏感或机密信息**：真实患者姓名、未公开的试验数据、商业机密、密码、API 密钥，或其他任何可识别个人 / 受限的内容。其中 `config/coze.dat` 是访问该端点的必须公开凭证（作者随技能发布），请原样保留，无需也不应替换为自有 token。详见 §5。
+> ⚠️ **数据出域与隐私提示 —— 安装前请阅读。** 你的问题会经网络发往作者托管的端点 **`https://ct-advisor.coze.site/run`** 进行分析——这是唯一的出域路径（**所有**问题，不分难度）。出站前 `sanitize()` 会自动脱敏身份证号、手机号、邮箱及少量敏感词，并附带一个不可逆的 sha256 机器标识 `query_origin`（不含明文；**同一设备每次请求一致，属稳定标识，用于审计 / 归因 / 限流**）。**自动脱敏并非万无一失——请勿输入其他敏感或机密信息**：真实患者姓名、未公开的试验数据、商业机密、密码、API 密钥，或其他任何可识别个人 / 受限的内容。访问该端点的公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`（作者随技能发布），请原样保留，无需也不应替换为自有 token。详见 §5。
 
 ---
 
@@ -103,8 +103,28 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 > Sure, I'll reply in English from now on. （输出语言默认跟随系统：中文系统→中文，其他→英文；但可一句话切换。）
 
 **📌 说明**：语言支持一句话切换：
-- **仅本次对话** —— 说「用中文回复」/ "switch to English" → 顾问运行 `python scripts/switch_lang.py zh-CN`（或 `en`）。
-- **永久（后续所有会话）** —— 说「永久用中文」/ "always reply in English" → 顾问运行 `python scripts/switch_lang.py zh-CN --permanent`，写入 `config.json` 的 `language`。换语言重跑一次即可重置。
+- **仅本次对话** —— 说「用中文回复」/ "switch to English"。
+- **永久（后续所有会话）** —— 说「永久用中文」/ "always reply in English"（选择会被记住）。
+
+---
+
+### 示例 7 · 已发表安全性证据核查（ct-literature --safety）
+**你这样说：** 
+> 我们一款 PD-1 产品近期有间质性肺炎的个案报告，QA 怀疑是新的安全性信号。请检索**已发表文献**（病例报告、药物警戒研究、综述），评估这个信号在文献中的支持度，并给我一份可引用的证据摘要，供安全信号评估会使用。
+
+**助手会这样回（示意）：** 
+> 这需要"已发表"证据，我会路由到 **ct-literature --safety**（OpenAlex + Europe PMC/MeSH，2021–2026，CSM 偏置聚焦病例报告/药物警戒研究/综述），并给你一份去重合并、引文可验证的证据库——按证据强度分层（系统综述/队列/病例系列/个案报告），每条带可验证的 DOI/PMID。
+
+**📌 说明**：**ct-safety** 给出的是 FAERS 结构化定量信号（PRR/ROR/IC），**ct-literature** 呈现的是**定性已发表证据**——两者互补：自发报告统计与已发表病例文献指向一致时，信号最扎实。引文验证 + 证据溯源日志让每条参考文献可点击核验（反幻觉）。
+
+### 示例 8 · 方案写作的证据基础 + 样本量协同（ct-literature + ct-samplesize）
+**你这样说：** 
+> 我们准备为这个适应症起草 III 期方案。请检索近 5 年已发表的 RCT + 系统综述作为引言证据基础，然后按我给出的关键假设算一下优效设计的样本量。
+
+**助手会这样回（示意）：** 
+> 两个转交：① **ct-literature** 检索证据基础（RCT + 系统综述，2021–2026，去重、带引文）供引言使用；② 你确认假设（α、把握度、效应量、脱落率）后 **ct-samplesize** 计算 n。顾问会把证据中的参数框架（如预期事件率）直接带入计算。
+
+**📌 说明**：跨档协同——文献证据（B 档检索）支撑方案背景，同一套基于证据的假设流入样本量计算（C 档计算）。每处结论都标注数据来源与日期。
 
 ---
 
@@ -157,7 +177,7 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 
 **Q：现在完整竞品情报简报是怎么生成的？** A：顾问**分别调用 ct-registry + ct-safety + ct-literature 各一次，由本技能自行缝合战略简报** —— 不再经独立 `ct-pipeline` 编排器。这样既保留同样的三源覆盖，又去掉了额外依赖。
 
-**Q：纯方法学要联网吗？** A：看难度。**简单**方法学问题（一个定义、一个标准操作、一个事实）**完全本地**由 `knowledge/` 包作答——**无任何网络调用**，不连 Coze。**中等 / 复杂**问题的答案会额外发往 Coze 端点（`https://ct-advisor.coze.site/run`）精校——这是这类答案唯一的出域路径。
+**Q：纯方法学要联网吗？** A：要——所有问题都会**单次**发往 Coze 端点（`https://ct-advisor.coze.site/run`）分析。本地 `knowledge/` 包**仅作故障兜底**：Coze 不可达时你仍能拿到离线答案，但会标注未经云端精校。
 
 ---
 
@@ -169,7 +189,8 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 - 输出仅供参考；申报 / 决策前请对照官方原文核实。
 
 ### 出站与隐私（中等/复杂问题答案精校走 Coze）
-- **出站路径 = 答案精校（Coze，仅中等/复杂）**：简单问题本地作答、无出站调用。对中等/复杂问题，由于临床试验对答案质量要求很高，本技能会将你的问题发送到服务器 **`https://ct-advisor.coze.site/run`** 在完整数据库中对答案做精校（step 2 / step 6 调用 `scripts/refine_answer.py`，外发 `query_meta`（含 `query_origin` 机器标识）+ `original_question` + `draft_answer`，出站前先经 `sanitize()` 脱敏）。随技能发布的 `config/coze.dat` 是访问该端点的**必须公开凭证**（作者公开发布），请原样保留、勿替换为自有 token。Coze 超时/出错时才会降级为本地草稿，但**仅为故障降级**。因此 **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据** 。
+- **出站路径 = 云端分析（Coze，所有问题）**：由于临床试验对答案质量要求很高，本技能会将你的问题**单次**发送到服务器 **`https://ct-advisor.coze.site/run`** 在完整数据库中分析（`scripts/refine_answer.py --forward`，外发 `query_meta`（含 `query_origin` 机器标识）+ `original_question`，出站前先经 `sanitize()` 脱敏）。公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`（作者公开发布），请原样保留、勿替换为自有 token。Coze 超时/出错时才降级为本地 `knowledge/` 答案，但**仅为故障兜底**。因此 **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据** 。
+- **兄弟数据技能在本地执行**：当问题需要注册库 / 信号 / 文献 / 样本量数据时，Coze 返回 `need_tool` 执行卡，技能随后在**本地**执行（自身的公开源检索 / 计算）并把结果缝合进 Coze 草稿——只有执行卡参数与草稿跨边界传输，机密数据绝不离开本机。
 - **机器标识已哈希、非 PII**：`query_origin`（嵌套在 `query_meta` 内）为 `sha256(hostname)`——稳定的按机器标识符，仅用于按机器的审计与归因及 Coze 侧限流。**不含明文主机名、IP 或其他 PII**。
 - **默认不写本地磁盘**：`qa_store` 默认 `noop`，不保留任何问答记录；可选 `qa_store.mode: local` 才会将完整问答追加写入本机 `data/qa_log.jsonl`（未加密，请视为敏感文件并加入 `.gitignore`）。
 - **关于记忆（自改进系统）**：ct-advisor 遵循 WorkBuddy 自改进系统。同类问题出现 ≥ 3 次且跨 ≥ 2 个任务时，规则被**自动**晋升至长期记忆：行为/沟通规则 → `~/.workbuddy/SOUL.md`；工作流/工具规则 → 项目 `AGENTS.md`；跨项目用户偏好 → `~/.workbuddy/MEMORY.md`；项目级记录 → `.workbuddy/memory/MEMORY.md`。这些文件存放在你本机。想看存储内容，说"给我看你的 MEMORY.md"；想删除，说"忘掉我所有偏好"或手动 `rm ~/.workbuddy/MEMORY.md`（全局）/ `rm -rf .workbuddy/memory/`（项目级）。晋升过程静默，以免打断你工作。
@@ -186,7 +207,7 @@ CLI 助手、运行要求、架构树与扫描器误报说明已移到此处，�
 | 运行时 | 智能体直接读 `knowledge/` —— **无强制依赖**。 |
 | 可选 CLI 助手 | `python3`（仅标准库）。`scripts/*.py` 用 `json` 加载 `scripts/*.json` —— **无需 PyYAML**。 |
 | 兄弟技能 | `ct-registry`、`ct-safety`、`ct-literature`、`ct-samplesize`（仅用于数据路由 / 接地；竞品情报简报由本技能缝合三源；缺失时优雅降级）。均从 GitHub 安装：`ct-registry`→`https://github.com/medstatstar/ct-registry`、`ct-safety`→`https://github.com/medstatstar/ct-safety`、`ct-literature`→`https://github.com/medstatstar/ct-literature`、`ct-samplesize`→`https://github.com/medstatstar/ct-samplesize`（克隆到 `~/.workbuddy/skills/<slug>`）。缺失时顾问会直接打印其 GitHub 地址。 |
-| Coze 模式（可选·仅顾问后端） | 可选启用 `backend: coze` + `coze.bot_id` 让顾问后端把问答路由到扣子 bot；**中等/复杂问题的答案精校需要 `requests`**（缺失时自动安装）。简单问题从不调用 Coze。 |
+| 云端分析（Coze） | **所有**问题都会单次发往 Coze 端点分析——需要 `requests`（缺失时自动安装）。本地 `knowledge/` 仅作故障兜底。 |
 
 ### 架构
 ```
@@ -201,7 +222,7 @@ ct-advisor/
 │   ├── check_deps.py     # 仅本地能力探针
 │   └── search_refs.py    # 专题参考定位器
 ├── adapters/             # 推理出口 / 数据接地 / 问答 三层可切换适配
-└── config.json           # 运行时后端选择（后端默认 local → 方法学零出站；简单问题本地作答零出站；中等/复杂答案精校走 Coze 远程）
+└── config.json           # 运行时后端选择（所有问题转发 Coze；兄弟技能经 need_tool 本地执行；Coze 失败时本地 knowledge/ 兜底）
 ```
 
 ### CLI 示例（开发者）
@@ -212,11 +233,11 @@ python3 scripts/menu.py --tier data_skill --human --lang zh   # 预览单个 tie
 ```
 
 ### 扫描器误报说明 
-部分自动化扫描器会标记 `adapters/`，因其含看似网络或凭据相关的字符串。需区分两条路径：(1) **顾问后端** `CozeBackend.advise()` 与 `_post()` 是惰性桩，均抛 `NotImplementedError`，除非你显式实现并在 `config.json` 中启用 Coze 路由，否则不读取 token、也不发起 HTTP 请求——该路径确实惰性。(2) **中等/复杂问题的答案精校走 Coze**：`scripts/refine_answer.py` 每答一次中等/复杂问题即把 5 变量 POST 到扣子精校器，故 `requests` 由恒定启用的精校器导入（并非仅存在于未激活路径）。**简单**问题本地作答、**无任何出站调用**，故运行简单问题时为零出站。对中等/复杂问题，按发布原样运行**并非**零出站——方法学知识从本地 `knowledge/` 检索，但每一条被精校的答案都会发往 `ct-advisor.coze.site/run`（PII 经 `sanitize()` 脱敏，`query_origin` 为非 PII 的 `sha256` 机器标识）。仓库内无密钥（Coze token 仅精校运行、从 `config/coze.dat` / 环境变量读取）。
+部分自动化扫描器会标记 `adapters/`，因其含看似网络或凭据相关的字符串。需区分两条路径：(1) **顾问后端** `CozeBackend.advise()` 与 `_post()` 是惰性桩，均抛 `NotImplementedError`，除非你显式实现并在 `config.json` 中启用 Coze 路由，否则不读取 token、也不发起 HTTP 请求——该路径确实惰性。(2) **所有问题的云端分析走 Coze**：`scripts/refine_answer.py --forward` 每答一题即把 payload POST 到扣子分析器，故 `requests` 由恒定启用的分析器导入（并非仅存在于未激活路径）。按发布原样运行，**每个问题都会出站**——问题文本会发往 `ct-advisor.coze.site/run`（PII 经 `sanitize()` 脱敏，`query_origin` 为非 PII 的 `sha256` 机器标识）。公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`——**仓库内无明文密钥**。
 
 ---
 
-**版本**：v0.9.51 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v0.9.62 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 

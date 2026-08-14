@@ -1,0 +1,91 @@
+{
+  "version": "2026-08-14",
+  "description": "need_tool 执行卡 → 本地技能执行映射表。params 键对齐各技能 CLI 的 argparse 参数；布尔参数 true 才加 flag。",
+  "skills": {
+    "ct-registry": {
+      "skill": "ct-registry",
+      "cmd": "python",
+      "args": ["{SKILLS_DIR}/ct-registry/scripts/ct_registry.py"],
+      "params": {
+        "cond": {"flag": "--cond", "type": "str", "default": null, "required": false},
+        "intr": {"flag": "--intr", "type": "str", "default": null, "required": false},
+        "sponsor": {"flag": "--sponsor", "type": "str", "default": null, "required": false},
+        "status": {"flag": "--status", "type": "str", "default": null, "required": false},
+        "max": {"flag": "--max", "type": "int", "default": 20, "required": false},
+        "drug": {"flag": "--drug", "type": "str", "default": null, "required": false},
+        "with_cde": {"flag": "--with-cde", "type": "bool", "default": false, "required": false},
+        "cde_keyword": {"flag": "--cde-keyword", "type": "str", "default": null, "required": false}
+      },
+      "output": "json",
+      "timeout": 120,
+      "required_params": ["cond"],
+      "note": "联网检索 ClinicalTrials.gov v2 / CDE / ChiCTR；WAF/浏览器/token 均在本地环境"
+    },
+    "ct-safety": {
+      "skill": "ct-safety",
+      "cmd": "python",
+      "args": ["{SKILLS_DIR}/ct-safety/scripts/ct_safety.py"],
+      "params": {
+        "drug": {"flag": "--drug", "type": "str", "default": null, "required": true},
+        "event": {"flag": "--event", "type": "str", "default": null, "required": false},
+        "top": {"flag": "--top", "type": "int", "default": 10, "required": false},
+        "date_from": {"flag": "--date-from", "type": "str", "default": null, "required": false},
+        "date_to": {"flag": "--date-to", "type": "str", "default": null, "required": false},
+        "run": {"flag": "--run", "type": "bool", "default": true, "required": false}
+      },
+      "output": "json",
+      "timeout": 120,
+      "required_params": ["drug"],
+      "note": "openFDA FAERS disproportionality 信号检测（PRR/ROR/EBGM + 95%CI）"
+    },
+    "ct-literature": {
+      "skill": "ct-literature",
+      "cmd": "python",
+      "args": ["{SKILLS_DIR}/ct-literature/scripts/ct_literature.py"],
+      "params": {
+        "topic": {"flag": "--topic", "type": "str", "default": null, "required": true},
+        "year_from": {"flag": "--year-from", "type": "int", "default": null, "required": false},
+        "year_to": {"flag": "--year-to", "type": "int", "default": null, "required": false},
+        "safety": {"flag": "--safety", "type": "bool", "default": false, "required": false},
+        "max": {"flag": "--max", "type": "int", "default": 20, "required": false},
+        "with_europepmc": {"flag": "--with-europepmc", "type": "bool", "default": true, "required": false}
+      },
+      "output": "json",
+      "timeout": 120,
+      "required_params": ["topic"],
+      "note": "OpenAlex / Europe PMC / Semantic Scholar 文献检索（公开源）"
+    },
+    "ct-samplesize": {
+      "skill": "ct-samplesize",
+      "cmd": "python",
+      "args": ["{SKILLS_DIR}/ct-samplesize/scripts/samplesize_power.py"],
+      "extra_args": ["--yes"],
+      "params": {
+        "test": {"flag": "--test", "type": "str", "default": null, "required": false},
+        "alpha": {"flag": "--alpha", "type": "float", "default": 0.05, "required": false},
+        "power": {"flag": "--power", "type": "float", "default": 0.8, "required": false},
+        "nobs": {"flag": "--nobs", "type": "int", "default": null, "required": false},
+        "effect": {"flag": "--effect", "type": "float", "default": null, "required": false},
+        "k_groups": {"flag": "--k_groups", "type": "int", "default": 2, "required": false},
+        "side": {"flag": "--side", "type": "str", "default": "two", "required": false},
+        "sd": {"flag": "--sd", "type": "float", "default": null, "required": false},
+        "p1": {"flag": "--p1", "type": "float", "default": null, "required": false},
+        "p2": {"flag": "--p2", "type": "float", "default": null, "required": false}
+      },
+      "output": "text",
+      "timeout": 60,
+      "required_params": ["test"],
+      "effect_params": ["p1", "p2", "effect", "sd", "margin"],
+      "test_hints": {
+        "率|比例|有效率|缓解率|应答率|ORR|响应率|百分比": "proportion_two",
+        "均值|平均|连续|评分|量表|血压|HbA1c": "ttest_ind",
+        "生存|OS|PFS|时间|死亡|总生存|无进展": "survival",
+        "配对|前后|自身对照": "ttest_paired",
+        "非劣效|non-inferiority": "non_inferiority",
+        "等效|equivalence|BE|生物等效": "equivalence",
+        "单组|单臂|单样本": "proportion_one"
+      },
+      "note": "样本量/效能计算；默认引擎 coze R 服务，本地 Python 兜底；执行卡场景视为已确认，自动带 --yes 执行计算"
+    }
+  }
+}
