@@ -12,6 +12,7 @@
   - **【架构】§16.9 出站收口**：`scripts/check_coze.py` 的 `requests.get` 抽到 `adapters/http_probe.py`（新增），scripts/ 层零出站。
   - **【对齐】README 两份**：保密声明口径 16+ → 20+（§13.1 定稿）；首屏 CLI 命令移入进阶参考（§13.3）；隐私/出站段更新为全量转发 + coze_token_embedded 描述。
   - **未发布**：以上均为本地改动，未推送任何平台（git push / ClawHub / SkillHub 仍待用户授权）。
+- **目录整理**（2026-08-14）：`coze/` 云端部署项目（project_20260812_152011 等，1.9M）整体并入 `adapters/coze/`，技能顶层统一为 adapters/assets/config/knowledge/references/scripts 六目录；发布排除规则（`.gitignore`/`.clawhubignore`）同步为 `adapters/coze/` 整目录；`references/tone_writing.md` 去除 `coze/` 路径断链；清理历史 zip 与 `.ctbase_injected.json`。云端项目仍不随技能发布，本地运行时零依赖。
 
 ## v0.9.61 (2026-08-13) — 兄弟技能调用协议：披露 5 要素 + 确认门 + 回灌 advisor
 
