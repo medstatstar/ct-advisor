@@ -18,7 +18,7 @@
                 - difficulty: 问题难度 simple | middle | complex | vague（gate-0 分流结论）
                 - category:   问题类别（如 methodology:B / methodology:C / design / compliance:D，或匹配的 A–J 工作流；样本量用 methodology:C）
                 - accuracy:   自评准确度 good | normal（good = 精确，normal = 一般）
-                - query_origin: 审计元数据——请求标识（每进程随机生成，sha256 哈希，非主机派生、不含 IP/主机名明文），
+                - query_origin: 审计元数据——机器标识（sha256(hostname)，主机派生的稳定标识：不含明文主机名/IP，但同设备跨请求稳定；不可逆；《隐私段》已向用户披露），
                                 由脚本在 normalize() 时自动盖章写入本 dict（不再另设顶层字段）
 - original_question:  用户的原始问题（未加工原话）
 - draft_answer:       本地生成的答案（草稿），供服务器参考/精校（允许空串）。

@@ -46,10 +46,6 @@
   - **Hard prohibitions**:
     - never create temp files inside the skill dir / workspace (the safe-delete hook blocks relative-path deletion)
     - never use `python -c "..."` to pass JSON containing full-width symbols (uncontrolled encoding)
-- ⚠️ **Windows heredoc Chinese-JSON pitfall (2026-08-05)**: a Windows bash heredoc passing Chinese JSON with full-width parens/quotes raises `SyntaxError: invalid character '）' (U+FF09)`, causing a silent fallback to the local draft (Coze not called). Alternatives:
-  - Option A (recommended): use `tempfile.mkstemp(suffix='.py', text=True)` to write an absolute-path .py file + `os.unlink()` to clean up
-  - Option B: use `python -c "..."` + `sys.stdin.buffer` byte stream (still mind nested quotes)
-  - hard prohibition: never create temp files inside the skill dir / workspace (the safe-delete hook blocks relative-path deletion)
 
 ### 3. Language Detection (ct-base bilingual policy)
 - Default follows OS locale (English unless `zh-*`); one-sentence switch supported via `scripts/switch_lang.py <lang> [--permanent]` (session or permanent in `config.json` `language`).

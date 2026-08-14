@@ -189,7 +189,7 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 - 输出仅供参考；申报 / 决策前请对照官方原文核实。
 
 ### 出站与隐私（中等/复杂问题答案精校走 Coze）
-- **出站路径 = 云端分析（Coze，所有问题）**：由于临床试验对答案质量要求很高，本技能会将你的问题**单次**发送到服务器 **`https://ct-advisor.coze.site/run`** 在完整数据库中分析（`scripts/refine_answer.py --forward`，外发 `query_meta`（含 `query_origin` 机器标识）+ `original_question`，出站前先经 `sanitize()` 脱敏）。公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`（作者公开发布），请原样保留、勿替换为自有 token。Coze 超时/出错时才降级为本地 `knowledge/` 答案，但**仅为故障兜底**。因此 **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据** 。
+- **出站路径 = 云端分析（Coze，所有问题）**：由于临床试验对答案质量要求很高，本技能会将你的问题**单次**发送到服务器 **`https://ct-advisor.coze.site/run`** 在完整数据库中分析（`scripts/refine_answer.py --forward`，外发 `query_meta`（含 `query_origin` 机器标识）+ `original_question` + `draft_answer`（你的本地草稿会一并发往云端以供精校），出站前先经 `sanitize()` 脱敏）。公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`（作者公开发布），请原样保留、勿替换为自有 token。Coze 超时/出错时才降级为本地 `knowledge/` 答案，但**仅为故障兜底**。因此 **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据** 。
 - **兄弟数据技能在本地执行**：当问题需要注册库 / 信号 / 文献 / 样本量数据时，Coze 返回 `need_tool` 执行卡，技能随后在**本地**执行（自身的公开源检索 / 计算）并把结果缝合进 Coze 草稿——只有执行卡参数与草稿跨边界传输，机密数据绝不离开本机。
 - **机器标识已哈希、非 PII**：`query_origin`（嵌套在 `query_meta` 内）为 `sha256(hostname)`——稳定的按机器标识符，仅用于按机器的审计与归因及 Coze 侧限流。**不含明文主机名、IP 或其他 PII**。
 - **默认不写本地磁盘**：`qa_store` 默认 `noop`，不保留任何问答记录；可选 `qa_store.mode: local` 才会将完整问答追加写入本机 `data/qa_log.jsonl`（未加密，请视为敏感文件并加入 `.gitignore`）。
@@ -247,7 +247,7 @@ python3 scripts/menu.py --tier data_skill --human --lang zh   # 预览单个 tie
 
 > CT 全系列技能由 20+ 个技能构成，按「保密信息出域风险 + 是否对外检索」分为 A、B、C、D 四级，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
 
-> - **A 级 / B 级（不涉密）**：完全本地运行、仅使用普通数据；B 级虽需对外公开检索，但不涉及任何保密信息。这两级技能均会在 GitHub 公开发布。
+> - **A 级 / B 级（不涉密）**：仅使用普通（不涉密）数据；A 级完全本地运行，B 级可能将问题单次发送至公开的云端分析端点（如 Coze 端点）或对外公开检索，但绝不涉及保密信息。这两级技能均会在 GitHub 公开发布。
 > - **C 级 / D 级（涉密）**：涉及药企需严格保密的临床试验数据、内部资讯等敏感内容（如 ct-analysis、ct-sdtm 等）；C 级在本地处理、数据不出域，D 级还需政策审批。这两级技能仅限企业内部使用，目前不对外公开发布。
 
 > 若您对这些涉密技能确有实际需求，欢迎与作者联系，定制并安装相关技能。
