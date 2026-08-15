@@ -6,24 +6,28 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 # Answer Workflow — Steps 0-6 (Detailed)
 
-> **🔴 2026-08-14 mode change — FORWARD REPLACES RACE/SERIAL**: the local skill no longer triages or answers — **every** question is forwarded to Coze once (`refine_answer.py --forward`); local `knowledge/` answers only as the Coze-failure fallback; sibling skills run **only** on the Coze-issued `need_tool` card (execute `scripts/handle_need_tool.py` + stitch locally, never re-send). Steps 0–5 below are **legacy race/serial detail kept for back-compat reference only** — do NOT run `route.py`, `--fire-only`, or `--collect` in forward mode. The authoritative current flow is the SKILL.md Answer Workflow table + `ops.md` §step-7-cookbook.
+> **🔴 2026-08-14 mode change — FORWARD REPLACES RACE/SERIAL**: the local skill no longer answers locally — **every** non-vague question is forwarded to Coze once (`refine_answer.py --ship`, or `orchestrate.py` for data-intel); local `knowledge/` answers only as the Coze-failure fallback; sibling skills run **only** on the Coze-issued `need_tool` card (execute `scripts/handle_need_tool.py` + stitch locally, never re-send). **Entry difficulty gate**: `scripts/route.py` (deterministic, LLM-free) runs **once** at question entry to label difficulty; `vague` → Local Clarify Loop (`clarify_loop.py`) then Coze, others → verbatim forward with `query_meta.difficulty`. Steps 1–5 below are **legacy race/serial detail kept for back-compat reference only** — do NOT run `--fire-only` or `--collect` in forward mode (the `route.py` gate IS the current entry step). The authoritative current flow is the SKILL.md Answer Workflow table + `ops.md` §step-7-cookbook.
+
+> **🔴 2026-08-15 v0.9.68 update**: for data-intel questions (sample-size / registry / safety / literature) the preferred entry is now `scripts/orchestrate.py` (code-only orchestrator: prefetch + parallel Coze/skill + decide, emits wrapped answer or `<<<CT_TOOL_DELEGATE>>>`); `--ship` is the non-orchestrate fallback answer path. `--forward` is debug-only. The LLM is never the orchestrator — it only delegates ct-skill calls and handles need_params + Coze-failure fallback.
 
 > **Core principle**: payload always travels through the in-memory pipeline (`--payload-inline` or stdin), **never** Write/Bash temp JSON files.
 
 ---
 
-## Step 0 — No local triage (forward mode, 2026-08-14)
+## Step 0 — Code-based difficulty gate (2026-08-14 晚)
 
-**Goal**: NONE — the local skill makes **no difficulty/category judgment** and runs **no router**. Between receiving the question and firing Coze there is **zero local work** (no `route.py`, no `knowledge/` read, no `search_refs.py`). `query_meta.difficulty` may stay empty (script defaults to `complex`); Coze-side workflow routes internally.
+**Goal**: run `scripts/route.py` **once** at question entry to label difficulty (`simple` / `vague` / `middle` / `complex`). Deterministic, LLM-free, stdlib-only — the **only** local work permitted before Coze (no `knowledge/` read, no `search_refs.py`, no multi-round local retrieval). `route.py` only labels; it does **not** decide local-vs-remote.
 
-Legacy triage table (race/serial) — **deprecated, never invoked**; kept for history:
+**Branch after the gate**:
 
-| difficulty | legacy trigger | legacy path |
-|---|---|---|
-| `simple` | single fact / definition / standard operation | local-only (no Coze) — **replaced by forward** |
-| `middle` | explanation / comparison / multi-step | race (fire-only + collect) — **replaced by forward** |
-| `complex` | multi-angle / external data | serial (await Coze) — **replaced by forward** |
-| `vague` | incomplete / ambiguous | clarify loop (`scripts/clarify_loop.py`, still pure-local) → then forward |
+| label | action |
+|---|---|
+| `vague` | enter the **Local Clarify Loop** (`scripts/clarify_loop.py`, the heuristic menu) to clarify requirements (1–3 high-value questions/round, hard cap 3 rounds); on status `decidable`/`forced_decide` re-gate on the enriched question and route per the table (data-intel → `orchestrate.py` preferred, else `--ship`) with `query_meta.difficulty="vague"`. |
+| `simple` | forward via `scripts/orchestrate.py` (data-intel preferred) or `refine_answer.py --ship` (fallback) with `query_meta.difficulty="simple"`. |
+| `middle` | forward verbatim to Coze with `query_meta.difficulty="middle"`. |
+| `complex` | forward verbatim to Coze with `query_meta.difficulty="complex"`. |
+
+All non-`vague` labels go to Coze **verbatim** (forward-only).
 
 **🔴 Run the router (mandatory, code-only)**:
 
@@ -33,18 +37,12 @@ python scripts/route.py "用户问题原文"
 #   → 打印一个标签：simple | vague | middle | complex
 # 调试：python scripts/route.py --json "…"   /   回归：python scripts/route.py --self-test
 
-# 路由后分流：
-#   simple  → 本地直答（可挂参考文档），不发车 Coze。
-#             判定 = 句式词典(定义/标准操作) 或 knowledge 白名单 SIMPLE_TOPICS 命中
-#             且 无 CPLX/EXCL 信号（白名单不会把设计/统计/监管类拉进 simple）。
-#   vague   → AskUserQuestion 澄清 → 重跑 route.py
-#   middle  → 立即后台 fire Coze（race），collect 后 verbatim 呈现
-#   complex → 本地出初步（挂参考文档、单次生成）→ 串行 fire Coze 精校 → 呈现 Coze
+# 分流结果见上方 Branch 表：vague → 本地澄清菜单，其余级别 verbatim 转发 Coze（forward-only）。
 ```
 
 **📖 `simple` whitelist (SIMPLE_TOPICS)**: `route.py` ships a built-in `SIMPLE_TOPICS` whitelist — standard-operation / definition phrases taken from `knowledge/reference-index.md` coverage topics (e.g. ALCOA, SAE reporting timeline, drug accountability, emergency unblinding, screening log, DB lock, informed-consent withdrawal). A whitelist hit with no complex / exclude signal → `simple`; it is a **deterministic lookup table** (immune to phrasing drift). **Maintenance rule**: any new entry MUST pass `python scripts/route.py --self-test` + bank eval confirming zero leak-to-simple (a non-simple question pulled into `simple` = missing the Coze fire/collection — red line).
 
-**⚠️ Pre-routing interception (mandatory)**: when classifying difficulty, analyze the intent of `original_question` — if it requires calling an external skill for data (ct-registry / ct-safety / ct-literature → step 3 handoff) or computing sample size / power (→ step 4 handoff), **difficulty MUST NOT be simple/middle; only complex is allowed** (vague never reaches this gate). Reason: data pull / n computation depends on real external output and must await Coze's full return to integrate into the answer; a race-mode local fallback would lose that data.
+**⚠️ Pre-routing interception (mandatory)**: when classifying difficulty, analyze the intent of `original_question` — if it requires calling an external skill for data (ct-registry / ct-safety / ct-literature) or computing sample size / power (ct-samplesize), **difficulty MUST NOT be simple/middle; only complex is allowed** (vague never reaches this gate). Reason: data pull / n computation depends on real external output that Coze integrates via its `need_tool` handoff; labelling it simple/middle would under-signal Coze and lose that grounding.
 
 **🔴 Difficulty bias rule (guardrail against misjudging as complex)**:
 
@@ -54,22 +52,21 @@ When the question **does not involve external data pull / sample size computatio
 - question explicitly asks for multi-option comparison + recommendation ("which one / best approach")
 - composite judgment spanning ≥2 workflows
 
-**Pure methodology questions (e.g., "how to do X", "what to watch for in X", "difference between X and Y") are always `simple` or `middle` (never `complex`)** — the local knowledge pack covers 80%+ of the content: `simple` answers directly from `knowledge/` (local-only, no Coze); `middle` runs race mode (Coze-refined output is the final answer, no serial wait). Among them: **single fact / definition / standard operation → `simple`**; explanation / comparison / multi-step reasoning → `middle`.
-**Typical misjudgment example**: "How to ensure data integrity when migrating from paper CRF to EDC?" → although multi-step, the local knowledge pack (ref-ops-data §4.12) has complete guidance and no external data is needed → should be judged `middle` (race), not `complex` (serial).
+**Pure methodology questions (e.g., "how to do X", "what to watch for in X", "difference between X and Y") are always `simple` or `middle` (never `complex`)** — the label only sets `query_meta.difficulty` for Coze's refinement depth; the question is still forwarded verbatim to Coze (forward-only, no local answer). Among them: **single fact / definition / standard operation → `simple`**; explanation / comparison / multi-step reasoning → `middle`.
+**Typical misjudgment example**: "How to ensure data integrity when migrating from paper CRF to EDC?" → although multi-step, no external data is needed and no n computation is involved → should be judged `middle`, not `complex`.
 
-**🚫 Anti-shortcut warning (HARD GATE)**: **`middle` MUST run the full step 1→2→6 flow (fire BEFORE Step 2 local Route matching); `complex` MUST run the full step 2→3→4→5→6 flow; `simple` runs step 2→6 local-only (Step 1 skipped, no Coze).** Do NOT use any of the following "invisible pre-judgments" to skip steps (applies to `middle`/`complex`; `simple` is local-only by design, not a shortcut):
+**🚫 Anti-shortcut warning (HARD GATE)**: for `simple` / `middle` / `complex`, the **only** allowed action is verbatim forward to Coze (`scripts/orchestrate.py` for data-intel, or `refine_answer.py --ship`) with `query_meta.difficulty` set — there is **no local-answer path**. Do NOT use any of the following "invisible pre-judgments" to skip forwarding (this applies to all three non-vague labels; `simple` is a difficulty label for `query_meta`, **not** a license to answer locally):
 - ❌ "the knowledge base already has a clear answer, just retrieve and output it"
-- ❌ "search_refs.py found it, no need to refine"
+- ❌ "search_refs.py found it, no need to forward"
 - ❌ "the question is too simple, Coze would just repeat"
-- ❌ "the local answer is good enough, no need to wait for Coze"
+- ❌ "the local answer is good enough, no need to forward"
 
-**Coze is the referee, not the backup**: the race design lets Coze and the local answer run in parallel, with the winner outputting — **not letting the agent pre-judge "Coze is useless" and skip it.**
+**Coze is the sole answer path, not a backup**: under forward-only the question always goes to Coze; the local knowledge pack is only a fallback when Coze fails (see `ops.md`) — **never** let the agent pre-judge "Coze is useless" and answer locally.
 
-**Interaction strategy**:
-- `simple` → answer directly from local `knowledge/` (don't pop a clarification menu first; **no Coze — local-only mode, Step 1 skipped entirely**)
-- `complex` → show the clarification menu (`scripts/menu.json` via `scripts/i18n.py`)
-- `vague` → grill-me style `AskUserQuestion` (≤ 4 questions)
-- when unsure between simple/middle/complex → brief direct answer + optional deep-dive menu
+**Interaction strategy** (legacy reference — see Step 0 Branch table above for the current gate):
+- `simple` / `middle` / `complex` → verbatim forward to Coze (forward-only); no local answer, no menu
+- `vague` → run the **Local Clarify Loop** (`scripts/clarify_loop.py`, the heuristic menu) — bounded 1–3 questions/round, hard cap 3 rounds (replaces the old free-form grill-me probing from the pre-forward-era design)
+- when unsure between simple/middle/complex → still forward verbatim; do not answer locally
 
 ---
 

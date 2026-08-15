@@ -1,5 +1,80 @@
 # Changelog
 
+## v0.9.69 (2026-08-15) — 七大流程端到端测试 + Coze 干净替换包 + 线上一致性检查（纯验证/打包，无逻辑改动）
+
+- **新增 `scripts/test_seven_flows.py`（七大流程回归 harness，7/7 全绿）**：加载**真实本地 Coze 决策代码** `tool_router_node._match_tool()`（仅对其未安装的平台依赖 pydantic/langchain/langgraph/coze_coding_utils 做导入桩），驱动 7 个典型流程经真实 `route_tool.predict()` + `orchestrate.build_output()` + `_enrich_coze_params()`。覆盖：方法论包裹 / 同判包裹不重复调 / registry 参数富集（断言含 cond，实证 P0/P2）/ 跨工具委托 / Coze 兜底委托 / 缺参追问委托 / 执行失败重试委托。关键发现：前端与 Coze 规则集与顺序不同（前端 samplesize 优先、Coze registry 优先），编排器正确处理同判/异判/缺参/失败。
+- **Coze 干净替换包**：`adapters/coze/project_20260812_152011_clean_20260815.zip`（76 文件 / ~422KB，结构 `project_20260812_152011/projects/...` 可整体替换上传）。剔除 4 项：`.coze/`（平台内部空目录）、`assets/refiner_contract*.md`（coze 接口契约文档，按发布规范不打包，且不在 KB 索引、非运行时加载）、`assets/2026-08-05 113007.004 0b543bb6.txt`（平台运行时日志垃圾）。
+- **线上代码一致性检查**（用户提供 `Downloads/project_20260815_093047.tar.gz`）：线上 `projects/` 与本地源 **78/79 文件 MD5 一致**（含 tool_router_node 同步 docstring「真实必填参数由本地 route_tool.py 抽取」）；仅 3 处文档级差异（线上多 `coze_sync_guide_knowledge.md`、根缺 `NEED_TOOL_SCHEMA.md`（代码零引用、不影响运行）、category-reference 路径写法不同），无代码级问题。
+- **飞书写入机制说明（文档化）**：`async_feishu_write` 在 5 个 review 节点（cache_check/simple/middle/complex/full_analysis）内部以后台 daemon 线程异步调用，**不是 graph 节点**（graph.py「移除 feishu_write 节点」）；令牌来自 Coze 平台集成凭据 `integration-feishu-base`（仅平台运行时存在），记录落在飞书多维表格（app/table 硬编码），成功/失败仅写平台日志；本地测试不执行 review 节点 → 看不到飞书记录属正常。
+- **验证**：test_seven_flows 7/7；线上检查 MD5 全量对比 79 文件；zip 校验 76 文件无泄漏排除项、关键路径齐全。
+- **§16 发布前检查 + STILL_PRESENT 6 项整改留痕**（基于 ct-base/BASE.md §16）：§16.1–§16.7/§16.9 通过；§16.6 两处 `zero-outbound` → `no outbound`（SKILL.md L111/L161，免疫 §16.6 grep 校验）；SKILL.md L63 `POSTs 3 variables` → `POSTs 3 top-level variables（query_meta / original_question / draft_answer…）` 消除歧义（审计 LOW Intent-Code Divergence）；ClawHub 审计 STILL_PRESENT 6 项逐项人工确认「设计如此/已披露/无实际风险」并留痕（`docs/clawhub_audit_trace_20260815.md`）：subprocess 白名单+无 shell / query_meta 口径已澄清 / public credential 用户授权+已披露 / original_question 出站已披露 / query_origin §8.6 规范 / mandatory 无害词汇命中无实际矛盾。UNVERIFIED 17 项人工核对 0 项需强制整改。**§16.8 遗留阻断已修复**：term_map 共享件同步（底座 53 key 补入叶子，243 keys 字节级一致，shared_sync rc=0）+ `scripts/test_seven_flows.py` 加入 `.clawhubignore`/`.gitignore`（git dry-run 泄漏计数 0）。
+- **未发布**：纯本地改动（版本号 bump 仅 SKILL/README/README_zh-CN/CHANGELOG），未 push / 未发布三平台 / 未上传 Coze，待用户授权。
+
+
+## v0.9.68 (2026-08-15) — 代码全自动编排器 `orchestrate.py`：预判预取 + 并行触发 + 决策全自动，ct 技能调用委托本地大模型
+
+- **新增 `scripts/orchestrate.py`（代码全自动编排器，模式 B + 委托本地大模型）**：入口用 `route_tool.py` 高置信预判所需 ct 技能；在**代码内**以多线程**并行**触发 Coze 与预判的 ct 技能；合并两边结果并**由代码判定信息是否已足够**。
+- **两类输出**（复用 `--ship` 同协议）：① 信息足够 → `<<<CT_ANSWER_START>>>`…`<<<CT_ANSWER_END>>>` 定界包裹答案（含 sha256 校验和），本地大模型只做原样透传（pipe）；② 仍需 ct 技能 → 输出 `<<<CT_TOOL_DELEGATE>>>` 结构化委托块（need_tool / params / draft_answer / original_question / missing_params）。
+- **本地大模型定位（用户确认）**：**不是编排器**；收到委托块后只做两件事——① 向用户追问缺失参数（不编造）；② 把执行卡交给 `refine_answer.py --card-inline '<JSON>'`，由**代码**执行技能 + 确定性缝合 + 包裹答案。大模型**不**判定「信息是否足够」、**不**重写 Coze 文本。
+- **新增 `scripts/route_tool.py`（模式 B 前端高置信预取，确定性、无 LLM）**：高置信才输出 `need_tool`（命中明确工具触发词 + 非 vague + 非定义/纯方法论）；漏判由 Coze 的 `need_tool` 兜底（不替代 Coze）。内置自测 15/15。
+- **kw-gate 修复**：`tool_mapping.json` 的 `ct-registry` 新增 `extra_args: ["--auto-confirm"]`——translation miss 时直接用中文原文检索 CT.gov，避免 `sys.exit(2)` 卡死预判/编排流程。ct-safety / ct-literature 无确认门，不追加该参数（追加会触发 `unrecognized arguments` 错误）。
+- **文档同步**：SKILL.md（新增 Code Orchestrator 段 + Routing 表 + Forward & stitch HARD GATES 加 orchestrate 项 + 执行卡协议改写）、knowledge/system_prompt.md（§0a 加编排器 + 委托协议）、references/ops.md（cookbook 加 orchestrate 调用 + `<<<CT_TOOL_DELOGATE>>>` 协议）、**两份 README 全量审计**——顶部/性能提示/概述改「非模糊问题经本地代码编排器 `orchestrate.py` 并行预取+合并+缝合、agent 只透传」；示例 3 改「本地代码编排器 dispatch+缝合（非 agent 手工）」；示例 4/5 改「走本地编排器 / vague 收敛后重跑难度判定再分流」；架构树补全 `route.py / route_tool.py / orchestrate.py / refine_answer.py / handle_need_tool.py / clarify_loop.py` 并修正注释；§2「five→four sibling skills」；版本号 → 0.9.68。
+- 内置自测：orchestrate 决策 8/8、route_tool 预判 15/15，均 100%。
+
+## v0.9.68 修复（2026-08-15，续上条）—— need_tool 场景参数链路纠偏（含 Coze 侧同步）
+
+> 上一轮只读文档审计后，本轮从 Coze 代码包入手做了调用前后全链路 +「需要 ct 技能」各场景深度审计，发现并修复以下真实问题（全为本地代码 + Coze 契约同步，未动脚本外部行为红线）。
+
+- **🔴 P0 REKEY 修复（`route_tool.py`）**：`ct-registry` 分支原抽到 `params["drug"]`，但 `tool_mapping.json` 的 `required_params` 是 `["cond"]`，键对不上 → 前端预判对 registry 永远满足不了必填项、必然 `need_params`，预判形同虚设。改为抽取 **`cond`**（覆盖 药/抑制剂/单抗/药物/化合物/制剂/类 等形态，并裁剪「检索/查/针对」等前导动词），并将 `cond` 正确填充进执行卡。自测新增 **参数键断言**（校验 REKEY 不回潮：registry 抽 `cond` 非 `drug`、samplesize 抽 `p1/p2`），route_tool 现 15/15 + 参数 3/3。
+- **🟠 P1 `--ship` 参数富集（`refine_answer.py`）**：`--ship` 的 `need_tool` 分支原只拿 Coze 返回的默认参数（`max/top/alpha/power`）建卡，从不调 `route_tool.predict()`，导致纯 `--ship` 路径下任意 `need_tool` 100% 落 `need_params`，与「跳过大模型」目标在需要调技能时完全相悖。现合并本地 `route_tool.predict(original_question)` 抽到的真实参数（`cond/drug/topic/test/p1/p2`）覆盖 Coze 默认值（同工具才合并），使「代码跳过大模型」在 need_tool 场景也成立。**已确定性验证**：Coze `{'max':20}` + 前端 `{'cond':'PD-1抑制剂'}` → 合并卡含 `cond` → `handle_need_tool` 判定 `ok`（非 need_params）。
+- **🟡 P2 编排器委托分支参数富集（`orchestrate.py`）**：「Coze 需不同工具」分支(2c)/无预判分支(2f)委托时原复用 `coze_params`（Coze 默认值），未对 Coze 工具重新抽参，大概率再弹一轮 `need_params`。现 `build_output` 入口对 `coze_params` 统一做 `route_tool` 富集（与 `--ship` 同策略）。
+- **Coze 侧同步**：`tool_router_node.py` 设计约束段 + `NEED_TOOL_SCHEMA.md` 全面对齐——明确「Coze 仅判工具类别 + 可选默认值（max/top/alpha/power），**不抽取真实必填参数**（cond/drug/topic/test/p1/p2）；真实必填参数由本地 `route_tool.py` 抽取、缺失时本地 `need_params` 追问、代码执行器 `--card-inline` 缝合」；修正示例 `params`（去掉 Coze 不会返回的 `cond` 真实值）、`max` 默认 50→20、将「缝合由本地大模型完成」改为「代码缝合」。两端契约 now 一致。
+- **⚪ P3（设计局限，已文档化）**：`ct-safety` / `ct-literature` 的真实 `drug/topic` 需语义抽取，正则能力天花板、前端不抽参，仍走 `need_params` 追问——属可接受限制，已在 NEED_TOOL_SCHEMA.md 与本条注明。
+- **验证**：route_tool 15/15 + 参数 3/3、orchestrate 8/8、route 24/24；真实 `handle_need_tool` 执行验证 `cond`→`ok`、`drug`→`need_params(cond)`；真实 `--ship` 端到端跑通（定界包裹 + checksum）；P1 富集逻辑确定性单测通过。
+- **未发布**：纯本地改动，未 push / 未发布三平台，待用户授权。
+
+## v0.9.67 (2026-08-15) — 代码旁路主链路 `--ship`：答案组装移入代码，大模型退化为纯管道
+
+- **新增 `scripts/refine_answer.py --ship`（代码旁路主链路）**：单次调用 Coze；若返回 `need_tool`，在**代码内**直接 subprocess 调 `handle_need_tool.py` 执行兄弟技能并做**确定性缝合**（Coze `final_answer` 为骨架 + `## 补充信息（来源：ct-xxx）` + 技能结果），最终答案以 `<<<CT_ANSWER_START>>>` … `<<<CT_ANSWER_END>>>` 定界包裹 + sha256 校验和输出。
+- **新增 `--card-inline`**：`need_params` 重试路径——跳过 Coze 直发，直接用给定执行卡在代码内跑 `handle_need_tool` 并缝合（避免重复调用 Coze）。
+- **核心目的**：根治「Coze 返回后本地大模型多余整合/重排」——agent 不再做答案组装，只做**原样透传（pipe-only）**。新增 🔴 Pipe-only HARD GATE（SKILL.md Forward & stitch 段 + ops.md cookbook + system_prompt.md §0a）。
+- **文档同步**：SKILL.md（Forward & stitch HARD GATES 加 pipe-only 硬门、`--forward`→`--ship`、执行卡协议重写）、references/ops.md（cookbook 改 `--ship` + Behavior 段 + pipe HARD GATE）、knowledge/system_prompt.md（§0a 分流行加 pipe 硬门）、两份 README 版本号。
+- 保留 `--forward` 仅作调试（返回原始 RefineResult JSON，禁止直接 ship）。
+- **唯一无法消除的 LLM 环节**：① Coze 彻底失败时的本地兜底；② `need_params` 缺参需向用户追问（本质人在回路）。其余答案组装全部代码化。
+- **未发布**：纯本地改动，未 push / 未发布三平台，待用户授权。
+
+## v0.9.66 (2026-08-15) — route.py 入口难度判定：vague 优先且判断偏多
+
+- **结构性修复（对齐"vague 必须准确、其余级别仅备用"）**：`route_question()` 判定顺序由
+  `empty→is_simple→CPLX→is_vague→...` 改为 `empty→is_vague→is_simple→CPLX→is_middle→兜底`，
+  **vague 提到第一优先（仅次空串）**。修复此前含代词的 vague 问题（如"这个样本量怎么算"、
+  "那个试验设计要注意什么"）被 CPLX 词截走、误判为 complex 直接转发 Coze 的漏判。
+- **vague 网放宽（判断偏多）**：代词上限 20→24；新增 `ANAPHORA` 回指/省略线索
+  （前面/后面/上面/下面/前者/后者/之前提到/刚才说/上一条/您说的/…），覆盖"前面说的统计检验方法"类漏判；
+  过短兜底保留术语/定义/标准操作精度护栏，避免"上报时限是多少"等清晰短句误判 vague。
+- **自检回归**：内置自测 18→24 例（原 18 全保留 + 6 新增 vague + 1 精度护栏 simple），24/24 通过。
+- 红线：仅本地改动，未 push / 未发布三平台；是否发布待用户授权。
+
+## v0.9.65 (2026-08-15) — need_tool 执行卡接缝硬化（3b 强制硬门 + 骨架字段映射模板）
+
+- **问题（实测风险）**：Coze 在 `need_tool` 分支下把缝合骨架放在响应 `final_answer` 字段；而 `handle_need_tool.py` 读卡时要用 `draft_answer` + `original_question`。原文档只说「读卡里的 need_tool/params/draft_answer」，但从未告诉本地大模型「`final_answer`（刚收到的）必须原样搬进 `--card` 的 `draft_answer`」，也漏了 `original_question`（ct-samplesize 检验类型自动推断依赖它）。缺这层映射，本地大模型容易①漏带骨架→丢 Coze 结构→自己重组（越界改写），或②图省事只交付 Coze `final_answer`、跳过兄弟技能执行。
+- **修复（纯文档，不动脚本）**：
+  - **3b 升级为 🔴 强制硬门**（SKILL.md 需求表 3b 行 + Skill-card execution protocol）：`need_tool` 非空 ⇒ **必须**跑 `handle_need_tool.py`；禁止只交付 Coze `final_answer`、禁止用本地 `knowledge/` 代答、禁止跳过调用。
+  - **补执行卡组装模板**（SKILL.md + ops.md）：明确 `draft_answer := --forward 收到的 final_answer（骨架，原样复制）` / `need_tool` `params` 同值 / `original_question := 用户原话`，并给可直接套用的 JSON 示例。
+  - **`refiner_contract.md` 响应 schema 补齐** `need_tool` / `params` / `run_id` 字段及「骨架」语义（仅本地维护文档，发布时被剔除，不影响线上）。
+- **机制本体未动**：`refiner.py` 透传 `need_tool`/`params`、`handle_need_tool.py` 机械查表执行、`tool_mapping.json` 映射、缺参 `need_params` 追问均保持正确。
+- **未发布**：以上均为本地改动，未推送任何平台（git push / ClawHub / SkillHub 仍待用户授权）。
+
+## v0.9.64 (2026-08-14 晚) — 入口代码级难度门槛回滚激活（vague→本地澄清，其余 verbatim 转发）
+
+- **架构微调（用户决策 2026-08-14 晚）**：在问题入口重新激活确定性难度分类器 `scripts/route.py`（代码级、无 LLM、stdlib-only），作为**唯一入口门槛**：
+  - `vague` → 进入本地启发式澄清菜单 `scripts/clarify_loop.py`（有界 1–3 问/轮、硬上限 3 轮）进一步明确需求，澄清后带 `difficulty="vague"` 转发 Coze；
+  - `simple`/`middle`/`complex` → **verbatim 转发 Coze（forward-only，不本地作答）**，并带 `query_meta.difficulty` 标签（Coze 端点内部再按自身判断路由）。
+  - `route.py` 仅做难度判定，**不决定本地答 vs 发车**；全量直发（forward-only）主线保持不变。
+- **文档同步**：SKILL.md（需求表 Refiner 行 / Answer Workflow Step 1 / 澄清触发段 / 硬门槛段 / 路由表 / "## 🔴 Code-based difficulty gate at entry"）+ steps.md（顶部 notice + Step 0 改写 + 路由分流注释 + Interaction strategy 段）+ ops.md（`difficulty` 字段 + §interaction-increment + 调用 cookbook 注释）+ AGENTS.md（§4 出站行 + §6 交互设计）+ units.md（UNIT-0 分流描述）+ README 两份（vague→Local Clarify Loop / 其余 verbatim 转发口径，含 §4 正文与扫描器误报段）+ **knowledge/system_prompt.md（§0a 分流块、§0 澄清质量门、Routing clarify 能力、§K 澄清模式：由 grill-me/本地作答/弹菜单 统一改写为 route.py 入口门槛 + vague→clarify_loop.py + 其余 verbatim 转发 Coze）+ knowledge/prompts.md（clarify.vague_invite 去 grill-me 措辞）**（§16.6 文档-行为一致性）。
+- **Coze 端联动（上一轮已完成，本地未发布）**：`generate_organized_problems_node.py` 已增加空白 `difficulty` 的 LLM 判定与回写（`config/judge_difficulty_cfg.json`）。
+- **未发布**：以上均为本地改动，未推送任何平台（git push / ClawHub / SkillHub 仍待用户授权）。
+
 ## v0.9.63 (2026-08-14) — 转发提示中立化 + 安全审计整改（发布前 §16 复核）
 
 - **转发提示文案中立化**（commit 2e8a91e）：全量转发后所有问题不再预设"复杂/精校"难度，统一为"正在调用云端分析引擎，请稍候…"（SKILL.md + Coze 端 prompts.md 同步）。

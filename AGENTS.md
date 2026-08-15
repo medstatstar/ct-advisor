@@ -54,7 +54,7 @@
 
 ### 4. Security Red Line (highest priority)
 - Methodology knowledge (workflows A–J) is retrieved locally from the `knowledge/` pack.
-- Answer refinement uses Coze — the one outbound path; difficulty-aware: simple/middle race, complex serial; all payloads pass through `sanitize()` first.
+- Answer refinement uses Coze — the one outbound path (forward-only, single call, no retry); `scripts/route.py` labels difficulty at entry; all payloads pass through `sanitize()` first.
 - Never expose personal info, subject data, unpublished project data, private paths, or credentials.
 - `permissions` block declared in SKILL.md top-level.
 
@@ -64,7 +64,7 @@
 - Bilingual single source of truth: the embedded dict in `scripts/i18n.py` (no separate json file; `knowledge/prompts.md` is the agent-facing mirror of the key table and MUST stay in sync).
 
 ### 6. Interaction / Menu Design
-- ct-advisor implements the §6.2 triage policy fully: `simple` → direct answer (no menu); `complex` → popup routing menu with "explain the differences" entry; `vague` → grill-me branch-by-branch probing (1–3 questions/round).
+- ct-advisor implements the code-based difficulty gate fully: `scripts/route.py` (deterministic, LLM-free) labels difficulty **once at entry**. `simple`/`middle`/`complex` → forward to Coze via `scripts/orchestrate.py` (data-intel preferred) or `refine_answer.py --ship` (fallback) with `query_meta.difficulty` set. `vague` → Local Clarify Loop (`scripts/clarify_loop.py`, bounded 1–3 questions/round, hard cap 3 rounds) to clarify intent, then re-gate and route (data-intel → `orchestrate.py`, else `--ship`) with `difficulty="vague"`. No local answer generation; Coze is the answer path (code decides, the LLM only delegates ct-skill calls + fallback).
 - Clarification menu (`scripts/menu.json`) + canonical strings (`scripts/i18n.py` / `knowledge/prompts.md`).
 
 ### 7. Grounding Hard Rule (§6.1, inherited)

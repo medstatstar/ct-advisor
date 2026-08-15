@@ -12,3 +12,6 @@ references/ops.md
 
 # 明文 JWT 本地辅助（§5 合规：凭据一律走 adapters/coze_token_embedded.py 混淆内嵌，不发布明文）
 config/keys.py
+
+# 测试 harness（§16.8：测试内容一律不进发布包）
+scripts/test_seven_flows.py

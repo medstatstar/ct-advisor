@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ct-advisor — 确定性难度路由 (Mode B)
+ct-advisor — 确定性难度分类器（代码级，无 LLM）
 
 设计目标（治本，不依赖 LLM 纪律）：
   - 把「是否发 Coze / 判难度」的决策从主 Agent（本地 LLM）收归成**代码确定性分类**。
@@ -16,16 +16,20 @@ ct-advisor — 确定性难度路由 (Mode B)
   python scripts/route.py --self-test
         → 跑内置分类自测，输出每例命中/预期与准确率
 
-分类优先级（确定性，瞬时）：
+分类优先级（确定性，瞬时，stdlib-only）：
   1. 空串                       → vague
-  2. is_simple（定义/标准操作） → simple        （本地直答，可挂参考文档，不发车）
-  3. 命中 complex 强信号        → complex        （含预路由拦截：外部数据/样本量强制 complex）
-  4. is_vague（指代不明/过短）   → vague          （AskUserQuestion 澄清后重跑）
+  2. 🔴 is_vague（指代不明/过短/回指省略，判断**可偏多**）→ vague
+                               （进入 clarify_loop 启发式菜单；宁可多澄清也不漏发 Coze）
+  3. is_simple（定义/标准操作） → simple        （判定 simple，转发 Coze 时带此标签）
+  4. 命中 complex 强信号        → complex        （含预路由拦截：外部数据/样本量强制 complex）
   5. is_middle（显式解释/比较）  → middle         （后台 fire Coze verbatim）
   6. 兜底                       → complex        （未命中任何信号一律 complex，绝漏发车）
 
-关键不变量：任何正则未命中 → complex → 必发车 Coze。
-误判最坏只是多走 complex（质量更高），绝不会漏发车或把 complex 当 simple 本地答。
+入口分流（2026-08-14 晚，与 SKILL.md 对齐）：
+  - route.py 仅做**难度判定**，不决定「本地答 vs 发车」。
+  - 🔴 **vague 最先判定（判断可偏多）**：发现 vague 立即进入本地澄清循环
+    scripts/clarify_loop.py（启发式菜单）明确需求，收敛后再转发 Coze；绝不漏发 Coze。
+  - simple / middle / complex → 一律 verbatim 转发 Coze（forward-only），并随 payload 带上 query_meta.difficulty 标签供云端路由。
 """
 
 import argparse
@@ -107,8 +111,18 @@ MID = re.compile(
     r"是否需要将|是否需要持有|应在多长时间)"
 )
 
-# vague 指代信号
+# vague 指代信号（显性代词 + 短句）
 VAGUE_PRON = re.compile(r"(这个|那个|它|它们|这|那)")
+
+# 回指 / 省略线索（指向前文未明说的对象）。偏宽松：用复合形式（如"之前提到"）
+# 避免误伤"之前的药物"这类清晰短句；纯方位词（前面/后面/上面/下面/前者/后者）
+# 几乎总是语篇指代，直接纳入。
+ANAPHORA = re.compile(
+    r"(前面|后面|上面|下面|前者|后者|前边|后边|前述|前述的|上述的|"
+    r"之前提到|之前说|之前讨论|刚才说|刚才提到|刚才问|刚才讨论|"
+    r"上一条|上一个问题|上轮|上一次|您说的|你说的|您讲的|我说的|"
+    r"前面那个|后面那个|上面那个|下面那个)"
+)
 
 # ---------------------------------------------------------------------------
 # simple 白名单：knowledge 知识包确定覆盖的「标准操作 / 定义类」主题短语
@@ -158,10 +172,19 @@ def is_simple(q: str) -> bool:
 
 
 def is_vague(q: str) -> bool:
-    """指代不明 / 过短无实体 → vague。"""
-    if VAGUE_PRON.search(q) and len(q) <= 20:
+    """指代不明 / 过短无实体 / 回指省略 → vague。
+    🔴 入口最高优先级（仅次空串）：vague 是唯一「不转发 Coze」的分支，必须最先判定；
+    判断**可偏多**——宁可进本地澄清菜单，也不漏发 Coze。simple/middle/complex
+    仅是 verbatim 转发的备用标签。"""
+    # 1) 显性指代代词 + 短句（上限放宽到 24，覆盖"这个样本量计算要考虑什么"）
+    if VAGUE_PRON.search(q) and len(q) <= 24:
         return True
-    if len(q) <= 10 and not TERM.search(q) and not DEF.search(q):
+    # 2) 回指 / 省略线索（无具体动作信号时按 vague；上限 30）
+    if ANAPHORA.search(q) and len(q) <= 30:
+        return True
+    # 3) 过短且无术语 / 定义 / 标准操作锚点 → 视为 vague（偏多：含糊短句进菜单）
+    if len(q) <= 10 and not TERM.search(q) and not DEF.search(q) \
+       and not STOP.search(q) and not SIMPLE_TOPICS.search(q):
         return True
     return False
 
@@ -174,16 +197,18 @@ def is_middle(q: str) -> bool:
 
 
 def route_question(q: str) -> str:
-    """返回 simple | vague | middle | complex。"""
+    """返回 simple | vague | middle | complex。
+    🔴 vague 优先：入口唯一不转发 Coze 的分支，必须最先判定（判断可偏多）；
+    simple/middle/complex 仅作 verbatim 转发的备用标签。"""
     q = (q or "").strip()
     if not q:
+        return "vague"
+    if is_vague(q):            # 🔴 最高优先级：vague 必须先于 simple/complex 判定
         return "vague"
     if is_simple(q):
         return "simple"
     if CPLX.search(q):          # 预路由拦截 + 设计/外部数据/选项/复合 → 强制 complex
         return "complex"
-    if is_vague(q):
-        return "vague"
     if is_middle(q):
         return "middle"
     return "complex"            # 兜底：未命中任何信号一律 complex，绝漏发车
@@ -216,10 +241,16 @@ SELF_TEST = [
     ("CRF 填写步骤", "simple"),
     ("SAE 上报时限", "simple"),
     ("SDTM", "simple"),
-    # ---- vague：指代不明 / 过短 ----
+    ("上报时限是多少", "simple"),   # 短而清晰（含 STOP），不误判 vague（精度护栏）
+    # ---- vague：指代不明 / 过短 / 回指省略（判断偏多）----
     ("这个怎么弄", "vague"),
     ("那个是什么意思", "vague"),
     ("它是指什么", "vague"),
+    ("这个样本量怎么算", "vague"),            # 含代词 + CPLX 词，仍判 vague（修复漏判）
+    ("那个试验设计要注意什么", "vague"),        # 含代词 + CPLX 词
+    ("前面说的统计检验方法该怎么选", "vague"),    # 回指省略
+    ("上一条说的不良事件要怎么报", "vague"),      # 复合回指
+    ("怎么办", "vague"),
     # ---- middle：显式解释 / 比较，无 complex 信号 ----
     ("解释 SDTM 和 ADaM 的区别", "middle"),
     ("说明 SDTM 的变量命名规则", "middle"),

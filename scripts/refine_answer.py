@@ -20,17 +20,27 @@ By default it calls the Coze refiner (single call, 60s timeout; on Coze timeout/
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Set
+
+# 代码旁路模式（--ship）最终答案定界符：脚本输出唯一权威答案，agent 只做原样透传。
+ANSWER_START = "<<<CT_ANSWER_START>>>"
+ANSWER_END = "<<<CT_ANSWER_END>>>"
+NEED_PARAMS_MARKER = "<<<CT_NEED_PARAMS>>>"
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from adapters import build_refiner, RefineRequest, RefineResult, MissingDependencyError
 from scripts.i18n import t  # noqa: E402  (user-facing prompts EN/ZH, locale-resolved)
+# 复用入口预判（模式 B 前端高置信预取）：--ship 的 need_tool 分支用其补全真实参数，
+# 避免纯 --ship 路径下任意 need_tool 都 100% 落到 need_params（Coze 仅判类别、不抽真实入参）。
+from route_tool import predict as _predict_tool  # noqa: E402
 
 def _load_auto_approve_endpoints(config_path: str) -> Set[str]:
     """从 config.json 加载 auto_approve_endpoints 白名单。"""
@@ -80,6 +90,61 @@ for _s in (sys.stdin, sys.stdout, sys.stderr):
         pass
 
 
+def _render_skill_result(result) -> str:
+    """把 need_tool 技能主产物渲染为可读文本（确定性，无 LLM）。"""
+    if isinstance(result, (dict, list)):
+        try:
+            return json.dumps(result, ensure_ascii=False, indent=2)
+        except Exception:
+            return str(result)
+    return str(result) if result is not None else ""
+
+
+def _merge_answer(coze_answer: str, tool_out: dict) -> str:
+    """确定性缝合：Coze 原答案 + 补充信息（含来源标签）。纯代码，不依赖 LLM。"""
+    tool = tool_out.get("tool") or "ct-tool"
+    status = tool_out.get("status")
+    if status == "ok":
+        res = _render_skill_result(tool_out.get("result"))
+        return f"{coze_answer}\n\n---\n\n## 补充信息（来源：{tool}）\n\n{res}"
+    if status == "need_params":
+        mp = tool_out.get("result") or {}
+        missing = mp.get("missing", []) if isinstance(mp, dict) else []
+        miss_txt = "\n".join(f"- {m}" for m in missing) or "(详见执行器输出)"
+        return (f"{coze_answer}\n\n---\n\n{NEED_PARAMS_MARKER}\n"
+                f"以下补充信息需要先由你向用户追问并补齐参数后才能获取：\n{miss_txt}")
+    err = tool_out.get("result") or ""
+    return (f"{coze_answer}\n\n---\n\n## 补充信息获取失败（来源：{tool}）\n\n"
+            f"Coze 建议调用的本地技能执行出错，已保留 Coze 原答案：\n{err}")
+
+
+def _run_handle_need_tool(card: dict) -> dict:
+    """在代码内机械执行 need_tool 执行卡（subprocess 调 handle_need_tool.py）。"""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "handle_need_tool.py"),
+             "--card", json.dumps(card, ensure_ascii=False)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=300,
+        )
+        if proc.returncode != 0:
+            return {"tool": card.get("need_tool"), "status": "error",
+                    "result": f"rc={proc.returncode}: {(proc.stderr or '')[:1500]}"}
+        return json.loads(proc.stdout)
+    except subprocess.TimeoutExpired:
+        return {"tool": card.get("need_tool"), "status": "error",
+                "result": "技能执行超时（>300s）"}
+    except Exception as e:  # noqa: BLE001
+        return {"tool": card.get("need_tool"), "status": "error",
+                "result": f"{type(e).__name__}: {e}"}
+
+
+def _emit_wrapped(text: str) -> None:
+    """把最终答案用定界符包裹 + sha256 校验和输出，供 agent 原样透传并自检。"""
+    checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    sys.stdout.write(f"{ANSWER_START}\n{text}\n{ANSWER_END}\nchecksum: {checksum}\n")
+
+
 def _extract_draft(raw: str) -> str:
     """Best-effort extract draft_answer from raw input, for fallback on parse failure."""
     try:
@@ -108,6 +173,13 @@ def main() -> None:
                     help="全量直发主链路（2026-08-14）：单次调用 Coze，返回结构化 RefineResult JSON。"
                          "本地大模型原则上不回答——本模式只转发；need_tool 分支透出执行卡供本地执行技能。"
                          "失败/超时回退 draft_answer（final_answer 字段），由调用方判定本地兜底")
+    ap.add_argument("--ship", action="store_true",
+                    help="代码旁路主链路（2026-08-15）：单次调用 Coze，若 need_tool 则在代码内直接调 "
+                         "handle_need_tool.py 执行并对结果做确定性缝合；最终答案以 <<<CT_ANSWER_START>>> "
+                         "定界包裹输出。本地大模型只做原样透传（pipe），不重写/重排/补充。此模式用于跳过大模型重组。")
+    ap.add_argument("--card-inline", default=None,
+                    help="need_params 重试路径（与 --ship 配合）：跳过 Coze 直发，直接用给定执行卡 JSON 运行 "
+                         "handle_need_tool.py 并缝合（用于补齐参数后重试，避免重复调用 Coze）")
     # P0-B 语气写作：注入 tone_matcher.py 生成的 tone_profile.json（仅风格、无事实）
     ap.add_argument("--tone", default=None,
                     help="path to tone_profile.json (from scripts/tone_matcher.py); injects style-only tone into Coze prompt")
@@ -115,6 +187,19 @@ def main() -> None:
     ap.add_argument("--memory", default=None,
                     help="path to ct-advisor-memory.json (from scripts/memory_manager.py); injects local user memory context")
     args = ap.parse_args()
+
+    # --card-inline 重试路径（与 --ship 配合）：跳过 Coze 直发，直接用执行卡在代码内跑 handle_need_tool 并缝合。
+    # 必须在读 payload 之前处理，避免空 stdin 触发 payload 解析回退。
+    if args.card_inline:
+        try:
+            card = json.loads(args.card_inline)
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"[ct-advisor] card-inline JSON 解析失败: {e}\n")
+            sys.exit(1)
+        coze_answer = card.get("draft_answer") or ""
+        tool_out = _run_handle_need_tool(card)
+        _emit_wrapped(_merge_answer(coze_answer, tool_out))
+        sys.exit(0)
 
     # Read priority (in-memory pipeline first, zero temp files):
     #   1) --payload-inline: pass the JSON string directly, zero file I/O
@@ -201,6 +286,62 @@ def main() -> None:
             sys.stdout.write(t("error.empty_question") + "\n")
         else:
             sys.stdout.write(draft)
+        sys.exit(0)
+
+    if args.ship:
+        # 代码旁路主链路（2026-08-15）：单次调用 Coze；need_tool 分支在代码内执行 + 确定性缝合；
+        # 最终答案以 <<<CT_ANSWER_START>>> 定界包裹输出，本地大模型只做原样透传（pipe）。
+        if not _check_outbound_authorization(
+            _get_endpoint_from_config(args.config), args.config
+        ):
+            # 未授权出站：无法获取 Coze 答案，明确告知 agent 走本地兜底
+            _emit_wrapped(
+                "⚠️ 未授权出站到 Coze，无法获取精校答案。请基于本地知识库作答，并明确告知用户"
+                "「答案未经过 Coze 精校，请谨慎使用」。"
+            )
+            sys.exit(0)
+        try:
+            result = build_refiner(config_path=args.config).refine_forward(req)
+        except MissingDependencyError:
+            sys.stderr.write(
+                t("error.dependency_fatal",
+                  cmd='python -m pip install "requests==2.32.3"') + "\n"
+            )
+            sys.exit(1)
+        except Exception as e:  # noqa: BLE001
+            # Coze 失败：无精校答案，交给本地兜底，包裹明确警告
+            sys.stderr.write(
+                f"[ct-advisor] ship 失败（{type(e).__name__}）：Coze 不可用，需本地兜底\n"
+            )
+            _emit_wrapped(
+                "⚠️ 无法连接 Coze 服务，答案未经过精校。请基于本地知识库作答，并明确告知用户此警告。"
+            )
+            sys.exit(0)
+        coze_answer = result.final_answer or ""
+        need_tool = result.need_tool
+        if need_tool:
+            # P1 修复（2026-08-15）：Coze 仅判工具类别、不抽真实入参（只给 max/top 等默认值）。
+            # 用本地 route_tool 预判补全真实参数（cond/drug/topic/test/p1/p2），覆盖 Coze 默认值，
+            # 使「代码跳过大模型」在 need_tool 场景也成立——避免任意 need_tool 都 100% 弹参数追问。
+            params = dict(result.params or {})
+            pred = _predict_tool(req.original_question)
+            if pred.get("need_tool") == need_tool:
+                for k, v in (pred.get("params") or {}).items():
+                    if v not in (None, ""):
+                        params.setdefault(k, v)
+            card = {
+                "need_tool": need_tool,
+                "params": params,
+                "draft_answer": coze_answer,
+                "original_question": req.original_question,
+            }
+            tool_out = _run_handle_need_tool(card)
+            merged = _merge_answer(coze_answer, tool_out)
+        else:
+            merged = coze_answer
+        if not merged.strip():
+            merged = "⚠️ Coze 返回为空，请基于本地知识库作答并告知用户。"
+        _emit_wrapped(merged)
         sys.exit(0)
 
     if args.forward:

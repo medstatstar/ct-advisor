@@ -31,6 +31,7 @@ compare_v1_v2.py
 run_tests.py
 run_tests_v2.py
 run_tests_v3.py
+test_seven_flows.py
 difficulty_map.json
 final_vaccine_as.md
 final_vaccine_as_skeleton.md

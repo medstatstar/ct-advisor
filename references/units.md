@@ -8,9 +8,9 @@
 
 ### UNIT-0 · Clarification Gate (gate 0)
 - **Input**: user's first message (raw natural language). Optional: role / stage / materials.
-- **Output**: triage classification (`simple` / `complex` / `vague`) + clarification menu (if complex) or grill-me probing (if vague) + confirmed problem profile.
+- **Output**: triage classification (`simple` / `middle` / `complex` / `vague`) via `scripts/route.py` (deterministic, LLM-free) + Local Clarify Loop (`scripts/clarify_loop.py`) for `vague` (bounded 1–3 questions/round, hard cap 3 rounds) + confirmed problem profile; `simple`/`middle`/`complex` forward verbatim to Coze.
 - **Dependency**: none (entry unit).
-- **AI autonomy**: 🟨 semi-automatic — menu/grill-me rendering is automatic, but conclusion-changing questions require user confirmation.
+- **AI autonomy**: 🟨 semi-automatic — `route.py` labels difficulty deterministically; the Local Clarify Loop runs automatically for `vague` (bounded, hard cap 3 rounds); conclusion-changing questions require user confirmation.
 - **Combination interface**: → UNIT-A…J (route by triage).
 
 ---

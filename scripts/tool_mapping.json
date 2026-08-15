@@ -19,7 +19,8 @@
       "output": "json",
       "timeout": 120,
       "required_params": ["cond"],
-      "note": "联网检索 ClinicalTrials.gov v2 / CDE / ChiCTR；WAF/浏览器/token 均在本地环境"
+      "extra_args": ["--auto-confirm"],
+      "note": "联网检索 ClinicalTrials.gov v2 / CDE / ChiCTR；WAF/浏览器/token 均在本地环境。--auto-confirm: kw 术语确认门在 translation miss 时直接用中文原文检索 CT.gov（可能漏检英文术语，属已知权衡；入口预判调用时避免 sys.exit(2) 卡死）。"
     },
     "ct-safety": {
       "skill": "ct-safety",

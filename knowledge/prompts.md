@@ -28,7 +28,7 @@
 - `clarify.grill_intro`: Let's pin down what you actually need. I'll ask 1–3 focused questions per round; each comes with a recommended default — confirm or adjust. No data fetch, no handoff to other skills. / 我们先把您真正需要的理清楚。我会每轮问 1–3 个聚焦问题，每个都附带推荐默认答案——您确认或调整即可。不取数、不转交其他技能。
 - `clarify.grill_summary`: Here is your needs portrait and my recommended route: / 这是您的需求画像与我的推荐路由：
 - `clarify.triage_simple`: Quick answer below — just say the word if you want me to open the full menu or go deeper. / 下面直接给结论——若需要我打开完整菜单或进一步展开，告诉我即可。
-- `clarify.vague_invite`: Your question is still open-ended — let's pin it down step by step (grill-me style): I'll ask 1–3 focused questions per round, each with a recommended default. / 您的问题仍比较开放——我们用 grill-me 方式逐轮把它理清楚：每轮问 1–3 个聚焦问题，每个都带推荐默认答案。
+- `clarify.vague_invite`: Your question is still open-ended — let's pin it down step by step via the Local Clarify Loop: I'll ask 1–3 focused questions per round, each with a recommended default. / 您的问题仍比较开放——我们用本地澄清菜单（Local Clarify Loop）逐轮把它理清楚：每轮问 1–3 个聚焦问题，每个都带推荐默认答案。
 
 ### Workflow routing menu (A–J + gate 0) / 工作流路由菜单
 - `menu.title`: Which workflow best fits your need? / 哪个工作流最符合您的需要？
