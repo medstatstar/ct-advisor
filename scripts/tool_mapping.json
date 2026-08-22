@@ -19,8 +19,8 @@
       "output": "json",
       "timeout": 120,
       "required_params": ["cond"],
-      "extra_args": ["--auto-confirm"],
-      "note": "联网检索 ClinicalTrials.gov v2 / CDE / ChiCTR；WAF/浏览器/token 均在本地环境。--auto-confirm: kw 术语确认门在 translation miss 时直接用中文原文检索 CT.gov（可能漏检英文术语，属已知权衡；入口预判调用时避免 sys.exit(2) 卡死）。"
+      "extra_args": ["--auto-confirm", "--run", "--print-summary"],
+      "note": "联网检索 ClinicalTrials.gov v2 / CDE / ChiCTR；WAF/浏览器/token 均在本地环境。--auto-confirm: kw 术语确认门在 translation miss 时直接用中文原文检索 CT.gov（可能漏检英文术语，属已知权衡；入口预判调用时避免 sys.exit(2) 卡死）。--run: 2026-08-20 修复——执行卡路径此前停在 ct_registry PREVIEW 安全门（只提示 add --run、不发网络请求），README 示例 2「自动返回实时 landscape」不成立；ct-registry 默认 PREVIEW 是面向交互式 CLI 的确认门，经编排器执行卡调用时用户提问本身即检索指令，无条件联网（对齐 ct-safety 的 run=true 行为）。"
     },
     "ct-safety": {
       "skill": "ct-safety",

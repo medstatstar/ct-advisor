@@ -1,10 +1,10 @@
-# AGENTS.md — ct-advisor v0.9.13 (ct- series B-tier entry point)
+# AGENTS.md — ct-advisor v0.9.70 (ct- series A-tier entry point)
 
 > This document is ct-advisor's self-improvement contract. It follows ct-base AGENTS.md structure and is written in English per §4 (references·AGENTS are English-only for published ct- skills).
 
 ## Skill Overview
 
-`ct-advisor`: the single front door for the entire `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor (B-tier) that routes real-data / competitive-intel asks to sibling data skills (ct-registry / ct-safety / ct-literature / ct-samplesize / meta-analysis) and stitches the full competitive-intel brief in-house. Methodology knowledge (workflows A–J) is retrieved locally from the `knowledge/` pack.
+`ct-advisor`: the single front door for the entire `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor (A-tier) that routes real-data / competitive-intel asks to sibling data skills (ct-registry / ct-safety / ct-literature / ct-samplesize / meta-analysis) and stitches the full competitive-intel brief in-house. Methodology knowledge (workflows A–J) is retrieved locally from the `knowledge/` pack.
 
 ---
 
@@ -57,6 +57,15 @@
 - Answer refinement uses Coze — the one outbound path (forward-only, single call, no retry); `scripts/route.py` labels difficulty at entry; all payloads pass through `sanitize()` first.
 - Never expose personal info, subject data, unpublished project data, private paths, or credentials.
 - `permissions` block declared in SKILL.md top-level.
+
+### 4.1 Outbound Authorization & config.json Red Line (ct-base §5, 2026-08-19 应用)
+- **🔴 绝不自行修改 `config.json`**：agent 不得写入/改写 `config.json`（含 `auto_approve_endpoints` 白名单、`language` 等）。`auto_approve_endpoints` 白名单由**技能作者预置**（`ct-advisor.coze.site/run` 与统一错误报告端点 `https://ct-bugreport.coze.site/run` 已默认在内，故已预置端点实际永不弹确认）；若用户希望某端点跨会话免确认，须由**用户显式**将端点加入 `auto_approve_endpoints`（agent 可引导、可展示 JSON 片段，**不代写**）。
+- **首次出站确认**：非白名单端点出站前，`refine_answer.py` 经 `_check_outbound_authorization` 在 stderr 打 `[AUTH-BLOCK]`，agent 向用户展示**全库统一确认文案**（目标服务器 / 发送内容 / 本地资料有限说明），确认后**告知用户**可将端点加入白名单（用户自己操作）。
+- **授权不阻断流程**：未授权时脚本返回空串/本地草稿，agent 采用本地胜出方案，仅提示"本次未使用云端分析"，不中断。
+- **出站披露**：README 已明确"数据将发送至 `ct-advisor.coze.site/run`"；文档不得出现 "zero-outbound"/"完全离线"/"fully offline" 绝对化表述（已用 "no outbound" 精确限定局部环节）。
+- **错误报告出站（§20.3，可选）**：`adapters/bug_report.py` 为脱敏报告客户端，仅在检测到技能缺陷或用户显式请求时，经三阶段确认后向 `https://ct-bugreport.coze.site/run` 发送 11 键脱敏报告（不含原始输入）；公开凭证内嵌混淆（XOR+base64）于该文件，与 Coze 端点同属 `auto_approve_endpoints` 预置白名单。
+- **会话授权语义**：`_SESSION_AUTHORIZED_ENDPOINTS` 为模块级内存集合，随每次脚本调用重置——同一运行内多次出站只确认一次，新一次调用重新确认（除非命中白名单）。
+- **确认提示信息禁令**：确认文案禁止出现 step / 流程 / 触发机制 / 内部术语。
 
 ### 5. Reuse from base
 - ct-advisor ships its own `scripts/i18n.py` (advisor-specific user prompts); reuses **vendored copies** of `i18n.py` / `excel_style.py` (from ct-base) for generic & Excel strings where applicable.

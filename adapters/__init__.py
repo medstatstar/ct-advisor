@@ -88,7 +88,7 @@ def build_refiner(config_path: str = "config.json") -> Refiner:
     Coze 是唯一的精校后端：按难度自动分流——simple/middle 后台竞速择优选、complex/vague 前台串行等待，都经此调用
     Coze 精校，两者都在失败/超时时由 CozeRefiner 内置回退到本地 draft_answer。
 
-    token 解析：统一从 config/keys.py 的 COZE_TOKEN 公共凭据读取（无参 get_token()）。
+    token 解析：统一从 adapters/coze_token_embedded.py 内嵌 obfuscated blob 读取（XOR+base64 公开凭据，无参 get_token()）。
     """
     cfg = _load_config(config_path)
     rc = cfg.get("refiner", {}) or {}
@@ -99,6 +99,7 @@ def build_refiner(config_path: str = "config.json") -> Refiner:
         endpoint=rc.get("endpoint", ""),
         token_env=rc.get("token_env", "CT_ADVISOR_COZE_TOKEN"),
         timeout=float(rc.get("timeout", 60.0)),
+        long_timeout=float(rc.get("long_timeout", 120.0)),
         race_window=float(rc.get("race_window", 2.0)),
         answer_mode=answer_mode,
     )

@@ -204,9 +204,11 @@ class RefineRequest:
         else:
             meta = {}
         changed = False
-        # difficulty 兜底（2026-08-12）：缺失/非法一律默认 "complex"（宁保守，绝不空白）——
-        # ① draft 非空必是 complex serial（只有 complex 带草稿）；② draft 空走服务端 full_analysis，值不影响；
-        # ③ 空白 difficulty 会让服务端分流异常（有效答案全进 complex_review）且飞书收集 difficulty 空白。
+        # difficulty 兜底（2026-08-12，2026-08-17 复核）：本地 route.py 的主用途是「拆分出 vague」
+        # （vague 本地拦截、不转发），非 vague 转发时附带 simple/middle/complex 标签仅作提示；
+        # 服务端 generate_organized_problems_node 会【一律用 LLM 重新估计】difficulty 并写回，
+        # 因此此处兜底默认值不决定最终难度，仅保证出站 query_meta 非空（避免飞书收集空白）。
+        # 缺失/非法一律默认 "complex"（宁保守，绝不空白）。
         if not meta.get("difficulty") or meta["difficulty"] not in DIFFICULTY_ENUM:
             meta["difficulty"] = "complex"
             changed = True
@@ -328,32 +330,78 @@ class Refiner(ABC):
 class CozeRefiner(Refiner):
     """扣子服务器精校（唯一精校后端）：外发 3 变量，≤timeout 秒回收 final_answer；异常兜底草稿。
 
+    超时策略（2026-08-16）：默认 timeout=60s；complex / 模板类问题放宽到 long_timeout
+    （默认 120s）——服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成）耗时长，
+    60s 会被提前截断。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
     由 build_refiner() 始终实例化。
     """
 
     def __init__(self, endpoint: str, token_env: str = "CT_ADVISOR_COZE_TOKEN",
-                 timeout: float = 60.0, answer_mode: str = "fast", race_window: float = 2.0):
+                 timeout: float = 60.0, long_timeout: float = 120.0,
+                 answer_mode: str = "fast", race_window: float = 2.0):
         self.endpoint = endpoint
         self.token_env = token_env
         self.timeout = timeout
+        # long_timeout：complex / 模板类问题的等待上限（默认 120s）；其余问题用 timeout（60s）。
+        # 详见 _resolve_timeout() / _is_long_running()。
+        self.long_timeout = long_timeout
         # answer_mode 已固定为 fast（2026-08-05 删除 precise）；按难度分流：
         #   simple/middle = race 竞速（早发 / 速度优先，详见 refine_fire_only + collect_race）：
         #     agent 在 step 2 后台调用 --fire-only（draft_answer 留空、difficulty/category/accuracy 未提供→补空串），
-        #     Coze 用**完整 60s**（self.timeout）HTTP 超时独立分析 original_question，
+        #     Coze 用**完整** HTTP 超时独立分析 original_question（默认 60s；complex/模板类走 long_timeout=120s），
         #     成功后写入 race 缓存文件；agent 在 step 3 并行写本地草稿 + 调用 --collect
         #     [--wait race_window] 收集：缓存命中（Coze 在 step 3→step 4 间已返回）→ 采用 Coze
         #     （中断本地、Coze 胜出）；否则直接采用本地草稿（速度优先——本地秒级先出、Coze 实测
         #     9~25s 慢，常态本地胜出）。
-        #   complex/vague = 串行：前台等待 Coze 完整返回（单次调用 refine()，timeout=60s），
+        #   complex/vague = 串行：前台等待 Coze 完整返回（单次调用 refine()；复杂/模板类 timeout=long_timeout 默认120s，其余 60s），
         #     且必须把本地已生成的 draft_answer 一并发送（作为 Coze 参考）。
         self.answer_mode = "fast"  # 2026-08-05 删除 precise，仅保留 fast 单一模式
         self.race_window = race_window  # race 竞速：step 4 收集 Coze 后台结果的等待上限（秒）；超时即放弃、用本地
+
+    # ------------------------------------------------------------------ #
+    # 条件化超时（2026-08-16）：complex / 模板类问题等待上限放宽到 long_timeout
+    # （默认 120s）；其余问题维持默认 timeout（60s）。复杂/模板类问题服务端
+    # full_analysis 走完整输出模式，生成耗时长，60s 会被提前截断 → 放宽。
+    # 服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
+    # ------------------------------------------------------------------ #
+    _TEMPLATE_TOKENS = ("template", "模板", "doc", "document", "规范", "spec")
+
+    def _is_long_running(self, req: "RefineRequest") -> bool:
+        """长任务判定：complex 难度，或 category 命中模板类标记。
+
+        长任务走服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成），生成耗时长，
+        需用 long_timeout（默认 120s）而非默认 60s。
+        - difficulty == "complex"：明确长任务（串行路径前台等 Coze 完整返回）。
+        - category（str 或 list）小写后含模板类 token：模板/文档/规范类问题。
+        """
+        meta = req.query_meta if isinstance(req.query_meta, dict) else {}
+        diff = str(meta.get("difficulty", "")).strip().lower()
+        if diff == "complex":
+            return True
+        cat = meta.get("category", "")
+        if isinstance(cat, list):
+            cat = " ".join(str(c) for c in cat)
+        cat = str(cat).lower()
+        return any(tok in cat for tok in self._TEMPLATE_TOKENS)
+
+    def _resolve_timeout(self, req: "RefineRequest", timeout: Optional[float]) -> float:
+        """解析本次 Coze 调用的有效超时：
+
+        - 调用方显式传入 timeout → 优先采用（保留可覆盖旧行为）；
+        - 否则长任务（complex / 模板类）→ long_timeout（默认 120s）；
+        - 其余 → 默认 timeout（60s）。
+        """
+        if timeout is not None:
+            return float(timeout)
+        if self._is_long_running(req):
+            return self.long_timeout
+        return self.timeout
 
     def refine(self, req: RefineRequest, timeout: float = None) -> RefineResult:
         # 依赖保障：在出站 try 之外执行。缺失且自动安装失败 → 向上抛 MissingDependencyError，
         # 由 refine_answer.py 显式退出（绝不静默回退草稿，否则用户误以为答案经 Coze 精校）。
         _ensure_requests()
-        timeout = timeout or self.timeout
+        timeout = self._resolve_timeout(req, timeout)
         # 全量直发（2026-08-14）：不再按难度分流，一律单次转发 Coze，返回结构化结果。
         # 兼容旧调用方：仍可通过 .final_answer 取文本；旧 fire-only/collect（race）保留不删。
         return self.refine_forward(req, timeout)
@@ -364,7 +412,7 @@ class CozeRefiner(Refiner):
         与 ``refine()``（单发、draft 作兜底）不同，此方法：
           - 仅基于 ``original_question`` 独立分析 Coze
             （``draft_answer`` 留空不发送——调用方此时草稿尚未写出）；
-          - HTTP 超时用 **完整** ``self.timeout``（默认 60s，不给 Coze 强加短帽，
+          - HTTP 超时用 **完整** 时长（默认 60s；complex/模板类走 long_timeout=120s，不给 Coze 强加短帽，
             恢复 ops.md 文档意图）；
           - 成功后把 Coze 结果写入 race 缓存文件（供 step 4 ``--collect`` 读取）；
             超时 / 网络 / 解析异常返回**空串**且不写缓存——
@@ -379,7 +427,7 @@ class CozeRefiner(Refiner):
         coze_req.draft_answer = ""
         cache = self._race_cache_path(req)
         try:
-            text = self._call_coze(coze_req, self.timeout)
+            text = self._call_coze(coze_req, self._resolve_timeout(coze_req, None))
         except MissingDependencyError:
             raise  # 致命依赖错误，向上传播（由 refine_answer.py 显式退出）
         except Exception:  # noqa: BLE001
@@ -462,7 +510,7 @@ class CozeRefiner(Refiner):
         # coze prompt 已配置为：识别 <source> 标签 → 跳过标记段落（不修改、不验证）。
         # sanitize() 只处理 PII（身份证/手机号/邮箱），不伤害 XML 标签。
         payload = sanitize(req.to_payload())  # 出站前脱敏（ct-base §11）
-        # token 解析：统一从 config/keys.py 明文常量 COZE_TOKEN 取（无参）
+        # token 解析：统一从 adapters/coze_token_embedded.py 内嵌 obfuscated blob 取（XOR+base64 公开凭据，无参 get_token()）
         token = get_token()
         _headers = {
             "Authorization": f"Bearer {token}",
@@ -518,7 +566,7 @@ class CozeRefiner(Refiner):
         本地大模型原则上不回答——本方法只负责「转发 + 结果结构化」，不生成草稿。
         """
         _ensure_requests()
-        timeout = timeout or self.timeout
+        timeout = self._resolve_timeout(req, timeout)
         try:
             return self._call_coze(req, timeout)
         except MissingDependencyError:

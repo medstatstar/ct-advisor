@@ -1,17 +1,72 @@
+# .gitignore — files excluded from the GitHub package
+# (Mirrors .clawhubignore so both publish bundles stay lean and scanner-clean;
+#  §16.8 requires the two ignore sets to be identical.)
+
+# Python caches (never ship)
 __pycache__/
 *.pyc
-data/
-err.txt
-.coze_race_cache/
 
-# coze 云端部署项目（2026-08-14 起合并入 adapters/coze/）：发布（GitHub/ClawHub/SkillHub）时一律不打包。
+# assets/: keep only the canonical SVG icon; drop build scripts / notes / PNG exports / variant SVGs
+assets/*
+!assets/icon.svg
+
+# Dev / working logs (not part of the skill's runtime or knowledge)
+auto_loop_rounds.md
+knowledge/survey_external_projects.md
+tests/
+*.err
+timing_*.txt
+test_*.json
+test_results*.json
+payload_*.json
+analyze_ctdb.py
+analyze_ctdb5.py
+analyze_ctdb5_detail.py
+analyze_ctdb5_final.py
+build_difficulty_map.py
+build_vaccine_payload.py
+compare_v1_v2.py
+run_tests.py
+run_tests_v2.py
+run_tests_v3.py
+difficulty_map.json
+final_vaccine_as.md
+final_vaccine_as_skeleton.md
+timing_fast_err.txt
+timing_lean_err.txt
+timing_parallel_step7_err.txt
+
+# Empty runtime output dir (created on first Q&A persist)
+data/
+
+# coze 云端部署项目（2026-08-14 起合并入 adapters/coze/）：发布时一律不打包。
 # 历史：2026-08-03 明确要求不打包接口文档；2026-08-05 扩展至全部接口文档；
 # 2026-08-09 复排查发现 knowledge2/ 参考库亦属同类；2026-08-14 目录移动后规则同步为 adapters/coze/。
+# 含入参/出参接口契约、Coze system prompt、执行细则、knowledge2 参考库；GitHub 走本 .gitignore 剔除。
+# ClawHub 走 .clawhubignore 剔除。两份排除集须一致（§16.8）。
 adapters/coze/
 references/ops.md
 
 # 明文 JWT 本地辅助（§5 合规：凭据一律走 adapters/coze_token_embedded.py 混淆内嵌，不发布明文）
 config/keys.py
 
+# Race-mode runtime cache (created on every fire-only/collect round-trip;
+# holds the last Coze answer text — dev/test artifact, never ship)
+.coze_race_cache/
+
+# 运行态会话上下文缓存（类型 B 追问自包含化用，本地生成、不入库）
+config/context_cache.json
+
 # 测试 harness（§16.8：测试内容一律不进发布包）
-scripts/test_seven_flows.py
+test_seven_flows.py
+ct_bug_report_*.md
+
+# 运行态输出（§16.8：out_*/out/out_live 绝不进发布包，避免运行产物泄漏）
+out/
+out_*/
+out_live/
+
+# publish_inject 注入副产物（§16.8：注入时自动备份被覆盖文件 + 写入 .ctbase_injected.json 清单，
+# 均为本地安全副产物，发布前须剔除；发布后可用 publish_inject.py --clean 清理）
+.ctbase_injected.json
+*.ctbase_bak_*

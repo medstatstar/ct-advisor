@@ -90,8 +90,74 @@ for _s in (sys.stdin, sys.stdout, sys.stderr):
         pass
 
 
-def _render_skill_result(result) -> str:
+def _detect_lang(text: str) -> str:
+    """按 CJK 占比检测提问语言（≥15% → 'zh-CN'，否则 'en'）。
+
+    2026-08-21：语言参数化——表格表头 / 来源标签随提问语言切换，
+    保证英文提问交付全英文（结构化单元格数据保持原文不翻译）。
+    """
+    if not text:
+        return "zh-CN"
+    import re as _re
+    cjk = len(_re.findall(r"[\u4e00-\u9fff]", text))
+    return "zh-CN" if cjk >= max(1, len(text) * 0.15) else "en"
+
+
+def _render_registry_landscape(res: dict, lang: str = "zh-CN") -> str:
+    """把 ct-registry 聚合结果（landscape）渲染为用户友好 markdown 表格。
+
+    2026-08-21：README 示例 2 实测——裸 JSON 块对用户不友好；改为
+    「试验数汇总 + 分期/地域/申办方 三张两列表格 + xlsx 提示」。
+    **表头/文案随提问语言（lang）切换，单元格检索数据（PHASE 3 / United States /
+    Novo Nordisk 等）保持原文不翻译**（用户明确口径，2026-08-21）。
+    """
+    ls = res.get("landscape") or {}
+    parts: list = []
+    zh = lang == "zh-CN"
+    n = ls.get("n_trials")
+    if n is not None:
+        raw = ls.get("raw_total")
+        if zh:
+            dedup = f"（去重后 {n} 条原始记录）" if raw is not None and raw != n else ""
+            parts.append(f"**检索到 {n} 项注册试验**{dedup}")
+        else:
+            dedup = f" ({n} raw records)" if raw is not None and raw != n else ""
+            parts.append(f"**{n} registered trials found**{dedup}")
+    for field, (zh_t, en_t) in (
+            ("phase_mix", ("**分期分布**", "**Phase distribution**")),
+            ("region_mix", ("**地域分布**", "**Region distribution**")),
+            ("top_sponsors", ("**主要申办方**", "**Top sponsors**"))):
+        arr = ls.get(field)
+        if isinstance(arr, list) and arr:
+            rows = "\n".join(
+                f"| {str(it.get('k', ''))} | {it.get('n', '')} |"
+                for it in arr if isinstance(it, dict))
+            title = zh_t if zh else en_t
+            head = "| 类别 | 数量 |" if zh else "| Category | Count |"
+            parts.append(f"{title}\n\n{head}\n|---|---|\n{rows}")
+    excel = res.get("excel")
+    if excel:
+        parts.append(
+            f"📊 完整试验清单（名称 / 阶段 / 地区 / 申办方）已导出：`{excel}`"
+            if zh else
+            f"📊 Full trial list (name / phase / region / sponsor) exported: `{excel}`")
+    note = res.get("note")
+    if note:
+        parts.append(f"> {note}")
+    if parts:
+        return "\n\n".join(parts)
+    # 无结构化字段可渲染时回退裸 JSON
+    try:
+        return json.dumps(res, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(res)
+
+
+def _render_skill_result(result, lang: str = "zh-CN") -> str:
     """把 need_tool 技能主产物渲染为可读文本（确定性，无 LLM）。"""
+    # 2026-08-21：ct-registry 聚合 → 用户友好表格（README 示例 2 实测，替代裸 JSON）
+    if isinstance(result, dict) and isinstance(result.get("landscape"), dict):
+        return _render_registry_landscape(result, lang)
     if isinstance(result, (dict, list)):
         try:
             return json.dumps(result, ensure_ascii=False, indent=2)
@@ -100,22 +166,34 @@ def _render_skill_result(result) -> str:
     return str(result) if result is not None else ""
 
 
-def _merge_answer(coze_answer: str, tool_out: dict) -> str:
-    """确定性缝合：Coze 原答案 + 补充信息（含来源标签）。纯代码，不依赖 LLM。"""
+def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
+    """确定性缝合：Coze 原答案 + 补充信息（含来源标签）。纯代码，不依赖 LLM。
+
+    lang（2026-08-21）：来源标签 / 文案随提问语言切换（zh-CN → 中文，en → 英文），
+    结构化数据内容（表格单元格等）保持原文。
+    """
     tool = tool_out.get("tool") or "ct-tool"
     status = tool_out.get("status")
     if status == "ok":
-        res = _render_skill_result(tool_out.get("result"))
-        return f"{coze_answer}\n\n---\n\n## 补充信息（来源：{tool}）\n\n{res}"
+        res = _render_skill_result(tool_out.get("result"), lang)
+        if lang == "zh-CN":
+            return f"{coze_answer}\n\n---\n\n## 补充信息（来源：{tool}）\n\n{res}"
+        return f"{coze_answer}\n\n---\n\n## Supplementary data (Source: {tool})\n\n{res}"
     if status == "need_params":
         mp = tool_out.get("result") or {}
         missing = mp.get("missing", []) if isinstance(mp, dict) else []
         miss_txt = "\n".join(f"- {m}" for m in missing) or "(详见执行器输出)"
+        if lang == "zh-CN":
+            return (f"{coze_answer}\n\n---\n\n{NEED_PARAMS_MARKER}\n"
+                    f"以下补充信息需要先由你向用户追问并补齐参数后才能获取：\n{miss_txt}")
         return (f"{coze_answer}\n\n---\n\n{NEED_PARAMS_MARKER}\n"
-                f"以下补充信息需要先由你向用户追问并补齐参数后才能获取：\n{miss_txt}")
+                f"Additional data requires you to ask the user for these missing params first:\n{miss_txt}")
     err = tool_out.get("result") or ""
-    return (f"{coze_answer}\n\n---\n\n## 补充信息获取失败（来源：{tool}）\n\n"
-            f"Coze 建议调用的本地技能执行出错，已保留 Coze 原答案：\n{err}")
+    if lang == "zh-CN":
+        return (f"{coze_answer}\n\n---\n\n## 补充信息获取失败（来源：{tool}）\n\n"
+                f"Coze 建议调用的本地技能执行出错，已保留 Coze 原答案：\n{err}")
+    return (f"{coze_answer}\n\n---\n\n## Supplementary data retrieval failed (Source: {tool})\n\n"
+            f"The local skill Coze requested failed; Coze's original answer is kept:\n{err}")
 
 
 def _run_handle_need_tool(card: dict) -> dict:
@@ -249,6 +327,24 @@ def main() -> None:
         elif isinstance(obj.get("memory_context"), dict):
             req.memory_context = obj["memory_context"]
         # query_origin is auto-stamped into query_meta by normalize(); no top-level field.
+        # 类型 B 追问自包含化（2026-08-15）：非 --collect 模式（真实转发路径）下，若当前问题是
+        # 隐式承接追问且本地有上一轮上下文摘要，则拼接为自包含问题再转发，避免 Coze 因无上下文
+        # 重复追问已给参数。纯本地代码（scripts/context_stitch.py），无 LLM、无新增出域。
+        if not args.collect:
+            try:
+                sys.path.insert(0, str(ROOT / "scripts"))
+                import context_stitch as _cs
+                _orig = req.original_question or ""
+                _raw_orig = _orig  # 保留原始问题（供缓存，防多轮嵌套）
+                if _cs.is_followup(_orig):
+                    _cache = _cs.load_cache()
+                    _prev = _cache.get("summary", "")
+                    if _prev and int(_cache.get("rounds", 4)) <= _cs.TTL_ROUNDS:
+                        _stitched = _cs.stitch(_orig, _prev)
+                        sys.stderr.write(f"[ct-advisor] follow-up stitched: {_stitched}\n")
+                        req.original_question = _stitched
+            except Exception as _e:  # noqa: BLE001  # 拼接失败不影响主流程
+                sys.stderr.write(f"[ct-advisor] context stitch skipped: {_e}\n")
     except Exception as e:
         # JSON parse failed: distinguish --collect mode (cache lookup) from other modes
         if args.collect:
@@ -336,11 +432,25 @@ def main() -> None:
                 "original_question": req.original_question,
             }
             tool_out = _run_handle_need_tool(card)
-            merged = _merge_answer(coze_answer, tool_out)
+            # 2026-08-21：缝合文案/标签随提问语言（结构化单元格数据保持原文）
+            merged = _merge_answer(coze_answer, tool_out,
+                                   lang=_detect_lang(req.original_question))
         else:
             merged = coze_answer
         if not merged.strip():
             merged = "⚠️ Coze 返回为空，请基于本地知识库作答并告知用户。"
+        # 更新会话上下文（供下一轮类型 B 追问拼接）：原始问题摘要 + rounds 重置
+        try:
+            sys.path.insert(0, str(ROOT / "scripts"))
+            import context_stitch as _cs2
+            _cache_src = locals().get("_raw_orig") or (req.original_question or "")
+            _cs2.save_cache({
+                "rounds": 0,
+                "q": _cache_src,
+                "summary": _cs2.extract_summary(_cache_src),
+            })
+        except Exception:  # noqa: BLE001  # 缓存写入失败不影响主流程
+            pass
         _emit_wrapped(merged)
         sys.exit(0)
 

@@ -180,6 +180,18 @@ def _detect_signals(text: str) -> List[Dict[str, Any]]:
     if re.search(r"怎么做|如何|怎样|什么最好|最好的|怎么弄|how to|how do|best way|what is the best", low) and len(t) < 50:
         signals.append(_SIGNAL_BY_TYPE["overly_broad"])
 
+    # 6) 通用不确定性兜底（2026-08-21）：vague 但未命中任何具体信号时，
+    #    仍问出 PICO 三要素——README 示例 5（"I'm not sure what I actually need…"）
+    #    实测返回 0 问题的根因：既无多意图/样本量/治疗比较关键词，又非短句模糊指代。
+    UNCERTAIN = re.compile(
+        r"not sure|unsure|don'?t know|do not know|not certain|no idea|"
+        r"half[- ]written|where (?:to )?start|what (?:i|we) (?:actually )?need|"
+        r"不确定|不知道|不清楚|没想好|想不清楚|半成品|需要什么|帮我理理")
+    if not signals and UNCERTAIN.search(low):
+        for _t in ("missing_population", "missing_comparator", "missing_outcome"):
+            if _t in _SIGNAL_BY_TYPE:
+                signals.append(_SIGNAL_BY_TYPE[_t])
+
     # 去重（同一 type 只保留一次），保留出现顺序
     seen = set()
     unique = []

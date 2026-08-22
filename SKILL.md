@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
 cn_name: 临床试验总顾问
-version: 0.9.69
+version: 0.9.100
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，是方法学、法规证据、实际操作细节等各方面内容的总顾问：方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流自行解答；统计计算转交 ct-samplesize，原始数据/竞品情报类需求通过 Skill 工具路由到 ct-registry / ct-safety / ct-literature 三个数据源；竞品情报总览由本技能自行缝合三源产出。"
@@ -35,12 +35,12 @@ permissions:
   filesystem: "Read-only to own files (writes only config.json + optional data/qa_log.jsonl, off by default); no confidential data leaves locally — Coze payloads sanitized, query_origin is a stable per-machine sha256 hash (sha256 of hostname + salt, non-PII, not host-readable)."
 adapted_from: "https://github.com/A-xin946/clinical-trial-advisor"
 dependencies:
-  - {slug: ct-registry,   tier: B}
-  - {slug: ct-safety,     tier: B}
-  - {slug: ct-literature, tier: B}
+  - {slug: ct-registry,   tier: A}
+  - {slug: ct-safety,     tier: A}
+  - {slug: ct-literature, tier: A}
   - {slug: ct-samplesize, tier: A}
-  - {slug: meta-analysis, tier: B}
-tier: B
+  - {slug: meta-analysis, tier: A}
+tier: A
 ---
 
 # Clinical Trial Chief Advisor
@@ -60,7 +60,16 @@ Single entry point for the ct-series: methodology / design / compliance / QC / t
 |---|---|
 | Runtime | `python3` stdlib; read `knowledge/` directly |
 | Sibling skills | `ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` / `meta-analysis` (degrade gracefully if missing, never fabricate) |
-| Refiner (Coze) | `scripts/refine_answer.py --ship`（数据智能类问题优先 `scripts/orchestrate.py` 代码编排器）POSTs 3 top-level variables（`query_meta` / `original_question` / `draft_answer`，其中 `query_meta` 内嵌 difficulty/category/accuracy/query_origin）to `ct-advisor.coze.site/run` — the answer path. Entry gate: `scripts/route.py` (deterministic, LLM-free) labels difficulty once; **vague** → Local Clarify Loop (`clarify_loop.py` heuristic menu) then Coze; **simple/middle/complex** → verbatim forward with `query_meta.difficulty` set. Credential embedded in `config/keys.py` (shared public token — keep as-is). 60s timeout → fallback to local knowledge base (fault fallback). Coze may return a `need_tool` card → local executes the skill and stitches. |
+| Refiner (Coze) | `scripts/refine_answer.py --ship`（数据智能类问题优先 `scripts/orchestrate.py` 代码编排器）POSTs 3 top-level variables（`query_meta` / `original_question` / `draft_answer`，其中 `query_meta` 内嵌 difficulty/category/accuracy/query_origin）to `ct-advisor.coze.site/run` — the answer path. Entry gate: `scripts/route.py` (deterministic, LLM-free) labels difficulty once; **vague** → Local Clarify Loop (`clarify_loop.py` heuristic menu) then Coze; **simple/middle/complex** → verbatim forward with `query_meta.difficulty` set. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 60s timeout → fallback to local knowledge base (fault fallback). Coze may return a `need_tool` card → local executes the skill and stitches. |
+
+## 文档附件模板处理（docx / pdf / ppt）
+
+> **规范归口（2026-08-19 回写）**：附件处理的**分层转换策略、用户提示、保密边界**已统一收口至 **ct-base §6.7**（`ct-base/docs/02-governance-redlines.md`，全库总体设置），本技能不再重复声明，冲突时以 ct-base §6.7 为准；共享转换器真源位于 `ct-base/scripts/office_to_md.py`（经 publish_inject 注入各技能）。以下仅保留 ct-advisor 特有的**实现细则**：
+
+1. 转换结果拼入 **`original_question`** 字段后走正常链路（route.py 判定 → refine_answer --ship），包裹格式：
+   `...要求：撰写完整规范。以下是模板内容：\n---\n{md}\n---`
+2. Coze 端 `full_analysis` 的「模板归纳请求」模式识别该格式 → 按**完整输出模式**生成规范正文；能力不足部分明确标注，不硬凑。
+3. 本地转换器即本技能 `scripts/office_to_md.py`（与底座共享件同源，发布时已随包携带）。
 
 ## Knowledge Map & Read Discipline (2026-08-05)
 
@@ -71,6 +80,7 @@ Single entry point for the ct-series: methodology / design / compliance / QC / t
 3. **🔴 No external network retrieval after any local lookup (HARD GATE)** — never stack "local lookup + sibling-skill outbound". Sibling-skill data is fetched **only** via the Coze-issued `need_tool` card (step 3b), never by local initiative.
 4. `knowledge/system_prompt.md` = Coze-side deployment copy, do not read locally; `prompts.md` only when menu strings are needed. After editing any `ref-*`, rebuild the index via `update_reference_index.py`.
 5. External search fallback: on local miss + Coze under-grounded, list authoritative sites from `references/search-sites.md` for the user to consult — never visit sites on their behalf / fabricate content.
+6. **🔴 语言对齐（2026-08-21，C 组合：Coze 端修一致性 + 本地翻译兜底）**：若 Coze 返回答案语言与提问不一致（英文提问常回中文），透传前**仅做语言转换**——翻译叙述行文为提问语言，**不增删内容、不改数值、不重排**，专有名词/药名/法规名与结构化数据（表格单元格、JSON、xlsx 路径）保持原文；这属语言对齐、不违反"不重写 Coze 文本"。缝合层（来源标签/表格表头）已由代码按 `original_question` 语言自动切换（orchestrate.py / refine_answer.py 的 `_detect_lang`），无需手动处理。
 
 ## Answer Workflow (steps 0–6)
 
@@ -88,7 +98,7 @@ Single entry point for the ct-series: methodology / design / compliance / QC / t
 
 ### 🔴 Outbound Authorization Gate
 
-Runs automatically inside `refine_answer.py` before each outbound HTTP call (agent never triggers it manually). Rules: ① endpoint in `config.json` → `auto_approve_endpoints` → allow; ② authorized earlier this session → allow; ③ otherwise → show the confirmation prompt below (first call only; never expose step / workflow / internal terminology):
+Runs automatically inside `refine_answer.py` before each outbound HTTP call (agent never triggers it manually). Rules: ① endpoint in `config.json` → `auto_approve_endpoints` → allow; ② authorized earlier this session → allow; ③ otherwise → show the confirmation prompt below (first call only; never expose step / workflow / internal terminology). **🔴 agent NEVER edits `config.json`** (incl. `auto_approve_endpoints`) — whitelist is author-preset (`ct-advisor.coze.site/run` already in it, so it never prompts); if the user wants another endpoint whitelisted across sessions, the USER adds it explicitly (agent may guide, not write). Unauthorized endpoint → `[AUTH-BLOCK]` → user-confirm → on decline, local-fallback answer with "本次未使用云端分析" note (never block):
 
 ```
 ⚠️ ct-advisor needs to send your question to an external server for intelligent analysis:
@@ -121,6 +131,8 @@ Entered **only** when `route.py` returns `vague` (the gate above). Run `python s
 ### Session continuity
 Once `@skill:ct-advisor` is invoked, its instructions + `knowledge/` stay in thread — **do NOT re-invoke the skill on follow-ups**; re-run gate 0 each turn. Off-topic / meta requests (e.g. "modify this skill") drop the framing and are handled as normal assistant work (no methodology workflow, no Coze refine).
 
+**Type-B follow-ups (implicit carry-over, no anaphora)** — since v0.9.70, `refine_answer.py --ship` auto-stitches conversation context before forwarding: `scripts/context_stitch.py` detects implicit follow-ups ("若检验效能改用90%呢" / "如果HR是0.7呢"), reads the last-round summary from `config/context_cache.json` (TTL 3 rounds), and rewrites the question self-contained ("承接上一问（…），追问：…") so Coze never re-asks already-given parameters. Cache is updated with the **raw** question after each successful ship (never the stitched form, preventing multi-round nesting). This is pure local code — no LLM, no new outbound, no Coze contract change.
+
 ### Personalization（tone writing + local user memory）— ⚠️ DEFERRED (not enabled)
 
 Tone writing (`tone_profile`) and local user memory (`memory_context`) are **temporarily disabled**: the deployed Coze workflow (v1.5 contract) does not implement these fields, so local injection is silently ignored. The scripts (`tone_matcher.py` / `memory_manager.py`) and the `--tone` / `--memory` CLI flags remain in place for future use but **MUST NOT be invoked**. Re-enable only after the Coze workflow ships the v1.6 contract fields (2026-08-12 decision).
@@ -129,14 +141,6 @@ Tone writing (`tone_profile`) and local user memory (`memory_context`) are **tem
 
 - **🔴 HARD GATE: minimal local work before `--forward`** — between receiving the question and firing Coze, the **only** permitted local work is **one** deterministic, LLM-free difficulty call: `python scripts/route.py "<q>"` (stdlib-only, instant, ~tens of ms). It performs **NO `knowledge/` read, NO `search_refs.py`, NO multi-round local retrieval** — those historically cost 10–20 tool round-trips (≈3–4 min) and are the #1 latency failure mode. For `vague`, the clarify loop (`clarify_loop.py`) is a bounded pure-local menu (≤3 rounds) that still precedes Coze. The 3c fallback (local answer) happens **only after** Coze fails.
 - **Search backoff**: on `search_refs.py` 0 hits → do NOT chain more local reads; hand the original question straight to Coze remote. **Long sessions**: prune stale context before step 2 (keep recent turns + final conclusion; never drop info still needed).
-
-## 🔴 Code-based difficulty gate at entry (2026-08-14 晚)
-
-**Local runs `scripts/route.py` ONCE at question entry** — a deterministic, LLM-free classifier that labels difficulty (`simple`/`vague`/`middle`/`complex`). This is the **only** pre-forward local work (instant, stdlib-only, no KB read). Branch:
-- **`vague`** → enter the Local Clarify Loop (`scripts/clarify_loop.py`, heuristic menu) to clarify requirements, then re-gate on the enriched question and route per the table (data-intel → `orchestrate.py` preferred, else `--ship`).
-- **`simple` / `middle` / `complex`** → `scripts/orchestrate.py`（数据智能首选）或 `refine_answer.py --ship`（兜底），带 `query_meta.difficulty` 标签；`--ship` / `orchestrate` 输出定界包裹答案，原样透传（pipe-only）。
-
-`route.py` is now **ACTIVE** (no longer deprecated). It labels difficulty only — it does **not** decide local-vs-remote; every non-vague question still goes to Coze (forward-only). The Coze-side node re-judges only if `difficulty` is somehow blank (defensive fallback).
 
 ## Code Orchestrator (`orchestrate.py`, 2026-08-15)
 
@@ -171,6 +175,8 @@ Missing sibling skill → state what's required + give its GitHub address (`http
 
 `ct-registry` / `ct-safety` / `ct-literature` → read real outputs for grounding, never re-search; `ct-samplesize` computes n (this skill provides the parameter framework only); `meta-analysis` handles R meta plots; `ct-base` = internal base (i18n / excel_style / series safety model).
 
+**方案评审 / 修订风险（2026-08-19）**：本技能（Coze 端）提供**基础方案评审**（评审模式：逐点判定 + 严重性分级 + 修改建议）。**深度方案评审需要 `ct-protocol` 才有更完善的结果**——多角色评审（PI/现场医生/监管）、修订风险评分（amendment-risk scoring）、结构化 review.json、且**方案不出域（本地离线）**。用户在 Coze 端得到基础评审后，若需深度评审/修订风险评估，**明确引导其使用本地 `ct-protocol` 技能**（`@skill:ct-protocol`），不冒充其能力。
+
 ## China Regulatory Depth (C-layer)
 
 CTA/IND 60-day tacit approval, Type A/B/C communication meetings, registration ≠ tacit approval — see `knowledge/ref-regulatory-versions.md` + `knowledge/reference-index.md`; verify any version / status / deadline in real time against the official original.
@@ -181,9 +187,12 @@ Pre-delivery checks and stop conditions live in `knowledge/system_prompt.md` "Qu
 
 **Presentation rules (user-mandated, hard)** — deliver only the answer (refined stdout) + essential cited basis. **Never emit any workflow / process narration to the user** — this explicitly covers: step 0–6 labels ("Step 2", "Gate 0", "Step 6"), difficulty tags (`simple` / `middle` / `complex` / `vague`), forward / need_tool / fallback mechanics, routing / triage narration, progress / status broadcasts, self-process recaps, memory / CHANGELOG housekeeping notes, follow-up CTAs, redundant closing summaries, internal-pipeline wording ("refined by Coze", "assembling payload"), and disclosure of internal knowledge sources. Internal reasoning may still use these labels freely — they just must **never** appear in user-visible text. See ct-base §6.2 / §6.3.
 
-**🔔 Forward-mode user notice (the ONLY allowed process message)** — before the Coze call (all questions; response takes seconds), emit **exactly one** brief user-facing notice, e.g.:
+**🔔 Forward-mode user notice (the ONLY allowed process message)** — emit **exactly one** brief user-facing notice **immediately before firing the Coze call** (`refine_answer.py --ship` / `orchestrate.py`), i.e. **AFTER** `route.py` has returned (the difficulty gate is local, sub-second — no notice needed for it) and any clarify loop has finished. The notice covers the wait for the cloud response, not the local gate. Example:
 > 正在调用云端分析引擎，请稍候…
 
 (English: `Please wait while the cloud analysis runs…`) Do **NOT** repeat it, do **NOT** add any other process chatter.
+
+### Bug Report (§20.3 · ct-base, optional sanitized outbound)
+On a detected skill defect (CLI≠0 / R engine error / user questions result) or **explicit user request** ("report a bug" / "反馈问题"), `adapters/bug_report.py` offers a sanitized 11-key report (no raw input; user-approved `description` only) to `https://ct-bugreport.coze.site/run`. **Two-stage confirmation** (propose-with-preview → send) is mandatory — the full sanitized report (`render_report_text`) is shown together with the propose message, and one explicit user consent sends it (2026-08-21 由三阶段简化，保留发送前内容检视与明确放行); capped at 1 unsolicited offer/session, but user-initiated requests are unlimited. Public credential embedded (obfuscated) in `adapters/bug_report.py`. Invoke: `python adapters/bug_report.py --error-type <t> --test <name> --description "<free text>" [--send]` (add `--send` only after the user confirms). After a successful send, the endpoint returns `history` (last submission for the same `query_origin`, or `""`); compose the reply from `confirm_thanks(locale)` + `build_followup(history, locale)` — bilingual, auto-switched by `locale` (2026-08-22 历史回执): empty `history` → end; `history.resultstr == "done"` → also show the fix note from `history.memo`; otherwise show "not yet fixed". All user-facing strings are bilingual via `_MSGS` and `_current_locale()` auto-detection.
 
 ## Changelog — full history (0.8.0 → 0.9.30+) → **[CHANGELOG.md](CHANGELOG.md)**

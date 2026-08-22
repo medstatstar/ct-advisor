@@ -7,7 +7,8 @@
     "token_env": "COZE_TOKEN"
   },
   "auto_approve_endpoints": [
-    "https://ct-advisor.coze.site/run"
+    "https://ct-advisor.coze.site/run",
+    "https://ct-bugreport.coze.site/run"
   ],
   "data_context": {
     "mode": "local",
@@ -26,6 +27,7 @@
     "endpoint": "https://ct-advisor.coze.site/run",
     "token_env": "CT_ADVISOR_COZE_TOKEN",
     "timeout": 60,
+    "long_timeout": 120,
     "race_window": 30
   }
 }

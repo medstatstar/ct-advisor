@@ -1,5 +1,75 @@
 # Changelog
 
+## v0.9.100 (2026-08-22) — 增加 bug report 功能（ct-base §20.3 接入完成）
+
+- **发布前检查修正**：README 出站披露「three-stage confirmation」→「two-stage confirmation」（与 §20.3.3 同步，SKILL.md 已正确）。
+- bugreport 接入点全绿（发布前检查无待确认项）：`adapters/bug_report.py`（内嵌公共 token + `DEFAULT_ENDPOINT` 统一端点 + 历史回执 `confirm_thanks`/`build_followup` 已就位）、SKILL.md Bug Report 段（双向触发 + 两阶段确认 + 脱敏铁律 + 历史回执）、`config.json` `auto_approve_endpoints` 已含 `https://ct-bugreport.coze.site/run`、README 出站披露均已就位。
+- 三道发布闸门：publish_secret_scan（0 P0/0 P1）、shared_sync_check（无漂移）、clawhub_security_audit（仅预已发布技能的既有审计项，无新增阻断）。
+
+## v0.9.72 (2026-08-22) — Bug Report 发送后历史回执约定（ct-base §20.3.7 同步）
+
+- **SKILL.md Bug Report 段**：补充发送成功后回执流程——endpoint 返回 `history`（同 query_origin 上一次提交或 `""`），agent 用 `confirm_thanks(locale)` + `build_followup(history, locale)` 组织回复（双语自动切换：`history` 为空→结束；`resultstr=="done"`→展示 memo 修复详情；否则提示尚未修复）。所有用户提示 `_MSGS` 中英成对、按 `locale` 自动转换。
+- 同步源：ct-base `docs/07-coze-engine.md` §20.3.7 + `adapters/bug_report.py`（confirm_thanks/build_followup/parse_history，v1.1.58）。
+- 客户端落地（2026-08-22 cont.）：`adapters/bug_report.py` 副本补齐 `confirm_thanks`/`build_followup`/`parse_history` + `_MSGS` thank/done/pending 双语文案 + `send_to_endpoint` 透传 `history`（此前该副本缺这些函数，仅 SKILL.md 有回执约定）；docstring「三阶段确认」→「两阶段确认」。
+
+## v0.9.71 (2026-08-21) — bugreport 两阶段确认简化（方案 A，ct-base §20.3.3 同步）
+
+- **SKILL.md Bug Report 段**：Three-stage confirmation（propose → show → send）→ **Two-stage confirmation（propose-with-preview → send）**——提议时直接展示 `render_report_text` 脱敏报告全文，用户一次明确确认即发送（保留发送前内容检视与明确放行，去掉"提议→展示"间的一个来回）。
+- 同步源：ct-base `docs/07-coze-engine.md` §20.3.3（三阶段→两阶段）+ `references/bug_report_endpoint.md` + `adapters/coze/coze_contract.md` + `AGENTS.md`；ct-samplesize SKILL.md/CHANGELOG 同步。
+- 代码零改动：`bug_report.py` 的 `confirm_prompt`（一次性提议文案）与 `render_report_text`（全文渲染）照用，仅 agent 流程合并两步。
+
+## v0.9.70 (2026-08-20) — 类型 B 追问自包含化 + README 示例实测闸门闭环
+
+### bugreport 接入（ct-base §20.3，2026-08-21）
+- 复制 `ct-base/adapters/bug_report.py` → `adapters/bug_report.py`，内嵌 ct-bugreport 公共凭据 blob（`EMBEDDED_SECRETS`，XOR+base64，与 ct-base 镜像同密钥同 blob），`DEFAULT_ENDPOINT` 已为统一端点 `https://ct-bugreport.coze.site/run`；新增 CLI（`--error-type/--test/--description/--send`）供 agent 调用。
+- `config.json` `auto_approve_endpoints` 加入 `https://ct-bugreport.coze.site/run`（与 Coze 端点同待遇，永不弹确认）。
+- SKILL.md 加 §20.3 触发规则（强信号 + 每会话 1 次；**新增「用户显式请求上报 bug」主动触发，每会话可多次**）；两份 README 出站披露补 bug-report 客户端条目；AGENTS.md 同步预置白名单。
+- ct-base 同步：§5 预置白名单 + §20.3.5 声明 bug-report 端点为作者预置公共端点；§20.3.1 新增「用户主动要求报告 bug」触发条件。
+
+### 实测留痕（2026-08-20）— §16.6 对话示例实测闸门：README ×2 共 16 示例逐一无损实测
+
+- **触发**：按 ct-base §16.6（2026-08-20 新增，全库强制），对 `README.md`（EN 8 例）+ `README_zh-CN.md`（ZH 8 例）的每个对话示例按"你这样说"真实触发技能并留痕。触发方式：`route.py`（难度判定）/ `clarify_loop.py --payload-inline`（vague 澄清）/ `refine_answer.py --ship`（Coze 转发）/ `orchestrate.py`（本地编排器：Coze 直发 + route_tool 预判并行）。
+- **实测矩阵（EN/ZH 同文，各 8 例）**：
+
+| 示例 | README 声称 | 实测结果 | 判定 |
+|---|---|---|---|
+| Ex1 方法学 estimand | 转发 Coze 直接答 | `--ship` 返回完整 ICH E9(R1) 五要素答案（checksum cfee1b4d） | ✅ 通过 |
+| Ex2 窄数据（注册试验） | 本地编排器自动分派 ct-registry，实时 landscape | Coze 回"知识库未收录+建议自行用 ct-registry"；route_tool 预判 `null`；**无任何检索发生** | ❌ P1 核心卖点失效 |
+| Ex3 竞品情报三源 | 编排器自动分派 registry+safety+literature 拼接，无需确认 | Coze 知识综述五部分质量高；但委托块 `missing_params=[cond]` 追问后才执行，预判仅识别 registry 单源 | ⚠️ P2 部分 |
+| Ex4 多部分设计+样本量 | 编排器并行 samplesize + Coze | Coze 完整五部分设计答复 + 委托追问 test/效应量参数（缺参合理） | ✅ 通过 |
+| Ex5 vague 澄清 | route.py 判 vague → clarify_loop 追问"角色/阶段/材料" | route.py 判 `complex`（不进入澄清）；强入后 ZH 追问 PICO 维度（人群/结局），EN 直接 `decidable` | ❌ P0 README 与实现脱节 |
+| Ex6 语言切换 | 一句话切换 | `--ship` 中/英文确认回复均正常 | ✅ 通过 |
+| Ex7 PD-1 文献证据 | route to ct-literature --safety，带 DOI/PMID 引文 | Coze 知识综述（类效应五部分+证据摘要）质量高；预判判为 `ct-safety`（非文献检索）；**无 DOI/PMID 引文** | ❌ P1 路由错误+无引文 |
+| Ex8 证据+样本量 | ct-literature + ct-samplesize 两段交接 | Coze 正确识别双技能并追问缺参（合理降级）；预判仅委托 samplesize | ⚠️ P2 部分 |
+
+- **CLI 示例**：`check_deps.py` ✅ / `menu.py --all` ✅ / `menu.py --tier data_skill --human --lang zh` ⚠️（--lang zh 输出 i18n key `menu.ct_registry` 而非中文）。
+- **已确认根因**：① route.py vague 语义规则未命中"我不确定要什么"（被 complex 覆盖）；② clarify_loop.py 追问维度为 PICO（与 README「角色/阶段/材料」脱节）；③ route_tool.py + Coze tool_router_node.py 触发词缺"注册试验/登记试验"模式（2026-08-15 修误触发删裸词后未补精确复合词）；④ route_tool.py safety/literature 区分不足（"检索文献/病例报告/综述"判成 ct-safety）；⑤ route.py 正则全中文，英文示例全部兜底 complex（EN 语义路由退化）；⑥ menu.py --lang zh 未接入 i18n。
+- **修复闭环（2026-08-20 当日，用户拍板"保 PICO + 全部执行"后落地并逐一重测）**：
+  - **D1（Ex5 P0）**：`route.py` 新增 `VAGUE_UNCERTAIN` 语义规则（`不…确定/不知道/没想好 + 需要什么/怎么办…`，支持"不太确定"被"太"隔断的形态；`VAGUE_UNCERTAIN_EXCL` 排除"不确定 X 是否/能不能"有明确对象的判断句）；README ×2 示例 5 描述改为实际 PICO 追问（人群/对照/终点）。重测：自测 29/29（+5 新用例），EN-5/ZH-5 均判 `vague` → clarify_loop 输出 PICO 问题，闭环成立。
+  - **D2（Ex2 P1）**：`route_tool.py` + Coze `tool_router_node.py` 的 registry 触发词补「注册试验/登记试验/试验注册/试验登记/registered trial/trial registration」（精确复合词，不加裸词）；`_extract_params` SUFFIX 补「肽/抗体」+ 前导口语动词剥离（拉一下/帮我查 → cond 纯净）。重测：route_tool 自测 18/18+3/3；ZH-2/EN-2 预判 `ct-registry` 且 `cond=司美格鲁肽`（修复前 null）；Coze 规则表桩测 ZH-2→registry；文档类"分中心小结"防回归不触发；orchestrate 全链路从"未收录+建议"变为 `CT_TOOL_DELEGATE(ct-registry, missing=[cond])`——委托检索（线上 Coze 未部署新规则前，Coze 侧仍回"未收录"由委托补）。
+  - **D4（Ex7 P1）**：`route_tool.py` ct-literature 触发词补「病例报告/个案报告/已发表/系统综述/meta分析/证据摘要」+ `LIT_FIRST` 优先规则（literature 与 safety 同命中且含检索意图词 → literature 优先）。重测：Ex7 预判 `ct-literature`（修复前 ct-safety）；FAERS 统计题仍判 ct-safety 防回归。
+  - **D9（CLI P3）**：根因是 `i18n_messages.json` 缺 menu.json 全部 100 个 `menu.*`/`ground.*`/`out.*` key（menu.py 本身正确）——一次性补齐 100 个 key 双语翻译（352 keys）。重测：缺失 0；`menu.py --tier data_skill --human --lang zh` 输出中文（修复前 i18n key）；`--lang en` 正常。
+  - **D10（EN 路由）**：EN vague 规则随 D1 落地（"not sure what I need"→vague）；EN 其余兜底 complex 转发为合理行为（英文正则覆盖收益低，不做过度工程）。
+- **重测补充修复（16:07–16:35，用户"再测一下"触发，Ex2 链路 3 个新缺口）**：
+  - **tool_mapping `--run` 缺失**：ct-registry 执行卡 `extra_args` 只有 `--auto-confirm`，停在 ct_registry PREVIEW 安全门（只提示 add --run、不发网络）→ `extra_args` 补 `--run`（对齐 ct-safety 的 run=true；编排器执行卡场景用户提问即检索指令，无条件联网）。
+  - **term_map 术语缺口 + 共享件漂移**：ct-registry 无 GLP-1 类药物术语 → 中文"司美格鲁肽"检索英文库 0 条。按 §16.8 规范先把 6 个术语（司美格鲁肽/替尔泊肽/利拉鲁肽/瑞他鲁肽/度拉糖肽/艾塞那肽）加回 ct-base 真源，再同步 ct-advisor/ct-literature/ct-registry 三叶子（字节级一致 249 keys，shared_sync_check 全绿）；**ct-pipeline/ct-safety 历史 190-key 裁剪版（缺 59 key 既有漂移）随后一并从真源复制覆盖（249 keys，闸门全绿）**；KW 会话缓存 `config/kw_system_cache.json` 清空（旧缓存 en=[] 覆盖新术语）。
+  - **ct_registry `--print-summary`（新增）**：cleanup 前把 landscape 摘要 JSON 打到 stdout（n_trials + phase_mix/region_mix/top_sponsors 分布），供编排器解析；tool_mapping extra_args 补 `--print-summary`。
+  - **`handle_need_tool._extract_json` 嵌套 JSON 解析 bug**：旧实现 `rfind('{')` 取到嵌套内层 `{` 导致切片不完整、json.loads 失败退回全文 → 改为按行累积 + 括号深度闭合点逐段解析（单行/多行 JSON 均通过，纯文本兜底不变）。
+  - **Ex2 最终端到端**：真实联网检索（CT.gov `total=569`）→ landscape 摘要完整输出（n_trials=50、phase_mix PHASE3×15/unknown×10/PHASE1×8/PHASE2×8/PHASE4×6、region_mix US×560 等、top_sponsors Novo Nordisk 居首）+ report.xlsx 产物——README 示例 2「自动分派返回归一化 landscape」完全兑现。
+- **未发布**：本轮新增改动（tool_mapping.json / handle_need_tool.py / ct-base+3 叶子 term_map.json / ct-registry ct_registry.py+--print-summary / kw_system_cache 清空）均为本地改动；ct-registry 技能侧改动待其自身发布流程；未 commit 未 push。
+- **未发布**：全部为本地改动（route.py / route_tool.py / menu.py / i18n_messages.json / README×2 / CHANGELOG）；Coze 端 tool_router_node.py 改动在本地 Coze 包，线上未部署；未 commit 未 push，待用户授权。
+
+### 类型 B 追问自包含化（本地上下文摘要 + 拼接，代码级）
+
+- **背景（真实链路实测）**：类型 B 追问（隐式承接、无回指词，如"若检验效能改用90%呢"/"如果HR是0.7呢"）被判 simple/middle/complex 直接转发 Coze，而 payload 只有 `original_question`、无上一题上下文 → Coze 重复追问已给参数（实测：用户已给 p1/p2 仍被追问），体验断裂。类型 A（显式回指"刚才说的…"）已由 route.py ANAPHORA → vague → clarify_loop 覆盖，不在本次范围。
+- **方案①落地（Coze 契约零改动）**：
+  - 新增 `scripts/context_stitch.py`（stdlib-only，无 LLM、无新增出域）：`is_followup()` 承接语气识别（强承接词 若/如果/那/改用/调整为/也适用/按…分配 + 短句；完整问题锚点 什么是/如何/样本量/检验… 不误伤）；`extract_summary()` 关键实体摘要（剥离"承接上一问…追问："前缀防多轮嵌套）；`stitch()` 拼接为自包含问题；`load_cache/save_cache` 会话缓存（`config/context_cache.json`，TTL 3 轮）。
+  - `refine_answer.py --ship` 集成：转发前检测 follow-up → 读缓存 → 拼接 `承接上一问（<摘要>），追问：<原话>`；转发成功后用**原始问题**（非拼接后）更新缓存。
+- **实测验证（真实 Coze 链路 3 轮）**：轮1 样本量问题（30%/45%/α=0.05/80%/1:1）→ 缓存写入；轮2 追问"若检验效能改用90%呢" → 自动拼接 → **Coze 返回具体数值（总样本量约 536 例 vs 80% 下约 394 例，+36%），不再 need_params 追问**；对比修复前同追问仅返回泛化方法论+追问参数。
+- **回归**：route.py 24/24 不受影响；context_stitch 判定 10 例（5 追问 true + 5 独立问题 false）全对；py_compile 通过；多轮嵌套已防。
+- **ignore**：`config/context_cache.json` 加入 .gitignore（运行态缓存不入库）。
+- **未发布**：本地改动，待用户授权后发布（GitHub/SkillHub/ClawHub）。
+
 ## v0.9.69 (2026-08-15) — 七大流程端到端测试 + Coze 干净替换包 + 线上一致性检查（纯验证/打包，无逻辑改动）
 
 - **新增 `scripts/test_seven_flows.py`（七大流程回归 harness，7/7 全绿）**：加载**真实本地 Coze 决策代码** `tool_router_node._match_tool()`（仅对其未安装的平台依赖 pydantic/langchain/langgraph/coze_coding_utils 做导入桩），驱动 7 个典型流程经真实 `route_tool.predict()` + `orchestrate.build_output()` + `_enrich_coze_params()`。覆盖：方法论包裹 / 同判包裹不重复调 / registry 参数富集（断言含 cond，实证 P0/P2）/ 跨工具委托 / Coze 兜底委托 / 缺参追问委托 / 执行失败重试委托。关键发现：前端与 Coze 规则集与顺序不同（前端 samplesize 优先、Coze registry 优先），编排器正确处理同判/异判/缺参/失败。

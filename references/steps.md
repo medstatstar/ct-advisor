@@ -6,7 +6,7 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 # Answer Workflow — Steps 0-6 (Detailed)
 
-> **🔴 2026-08-14 mode change — FORWARD REPLACES RACE/SERIAL**: the local skill no longer answers locally — **every** non-vague question is forwarded to Coze once (`refine_answer.py --ship`, or `orchestrate.py` for data-intel); local `knowledge/` answers only as the Coze-failure fallback; sibling skills run **only** on the Coze-issued `need_tool` card (execute `scripts/handle_need_tool.py` + stitch locally, never re-send). **Entry difficulty gate**: `scripts/route.py` (deterministic, LLM-free) runs **once** at question entry to label difficulty; `vague` → Local Clarify Loop (`clarify_loop.py`) then Coze, others → verbatim forward with `query_meta.difficulty`. Steps 1–5 below are **legacy race/serial detail kept for back-compat reference only** — do NOT run `--fire-only` or `--collect` in forward mode (the `route.py` gate IS the current entry step). The authoritative current flow is the SKILL.md Answer Workflow table + `ops.md` §step-7-cookbook.
+> **🔴 2026-08-14 mode change — FORWARD REPLACES RACE/SERIAL**: the local skill no longer answers locally — **every** non-vague question is forwarded to Coze once (`refine_answer.py --ship`, or `orchestrate.py` for data-intel); local `knowledge/` answers only as the Coze-failure fallback; sibling skills run **only** on the Coze-issued `need_tool` card (execute `scripts/handle_need_tool.py` + stitch locally, never re-send). **Entry difficulty gate**: `scripts/route.py` (deterministic, LLM-free) runs **once** at question entry to label difficulty; `vague` → Local Clarify Loop (`clarify_loop.py`) then Coze (never forwarded as `vague`); **others → verbatim forward with `query_meta.difficulty` as a *hint* — Coze always re-estimates it via LLM into `simple`/`middle`/`complex`**. Steps 1–5 below are **legacy race/serial detail kept for back-compat reference only** — do NOT run `--fire-only` or `--collect` in forward mode (the `route.py` gate IS the current entry step). The authoritative current flow is the SKILL.md Answer Workflow table + `ops.md` §step-7-cookbook.
 
 > **🔴 2026-08-15 v0.9.68 update**: for data-intel questions (sample-size / registry / safety / literature) the preferred entry is now `scripts/orchestrate.py` (code-only orchestrator: prefetch + parallel Coze/skill + decide, emits wrapped answer or `<<<CT_TOOL_DELEGATE>>>`); `--ship` is the non-orchestrate fallback answer path. `--forward` is debug-only. The LLM is never the orchestrator — it only delegates ct-skill calls and handles need_params + Coze-failure fallback.
 
@@ -16,18 +16,18 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 ## Step 0 — Code-based difficulty gate (2026-08-14 晚)
 
-**Goal**: run `scripts/route.py` **once** at question entry to label difficulty (`simple` / `vague` / `middle` / `complex`). Deterministic, LLM-free, stdlib-only — the **only** local work permitted before Coze (no `knowledge/` read, no `search_refs.py`, no multi-round local retrieval). `route.py` only labels; it does **not** decide local-vs-remote.
+**Goal**: run `scripts/route.py` **once** at question entry. Its **primary job is to split out `vague`** (→ Local Clarify Loop, which never forwards `vague` to Coze). For non-vague questions it also emits a `simple` / `middle` / `complex` label — but **this label is only a *hint***: Coze **always re-estimates difficulty via LLM** into `simple` / `middle` / `complex` (vague is impossible server-side) and uses that re-estimated value to set answer depth. Deterministic, LLM-free, stdlib-only — the **only** local work permitted before Coze (no `knowledge/` read, no `search_refs.py`, no multi-round local retrieval). `route.py` only labels; it does **not** decide local-vs-remote.
 
 **Branch after the gate**:
 
 | label | action |
 |---|---|
-| `vague` | enter the **Local Clarify Loop** (`scripts/clarify_loop.py`, the heuristic menu) to clarify requirements (1–3 high-value questions/round, hard cap 3 rounds); on status `decidable`/`forced_decide` re-gate on the enriched question and route per the table (data-intel → `orchestrate.py` preferred, else `--ship`) with `query_meta.difficulty="vague"`. |
-| `simple` | forward via `scripts/orchestrate.py` (data-intel preferred) or `refine_answer.py --ship` (fallback) with `query_meta.difficulty="simple"`. |
-| `middle` | forward verbatim to Coze with `query_meta.difficulty="middle"`. |
-| `complex` | forward verbatim to Coze with `query_meta.difficulty="complex"`. |
+| `vague` | enter the **Local Clarify Loop** (`scripts/clarify_loop.py`, the heuristic menu) to clarify requirements (1–3 high-value questions/round, hard cap 3 rounds); on status `decidable`/`forced_decide` re-gate on the enriched question and route per the table (data-intel → `orchestrate.py` preferred, else `--ship`) with the **re-gate label** (`simple`/`middle`/`complex`) — **never** as `vague` (Coze no longer accepts vague; it would be forced to `complex`). |
+| `simple` | forward via `scripts/orchestrate.py` (data-intel preferred) or `refine_answer.py --ship` (fallback) with `query_meta.difficulty="simple"` **(hint — Coze re-estimates)**. |
+| `middle` | forward verbatim to Coze with `query_meta.difficulty="middle"` **(hint — Coze re-estimates)**. |
+| `complex` | forward verbatim to Coze with `query_meta.difficulty="complex"` **(hint — Coze re-estimates)**. |
 
-All non-`vague` labels go to Coze **verbatim** (forward-only).
+All non-`vague` questions go to Coze **verbatim** (forward-only). The forwarded `difficulty` is a **hint only** — Coze's `generate_organized_problems_node` **ignores it and re-estimates via LLM** (simple/middle/complex), then feeds that value into `full_analysis` as the answer-depth knob.
 
 **🔴 Run the router (mandatory, code-only)**:
 
@@ -116,7 +116,7 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 
 - 🔴 **HARD GATE (post-collect zero-processing)**: the instant `--collect` returns a cache hit, output the Coze stdout **as-is** — no re-write, no re-order, no injecting `knowledge/` citations the Coze output lacked, no re-formatting, no appended "local summary". Re-synthesis after Coze returns is the #2 measured latency failure mode. Ship Coze, full stop.
 - 🔴 **Route is a window-internal side task, NEVER a blocker**: `fire-only` needs only `original_question`; the Route result is irrelevant to Coze. Do NOT read `workflows.json` / `knowledge/` *before* firing (Step 1) — and do NOT let Route retrieval delay the collect call. If local retrieval would take long, it only matters as fallback; Coze (≈20s) almost always wins, so the user never waits for the full local retrieval.
-- Coze HTTP timeout = full 60s (`refiner.timeout`)
+- Coze HTTP timeout = full 60s (`refiner.timeout`); **complex / 模板类问题放宽到 120s**（`refiner.long_timeout`）——由 `CozeRefiner._resolve_timeout()` 按 `difficulty==complex` 或 `category` 命中模板类标记自动判定
 - race_window = 30s (config.json `refiner.race_window`; caller can override with `--wait N`)
 - **⚠️ --collect MUST pass complete payload**: the cache path is derived from the hash of original_question + query_meta; without the payload the cache cannot be located. When the agent calls --collect in step 2, it MUST pass the same payload from step 1 (or at least the minimal payload containing original_question), otherwise the script fails JSON parsing → local win (but wastes one tool call)
 
@@ -205,7 +205,7 @@ step 2 local answer + step 3/4 external data → foreground serial call to refin
 
 ### Serial call style (stdin pipe preferred)
 
-🔴 **payload MUST include `query_meta` with `difficulty`** (missing/illegal difficulty falls back to `complex` in the script, but always pass the Triage label explicitly — a blank difficulty breaks server-side routing and leaves the Feishu collection blank):
+🔴 **payload MUST include `query_meta` with `difficulty`** (the local route.py label is a *hint*; Coze re-estimates it via LLM. Missing/illegal difficulty still falls back to `complex` locally — harmless, since Coze overrides anyway; always pass the route.py label for the Feishu collection to be meaningful):
 
 ```bash
 # Bash / Git Bash — stdin pipe (zero encoding risk; handles Chinese punctuation in draft_answer)

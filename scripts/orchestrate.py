@@ -51,7 +51,7 @@ for _p in (str(SCRIPT_DIR), str(SKILL_ROOT)):
 
 # 复用 refine_answer.py 的权威包裹 / 执行原语（单一数据源，避免漂移）
 from refine_answer import (  # noqa: E402
-    _merge_answer, _run_handle_need_tool,
+    _merge_answer, _run_handle_need_tool, _render_skill_result, _detect_lang,
     _check_outbound_authorization, _get_endpoint_from_config,
     ANSWER_START, ANSWER_END, NEED_PARAMS_MARKER,
 )
@@ -155,11 +155,13 @@ def _fire_prefetch(card: dict) -> dict:
 
 def build_output(orig_q: str, coze_result: RefineResult,
                  prefetch_out: dict | None, prefetch_tool: str | None,
-                 prefetch_params: dict | None) -> str:
+                 prefetch_params: dict | None,
+                 need_tools: list | None = None) -> str:
     """返回最终应输出字符串（包裹答案 或 委托块）。
 
     decision（代码决定，非 LLM）：
-      - 预判已执行且 ok，且 Coze 未要求其他工具 → 信息足够 → 包裹答案。
+      - 预判已执行且 ok，且 Coze 未要求其他工具 → 信息足够 → 包裹答案
+        （多源问题在答案尾部追加「⚠️ 多源提示」指明其余工具，2026-08-21）。
       - 预判已执行且 ok，但 Coze 要求**不同**工具 → 仍委托（Coze 工具），
         预判结果作为补充并入 draft_answer。
       - 预判 need_params / error，且存在待调工具 → 委托（补全参数或重试）。
@@ -178,8 +180,10 @@ def build_output(orig_q: str, coze_result: RefineResult,
         tool = prefetch_out.get("tool") or prefetch_tool
         if status == "ok":
             if coze_tool is None or coze_tool == tool:
-                # 信息足够：Coze 答案 + 预判技能结果
-                return _wrap(_merge_answer(coze_answer, prefetch_out))
+                # 信息足够：Coze 答案 + 预判技能结果（多源问题附提示其余工具）
+                lang = _detect_lang(orig_q)  # 2026-08-21：缝合文案/标签随提问语言
+                merged = _merge_answer(coze_answer, prefetch_out, lang=lang)
+                return _wrap(merged + _multi_tool_hint(need_tools or [], tool, lang=lang))
             # Coze 要求不同工具：预判结果并入草稿，委托 Coze 工具
             base = _merge_answer(coze_answer, prefetch_out) if coze_answer.strip() else \
                 f"## 补充信息（来源：{tool}）\n\n" + _render_skill_text(prefetch_out)
@@ -216,13 +220,42 @@ def build_output(orig_q: str, coze_result: RefineResult,
 
 def _render_skill_text(tool_out: dict) -> str:
     """把技能主产物渲染为可读文本（与 refine_answer._render_skill_result 同逻辑）。"""
-    res = tool_out.get("result")
-    if isinstance(res, (dict, list)):
-        try:
-            return json.dumps(res, ensure_ascii=False, indent=2)
-        except Exception:
-            return str(res)
-    return str(res) if res is not None else ""
+    return _render_skill_result(tool_out.get("result"))
+
+
+# 工具用途说明（多源提示用，2026-08-21）
+_TOOL_DESC = {
+    "ct-registry": "试验注册库检索（试验格局 / 分期 / 申办方 / 时间线）",
+    "ct-safety": "FAERS 药物警戒信号（PRR / ROR / EBGM + 95%CI）",
+    "ct-literature": "学术文献检索（含临床指南 / 病例报告 / 综述 / 证据摘要）",
+    "ct-samplesize": "样本量 / 检验效能计算",
+}
+
+
+def _multi_tool_hint(need_tools: list, executed_tool: str, lang: str = "zh-CN") -> str:
+    """多源问题提示：已缝合主源后，明确指出其余数据源并建议分别调用。
+
+    2026-08-21（用户要求）：架构单工具时先缝合一个源即可，但需要多工具时
+    **必须直接指出**，提示用户分别先调用这些工具获取信息，不掩盖"其余源
+    尚未用真实数据缝合"这一事实（此前由 Coze 知识叙述冒充，无来源标签）。
+    提示文案随提问语言（lang）切换；工具名保持 id 原文。
+    """
+    others = [t for t in (need_tools or []) if t != executed_tool]
+    if not others:
+        return ""
+    lines = []
+    for t in others:
+        desc = _TOOL_DESC.get(t, t)
+        lines.append(f"- **{t}**（{desc}）：可先调用获取对应数据，再综合成完整结论。"
+                     if lang == "zh-CN" else
+                     f"- **{t}** ({desc}): call it first to fetch its data, then synthesize the full conclusion.")
+    if lang == "zh-CN":
+        return ("\n\n---\n\n### ⚠️ 多源提示：本问题还涉及以下数据源\n"
+                "当前已缝合「%s」的真实数据；其余源建议分别调用对应工具获取信息：\n%s"
+                % (executed_tool, "\n".join(lines)))
+    return ("\n\n---\n\n### ⚠️ Multi-source note: this question also involves the following data sources\n"
+            "Real data for '%s' has been stitched above; the remaining sources are suggested to be fetched "
+            "by calling each tool separately:\n%s" % (executed_tool, "\n".join(lines)))
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +282,8 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     pred = predict_tool(orig_q) if not no_prefetch else {"need_tool": None, "params": {}}
     prefetch_tool = pred.get("need_tool")
     prefetch_params = pred.get("params") or {}
+    # 2026-08-21：多源问题保留全部命中（need_tools），缝合主源后提示其余工具
+    need_tools = pred.get("need_tools") or []
 
     # 2) 并行触发：Coze（需授权）+ 预判 ct 技能（本地执行，免授权）
     coze_result = [None]
@@ -282,7 +317,8 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     for t in threads:
         t.join()
 
-    return build_output(orig_q, coze_result[0], prefetch_out[0], prefetch_tool, prefetch_params)
+    return build_output(orig_q, coze_result[0], prefetch_out[0], prefetch_tool,
+                        prefetch_params, need_tools=need_tools)
 
 
 # ---------------------------------------------------------------------------

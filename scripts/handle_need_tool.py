@@ -76,23 +76,39 @@ def _build_cmd(tool_cfg: dict, params: dict) -> list:
 
 
 def _extract_json(stdout: str):
-    """从 stdout 提取 JSON 主产物（优先最后一个完整 JSON 对象）；无则返回文本兜底"""
-    stdout = stdout.strip()
+    """从 stdout 提取 JSON 主产物（优先最后一个完整 JSON 对象）；无则返回文本兜底。
+
+    2026-08-20 修复：旧实现用 rfind('{')/rfind('}') 定位，遇嵌套 JSON（如
+    ct-registry --print-summary 的 landscape 对象）会取到内层 { 导致切片不完整、
+    json.loads 失败 → 退回全文。改为按行累积：从最后一行以 '{' 开头的行往前
+    累积到闭合 '}'，逐段尝试解析。
+    """
+    stdout = (stdout or "").strip()
     if not stdout:
         return None
-    # 尝试整体解析
+    # 整体解析
     try:
         return json.loads(stdout)
     except Exception:
         pass
-    # 提取最后一个 {...} 块
-    start = stdout.rfind("{")
-    end = stdout.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(stdout[start:end + 1])
-        except Exception:
-            pass
+    # 按行累积：从后往前找以 { 开头的行，累积到闭合 } 尝试解析
+    lines = stdout.splitlines()
+    for i in range(len(lines) - 1, -1, -1):
+        if not lines[i].lstrip().startswith("{"):
+            continue
+        buf = lines[i]
+        depth = buf.count("{") - buf.count("}")
+        for j in range(i + 1, len(lines) + 1):  # j == len(lines) 表示不再追加
+            # 每到一个闭合点（depth<=0）就尝试解析当前 buf
+            if depth <= 0:
+                try:
+                    return json.loads(buf)
+                except Exception:
+                    pass  # 解析失败 → 可能跨行，继续追加
+            if j >= len(lines):
+                break
+            buf += lines[j]
+            depth += lines[j].count("{") - lines[j].count("}")
     return stdout  # 文本兜底
 
 

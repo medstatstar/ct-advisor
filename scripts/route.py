@@ -16,20 +16,27 @@ ct-advisor — 确定性难度分类器（代码级，无 LLM）
   python scripts/route.py --self-test
         → 跑内置分类自测，输出每例命中/预期与准确率
 
+【route.py 的核心职责（2026-08-17 明确）】
+  本地代码**最主要用途是拆分出 vague**——指代不明/过短/回指省略的问题在本地拦截、
+  进入 clarify_loop 澄清，绝不转发 Coze。
+  simple / middle / complex 仅作为转发时附带的【提示标签】，Coze 服务端会【一律用 LLM
+  重新估计】difficulty 并写回（见 generate_organized_problems_node._resolve_difficulty），
+  因此本地判定结果不决定最终难度档位，也不作为 Coze 侧硬性路由键。
+
 分类优先级（确定性，瞬时，stdlib-only）：
   1. 空串                       → vague
   2. 🔴 is_vague（指代不明/过短/回指省略，判断**可偏多**）→ vague
                                （进入 clarify_loop 启发式菜单；宁可多澄清也不漏发 Coze）
-  3. is_simple（定义/标准操作） → simple        （判定 simple，转发 Coze 时带此标签）
+  3. is_simple（定义/标准操作） → simple        （附提示标签转发 Coze）
   4. 命中 complex 强信号        → complex        （含预路由拦截：外部数据/样本量强制 complex）
-  5. is_middle（显式解释/比较）  → middle         （后台 fire Coze verbatim）
+  5. is_middle（显式解释/比较）  → middle         （附提示标签转发 Coze）
   6. 兜底                       → complex        （未命中任何信号一律 complex，绝漏发车）
 
 入口分流（2026-08-14 晚，与 SKILL.md 对齐）：
-  - route.py 仅做**难度判定**，不决定「本地答 vs 发车」。
   - 🔴 **vague 最先判定（判断可偏多）**：发现 vague 立即进入本地澄清循环
     scripts/clarify_loop.py（启发式菜单）明确需求，收敛后再转发 Coze；绝不漏发 Coze。
-  - simple / middle / complex → 一律 verbatim 转发 Coze（forward-only），并随 payload 带上 query_meta.difficulty 标签供云端路由。
+  - simple / middle / complex → 一律 verbatim 转发 Coze（forward-only），并随 payload 带上
+    query_meta.difficulty 提示标签（Coze 会重新估计，仅作参考）。
 """
 
 import argparse
@@ -124,6 +131,26 @@ ANAPHORA = re.compile(
     r"前面那个|后面那个|上面那个|下面那个)"
 )
 
+# 语义 vague（2026-08-20 修复：README 示例 5 实测判 complex 的根因）：
+# 用户明说「不确定/不知道需要什么」且无明确对象 → 进入本地澄清。
+# 仅命中「不确定 X 是否/能不能…」这类**有明确对象的具体判断**时不判 vague
+# （由 is_vague 内的排除检查处理，避免把「不确定这样做是否合规」误拉进澄清）。
+VAGUE_UNCERTAIN = re.compile(
+    r"(?:不.{0,2}(?:确定|清楚|知道|了解)|没想好|拿不准|没有头绪|毫无头绪)"
+    r".{0,10}(需要什么|要什么|做什么|怎么办|怎么弄|该做什么|该问什么|问什么|"
+    r"怎么开始|从哪(?:里)?开始|什么需求|需求是什么|怎么用|怎么提问)|"
+    r"\b(not sure|not certain|unsure|don'?t know|no idea|not clear|no clue)"
+    r".{0,24}\b(what|how|which|where)\b|"
+    r"\bwhat (?:do|should|can) i (?:need|ask|do|get|want)\b",
+    re.IGNORECASE,
+)
+# 有明确对象的判断句式（命中 → 不算语义 vague）
+VAGUE_UNCERTAIN_EXCL = re.compile(
+    r"(不确定|不清楚|不知道|not sure|not certain|unsure).{0,14}"
+    r"(是否|能不能|可不可以|对不对|合理|合规|正确|appropriate|valid|acceptable|\bif\b)",
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # simple 白名单：knowledge 知识包确定覆盖的「标准操作 / 定义类」主题短语
 # （来源：knowledge/reference-index.md 覆盖主题 + 四题库联合验证；命中即本地直答）
@@ -185,6 +212,10 @@ def is_vague(q: str) -> bool:
     # 3) 过短且无术语 / 定义 / 标准操作锚点 → 视为 vague（偏多：含糊短句进菜单）
     if len(q) <= 10 and not TERM.search(q) and not DEF.search(q) \
        and not STOP.search(q) and not SIMPLE_TOPICS.search(q):
+        return True
+    # 4) 语义 vague（2026-08-20 补）：明说「不确定/不知道需要什么」→ 进入澄清。
+    #    排除「不确定 X 是否/能不能…」这类有明确对象的具体判断（不判 vague）。
+    if VAGUE_UNCERTAIN.search(q) and not VAGUE_UNCERTAIN_EXCL.search(q):
         return True
     return False
 
@@ -251,6 +282,9 @@ SELF_TEST = [
     ("前面说的统计检验方法该怎么选", "vague"),    # 回指省略
     ("上一条说的不良事件要怎么报", "vague"),      # 复合回指
     ("怎么办", "vague"),
+    ("我不太确定自己到底需要什么", "vague"),      # 语义 vague（README 示例 5 ZH）
+    ("I'm not sure what I actually need", "vague"),  # 语义 vague（README 示例 5 EN）
+    ("我不知道该从哪里开始", "vague"),            # 语义 vague 变体
     # ---- middle：显式解释 / 比较，无 complex 信号 ----
     ("解释 SDTM 和 ADaM 的区别", "middle"),
     ("说明 SDTM 的变量命名规则", "middle"),
@@ -262,6 +296,8 @@ SELF_TEST = [
     ("样本量计算要考虑哪些因素", "complex"),
     ("CRF 设计要注意什么", "complex"),
     ("对比两种统计检验方法的优劣", "complex"),
+    ("不确定下一步怎么办，做法是否合规", "middle"),  # 语义 vague 命中 + 明确对象排除（是否）→ 不澄清，转发（middle）
+    ("I'm not sure if this design is appropriate", "complex"),  # EN 排除 vague
 ]
 
 

@@ -108,7 +108,10 @@ def _current_lang():
 # user-facing EN/ZH strings. Edit i18n_messages.json, never hard-code in callers.
 #
 # 分区索引（与 JSON 内 key 前缀对应）：
-#   generic / exec / info / error / validation / install / header —— 全库通用消息
+#   generic / exec / info / error / validation —— 全库通用消息（i18n_messages.json）
+#   install / header.r_code / header.install_cmd / error.rscript_* / error.r_timeout
+#       —— R 软件相关消息，单独放 i18n_r_messages.json（可选扩展，仅真正调用 R 的技能
+#          vendor 并携带此文件；纯 Python 技能不携带时自动跳过，见下方加载逻辑）
 #   xlsx.*          —— ct-registry Excel 报告框架标签
 #   xlsx.safety.*   —— ct-safety FAERS Excel 报告标签
 #   kw_gate.*       —— ct-registry 关键字体系确认菜单
@@ -124,6 +127,15 @@ try:
 except (OSError, ValueError):
     # 离线兜底：文件缺失/损坏也不让模块崩溃；缺的 key 由 t() 回退为 key 本身。
     _MESSAGES = {}
+
+# 可选 R 扩展消息（i18n_r_messages.json）：仅真正调用 R 的技能 vendor 并携带此文件；
+# 纯 Python 技能（如 ct-literature）不携带时自动跳过，行为与旧版一致（向后兼容）。
+_R_MSG_PATH = os.path.join(_HERE, "i18n_r_messages.json")
+try:
+    with open(_R_MSG_PATH, encoding="utf-8") as _f:
+        _MESSAGES.update(json.load(_f))
+except (OSError, ValueError):
+    pass
 
 
 def t(key, **kwargs):

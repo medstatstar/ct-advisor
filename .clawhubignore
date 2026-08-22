@@ -32,6 +32,12 @@ run_tests.py
 run_tests_v2.py
 run_tests_v3.py
 test_seven_flows.py
+ct_bug_report_*.md
+
+# 运行态输出（§16.8：out_*/out/out_live 绝不进发布包，避免运行产物泄漏）
+out/
+out_*/
+out_live/
 difficulty_map.json
 final_vaccine_as.md
 final_vaccine_as_skeleton.md
@@ -56,3 +62,11 @@ config/keys.py
 # Race-mode runtime cache (created on every fire-only/collect round-trip;
 # holds the last Coze answer text — dev/test artifact, never ship)
 .coze_race_cache/
+
+# 运行态会话上下文缓存（类型 B 追问自包含化用，本地生成、不入库；与 .gitignore 同集，§16.8）
+config/context_cache.json
+
+# publish_inject 注入副产物（§16.8：注入时自动备份被覆盖文件 + 写入 .ctbase_injected.json 清单，
+# 均为本地安全副产物，发布前须剔除；发布后可用 publish_inject.py --clean 清理）
+.ctbase_injected.json
+*.ctbase_bak_*
