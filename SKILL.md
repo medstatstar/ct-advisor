@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
 cn_name: 临床试验总顾问
-version: 0.9.102
+version: 0.9.103
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流并转发远程 Coze 引擎精校；统计计算转交 ct-samplesize；原始数据/竞品情报类需求路由到 ct-registry / ct-safety / ct-literature 并在代码内缝合三源产出。本技能会在本机运行兄弟技能、保留语言偏好/上下文缓存/长期记忆等本地状态，并支持可选的脱敏错误报告。"

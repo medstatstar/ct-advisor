@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.102 (2026-08-25) — 发布前对齐 ct-base §16 + Mode B 追问自包含化闭环
+## v0.9.103 (2026-08-25) — 发布前对齐 ct-base §16 + Mode B 追问自包含化闭环（升版：SkillHub 预注册 0.9.102 占位导致需 bump）
 
 - **发布前对齐 ct-base §16（逐项核对）**：
   - **kw_lexicon 同步修复（§16.8 共享件一致性闸门）**：从 ct-base 真源补齐 5 个缺失词典项（`佐妥昔单抗→Zolbetuximab`、`恶心呕吐→nausea/vomiting`、`恶心→nausea`、`呕吐→vomiting`、`止吐→antiemetic`），消除 `shared_sync_check` 的 drift 阻断；重跑全绿（叶子共享件与底座字节级一致）。
