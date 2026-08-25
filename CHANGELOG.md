@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.9.102 (2026-08-25) — 发布前对齐 ct-base §16 + Mode B 追问自包含化闭环
+
+- **发布前对齐 ct-base §16（逐项核对）**：
+  - **kw_lexicon 同步修复（§16.8 共享件一致性闸门）**：从 ct-base 真源补齐 5 个缺失词典项（`佐妥昔单抗→Zolbetuximab`、`恶心呕吐→nausea/vomiting`、`恶心→nausea`、`呕吐→vomiting`、`止吐→antiemetic`），消除 `shared_sync_check` 的 drift 阻断；重跑全绿（叶子共享件与底座字节级一致）。
+  - **Mode B 追问自包含化闭环（对齐 ct-base `references/continuity.md` §2）**：`scripts/context_stitch.py` 每次转发前**始终**导出有界 `conversation_history`（经 `pack_history_for_coze`）并随请求发往 Coze，相关性 / 继承由远端 LLM 判定；本地代码**不再**检测追问或改写问题（旧的 `is_followup()` 正则 + 自包含 stitch 已硬废弃）；`config/context_cache.json` 仅为 write-through 镜像（TTL 2h / ≤10 轮 + 24h 硬上限）。
+  - **refiner 答案解析修正**：`refiner.py` 新增 `_purify_tilde_range`，对 `~` 区间记号（`40%~60%`）去除删除线渲染干扰，避免用户误读为「已删除内容」。
+  - **超时上调**：追问类与 complex 类请求 `refiner.long_timeout` 上调至 300s（对齐 coze 实际 ~4 分钟返回），`config.json` 同步。
+  - **发布前扫描结果**：`continuity_lint` COMPLIANT；`publish_secret_scan` 0 P0 / 0 P1（53 个 WARN 均为混淆公共 token 的变量 / 常量名误报，非真实密钥）；`shared_sync_check` 全一致；`clawhub_security_audit` 对当前发行版 25 findings 中 5 STILL_PRESENT 均属「架构设计如此且已在 README/SKILL 按 ct-base §5/§20.3 透明披露」（Coze 转发、代码编排器、query_origin 哈希、bug-report 端点），人工确认接受、留痕于此。
+  - **删除 "zero outbound / 零出站 / 零出域" 绝对化措辞（消除 §16.0 误报根因）**：全库当前文档与代码注释（SKILL.md、`knowledge/system_prompt.md`、`references/tone_writing.md`、`references/ADVANCED.md`、`adapters/__init__.py`、`adapters/backend.py`、`scripts/clarify_loop.py`、`scripts/refine_answer.py`、`adapters/http_probe.py`）的 "zero outbound / 零出站 / 零出域" 一律改为事实性描述（"纯本地执行、不发起网络请求 / no network call"）；AGENTS.md §出站披露 治理规则同步收紧（全库禁用该绝对化表述，纯本地子模块改用事实性描述，避免暗示整个技能离线）。历史 CHANGELOG 条目保留原貌（记录当时状态，不改写历史）。
+  - **[HIGH] Tp4 整改（§16.0 MCP Tool Poisoning：对外宣称过窄、低估敏感行为）**：原 README §5「数据仅在两种情况出域」框架把技能说得太"干净"，未披露 Tp4 点名的 5 类敏感行为。整改——(1) 两版 README 顶部新增「范围现实核对」横幅，开门见山说明本技能是**云端辅助而非纯本地**；(2) §5 重写为「离机 / 留本机但敏感」两段式：离机段补明兄弟 `ct-*` 技能会**独立**查询公开注册库/API（CT.gov/CDE/FAERS/OpenAlex/PubChem），且错误报告端点 `ct-bugreport.coze.site/run` 为独立出站；留本机段**首次公开披露**内嵌（公开）令牌、本地持久化（config.json 语言偏好 / `.runtime/` 上下文缓存 / 长期记忆提升）、本地连通性诊断、子进程编排四类动作；(3) **对齐 declared-purpose 措辞**：SKILL.md `summary`/`description` 由"总顾问"扩写为"云端辅助的临床试验总顾问"，显式写入"转发远程 Coze 引擎 / 本机运行兄弟技能 / 保留本地状态（语言偏好·上下文缓存·长期记忆）/ 可选脱敏错误报告"，使对外宣称与真实行为 1:1 对齐。目的：杜绝"窄顾问、实际做更多"的轻描淡写观感。重跑审计验证：run1→run2 已消解"Coze 是唯一出站路径"那条 MEDIUM 误配（证明模型读得到新披露）；Tp4 因锚定"头条定位"仍标 [HIGH]，故再以 declared-purpose 措辞对齐为第二刀。
+  - **README 双语同步与机制说明清理（用户复核）**：(1) 英文版「Scope reality check」重写为与中文版「范围现实核对（请先读这段）」逐句对齐，去掉英文独有、中文版没有的「strictly offline → ct-protocol」句子，使两版口径一致；(2) 删除两版 README 示例 5 的「📌 说明（以下为机制说明，不展示给用户）」机制注释（ZH 原第 88 行 / EN 对应行）——该段为内部架构说明、不应面向用户展示，删除后两版示例区结构对称。
+
+## v0.9.101 (2026-08-23) — F 难度偏置与延迟护栏可观测化（ct-update P1）
+
+- **F 落地（ct-update 对标 P1：难度偏置与延迟护栏的可观测化）**：
+  - `scripts/refine_answer.py` 新增可选度量开关：`--latency-report`（每次调用即一次 tool round-trip，按 `--round-id` 分组计数）、`--round-id`（默认 `default`）、`--latency-threshold`（默认 10）、`--latency-reset`（清计数器）。计数器落 `<ROOT>/.runtime/latency_<round_id>.json`（纯本地、零出域，已加入 `.gitignore`）；超阈值时 stderr 输出 `[WARN]`，提示 pre-fire 延迟复发（对应 #1 实测延迟失效模式）。
+  - `references/steps.md` 新增「延迟护栏单测式检查表（F）」：L1–L6 不变量（middle 必须 fire-only 禁 pre-fire 读 knowledge / simple 必须跳过 Coze / fire 不得晚于本地读取 / complex 本地初步≤200字单次 / forward-only / vague 不得直发），供改完路由逻辑后逐条防回归断言。
+- **附带加固（验证 F 时发现的既有 bug，与本项无关但对离线可观测化必要）**：`refine_answer.py` 串行兜底与 fire-only 分支在 refiner 返回 `RefineResult` 对象（而非字符串）时 `(final or "").strip()` 抛 `AttributeError` 崩溃；两处统一加 `if not isinstance(final, str): final = getattr(final, "final_answer", "") or ""` 防御，兼容两种返回形态，对生产 str 路径零影响。
+- 验证：`py_compile` 通过；`--latency-report` 在 fire-only/collect/serial 三模式计数递增（q2: 1→2→3→4），阈值告警在 trips=11 触发；串行兜底不再崩（rc=0）；`.runtime/` 已 gitignore。
+
 ## v0.9.100 (2026-08-22) — 增加 bug report 功能（ct-base §20.3 接入完成）
 
 - **发布前检查修正**：README 出站披露「three-stage confirmation」→「two-stage confirmation」（与 §20.3.3 同步，SKILL.md 已正确）。

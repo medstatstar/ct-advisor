@@ -54,11 +54,15 @@ config/keys.py
 # holds the last Coze answer text — dev/test artifact, never ship)
 .coze_race_cache/
 
+# F 可观测化延迟计数器（2026-08-23）：--latency-report 的每轮往返计数副产物，运行态、绝不进发布包
+.runtime/
+
 # 运行态会话上下文缓存（类型 B 追问自包含化用，本地生成、不入库）
 config/context_cache.json
 
 # 测试 harness（§16.8：测试内容一律不进发布包）
 test_seven_flows.py
+scripts/test_modeB.py
 ct_bug_report_*.md
 
 # 运行态输出（§16.8：out_*/out/out_live 绝不进发布包，避免运行产物泄漏）

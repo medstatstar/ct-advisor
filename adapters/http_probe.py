@@ -3,7 +3,7 @@
 """http_probe.py — ct-advisor 出站探测 helper（§16.9 出站调用收口至 adapters/）。
 
 scripts/ 层（如 check_coze.py）不再直接持有 requests 调用；所有出站 HTTP 探测
-统一走本模块，保证 scripts/ 零出站、业务逻辑与外部依赖解耦（ct-base §16.9）。
+统一走本模块，保证 scripts/ 层不直接发起网络请求、业务逻辑与外部依赖解耦（ct-base §16.9）。
 """
 from __future__ import annotations
 

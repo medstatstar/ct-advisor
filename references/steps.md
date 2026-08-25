@@ -63,6 +63,24 @@ When the question **does not involve external data pull / sample size computatio
 
 **Coze is the sole answer path, not a backup**: under forward-only the question always goes to Coze; the local knowledge pack is only a fallback when Coze fails (see `ops.md`) — **never** let the agent pre-judge "Coze is useless" and answer locally.
 
+---
+
+## 延迟护栏单测式检查表（F · 可观测化，2026-08-23）
+
+> **防回归硬清单**：每次改动路由 / Step 0–2 逻辑后，逐条断言；任一条不成立即视为护栏破坏。
+> 配套度量：`refine_answer.py --latency-report --round-id <qid>` 统计每轮工具往返数，
+> 超过阈值（默认 10）即 stderr 输出 `[WARN]`，提示 pre-fire 延迟复发（详见脚本内 `_record_latency`）。
+> 重置某轮计数：`refine_answer.py --latency-reset --round-id <qid>`。
+
+| # | 不变量（invariant） | 违规即失败（break = red line） |
+|---|---|---|
+| L1 | `middle` 必须走 Step 1 **fire-only**（后台 `--fire-only`），**禁止**在 fire 之前读 `knowledge/` / `search_refs.py` / `workflows.json` | 任何 Step 1 前的本地读取 = 护栏破坏 |
+| L2 | `simple` 必须**跳过 Coze**（Step 2 local-only：零 outbound、零 `--collect`） | `simple` 出现 `--fire-only` / `--collect` 调用 = 护栏破坏 |
+| L3 | `middle` 的 fire-only 必须在 Step 0 路由判定后**立即**发起，不得等 Route / 本地检索完成 | fire 晚于本地读取 = #1 延迟失效模式复发 |
+| L4 | `complex` 走 Step 5 串行精校：本地初步 ≤200 字、单次生成、不回看 | 本地进入"检索→整合→再检索"多轮循环 = 3–5min 循环复发 |
+| L5 | 任何 non-vague 标签都不得本地作答（forward-only）；Coze 是唯一答案路径 | "本地答案够好不转发" = 短路红线 |
+| L6 | `vague` 永不 forward 为 `vague`（本地澄清后必以 `simple`/`middle`/`complex` 重门控） | 把 `vague` 直发 Coze = 服务端强制 `complex`、丢失澄清价值 |
+
 **Interaction strategy** (legacy reference — see Step 0 Branch table above for the current gate):
 - `simple` / `middle` / `complex` → verbatim forward to Coze (forward-only); no local answer, no menu
 - `vague` → run the **Local Clarify Loop** (`scripts/clarify_loop.py`, the heuristic menu) — bounded 1–3 questions/round, hard cap 3 rounds (replaces the old free-form grill-me probing from the pre-forward-era design)
@@ -116,7 +134,7 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 
 - 🔴 **HARD GATE (post-collect zero-processing)**: the instant `--collect` returns a cache hit, output the Coze stdout **as-is** — no re-write, no re-order, no injecting `knowledge/` citations the Coze output lacked, no re-formatting, no appended "local summary". Re-synthesis after Coze returns is the #2 measured latency failure mode. Ship Coze, full stop.
 - 🔴 **Route is a window-internal side task, NEVER a blocker**: `fire-only` needs only `original_question`; the Route result is irrelevant to Coze. Do NOT read `workflows.json` / `knowledge/` *before* firing (Step 1) — and do NOT let Route retrieval delay the collect call. If local retrieval would take long, it only matters as fallback; Coze (≈20s) almost always wins, so the user never waits for the full local retrieval.
-- Coze HTTP timeout = full 60s (`refiner.timeout`); **complex / 模板类问题放宽到 120s**（`refiner.long_timeout`）——由 `CozeRefiner._resolve_timeout()` 按 `difficulty==complex` 或 `category` 命中模板类标记自动判定
+- Coze HTTP timeout = full 60s (`refiner.timeout`); **complex / 模板类问题放宽到 300s**（`refiner.long_timeout`=300s）——由 `CozeRefiner._resolve_timeout()` 按 `difficulty==complex` 或 `category` 命中模板类标记自动判定
 - race_window = 30s (config.json `refiner.race_window`; caller can override with `--wait N`)
 - **⚠️ --collect MUST pass complete payload**: the cache path is derived from the hash of original_question + query_meta; without the payload the cache cannot be located. When the agent calls --collect in step 2, it MUST pass the same payload from step 1 (or at least the minimal payload containing original_question), otherwise the script fails JSON parsing → local win (but wastes one tool call)
 

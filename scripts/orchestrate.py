@@ -103,7 +103,8 @@ def _enrich_coze_params(orig_q: str, coze_tool: str | None, coze_params: dict) -
 def _render_delegate(orig_q: str, tool: str, params: dict,
                      draft_answer: str, missing: list | None = None,
                      prefetch_satisfied: dict | None = None,
-                     note: str | None = None) -> str:
+                     note: str | None = None,
+                     need_tools: list | None = None) -> str:
     """构造 <<<CT_TOOL_DELEGATE>>> 结构化块（供本地大模型执行 ct 技能）。
 
     大模型读取后：补全/追问参数 → 调 `refine_answer.py --card-inline '<执行卡>'`
@@ -115,6 +116,9 @@ def _render_delegate(orig_q: str, tool: str, params: dict,
         prefetch_satisfied = {}
     block = {
         "need_tool": tool,
+        # 2026-08-23：透传全部命中，使 handle_need_tool 在委派路径也能生成
+        # 「其余数据源待准备」提示（此前只有直执行路径有 need_tools）。
+        "need_tools": need_tools or ([tool] if tool else []),
         "params": params or {},
         "draft_answer": draft_answer or "",
         "original_question": orig_q or "",
@@ -191,6 +195,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
                 orig_q, coze_tool, coze_params, base,
                 prefetch_satisfied={tool: prefetch_out.get("result")},
                 note="预判技能已执行；Coze 另需补充「%s」信息，委托本地大模型执行该技能。" % coze_tool,
+                need_tools=need_tools,
             )
         if status == "need_params":
             # 预判参数不完整 → 委托大模型追问后执行
@@ -198,12 +203,14 @@ def build_output(orig_q: str, coze_result: RefineResult,
             return _render_delegate(
                 orig_q, tool, prefetch_params or {}, coze_answer, missing=missing,
                 note="预判技能参数不完整（%s），委托本地大模型向用户追问后执行。" % "; ".join(missing),
+                need_tools=need_tools,
             )
         # error：预判执行失败
         if coze_tool:
             return _render_delegate(
                 orig_q, coze_tool, coze_params, coze_answer,
                 note="预判技能执行出错，Coze 仍判定需补充「%s」，委托本地大模型重新执行。" % coze_tool,
+                need_tools=need_tools,
             )
         # 预判失败且无 Coze 工具 → 仅 Coze 答案（若有）或兜底警告
         if coze_answer.strip():
@@ -239,16 +246,33 @@ def _multi_tool_hint(need_tools: list, executed_tool: str, lang: str = "zh-CN") 
     **必须直接指出**，提示用户分别先调用这些工具获取信息，不掩盖"其余源
     尚未用真实数据缝合"这一事实（此前由 Coze 知识叙述冒充，无来源标签）。
     提示文案随提问语言（lang）切换；工具名保持 id 原文。
+
+    2026-08-23（四技能联调）：文案升级为**可执行**——除工具名/用途外，明确列出
+    该技能需要用户先准备的参数（取自 tool_mapping.json 的 prep_hint /
+    required_params，与执行器 _build_deferred 共用同一数据源，避免两套文案漂移）。
     """
     others = [t for t in (need_tools or []) if t != executed_tool]
     if not others:
         return ""
+    try:
+        from handle_need_tool import _load_mapping  # 复用映射表，单一数据源
+        skills_cfg = _load_mapping().get("skills", {})
+    except Exception:  # noqa: BLE001
+        skills_cfg = {}
     lines = []
     for t in others:
         desc = _TOOL_DESC.get(t, t)
-        lines.append(f"- **{t}**（{desc}）：可先调用获取对应数据，再综合成完整结论。"
-                     if lang == "zh-CN" else
-                     f"- **{t}** ({desc}): call it first to fetch its data, then synthesize the full conclusion.")
+        cfg = skills_cfg.get(t, {})
+        prep = cfg.get("prep_hint", "")
+        req = "/".join(cfg.get("required_params", []))
+        if lang == "zh-CN":
+            # prep_hint 自带「XX：需确认…」句式，不叠加「需先准备」前缀（避免双重冗余）
+            extra = prep or (f"需确认必填参数 {req}" if req else "需补充必填参数")
+            lines.append(f"- **{t}**（{desc}）：{extra}。确认后我再调用。")
+        else:
+            # 英文语境不塞中文 prep_hint，改用参数名（跨语言稳定）
+            extra = f"required params: {req}" if req else "required params pending"
+            lines.append(f"- **{t}** ({desc}): {extra}. I'll call it once confirmed.")
     if lang == "zh-CN":
         return ("\n\n---\n\n### ⚠️ 多源提示：本问题还涉及以下数据源\n"
                 "当前已缝合「%s」的真实数据；其余源建议分别调用对应工具获取信息：\n%s"

@@ -100,6 +100,27 @@ def strip_display_tags(text: str) -> str:
     s = _DISPLAY_CLOSE_TAG_RE.sub("", s)
     return s
 
+
+def _purify_tilde_range(text: str) -> str:
+    """把范围语义的半角 ~ 替换为连字符 -，避免被 markdown 渲染器误判为删除线。
+
+    根因：Coze 返回的答案常写数值/百分比范围如 `40%~60%`、`3~4级`、`8%~12%`，
+    半角 ~ 被 WorkBuddy 渲染面板当成 strikethrough 配对边界 → 中间文本被划线，
+    用户误以为答案是"被删除/划掉"的内容。
+
+    纠正策略（优于转全角 ～）：仅当 ~ 两侧均为数字或 %（即数值/百分比范围）时才
+    替换为 -；其余 ~ 原样保留，保护代码块、`~/.workbuddy` 路径、URL、近似符号
+    ~0.05 等不被误伤。中英文答案均适用（40%-60% / 3-4级 两种语境都自然）。
+
+    说明：前端 strikethrough 语法解释无法在技能侧关闭，唯一可控的是在文本层
+    破坏会触发删除线的配对，故采用精准的范围 ~ → - 替换。
+    """
+    if not text:
+        return text
+    # 仅替换两侧是数字或百分号的 ~（两侧允许空白）；其余 ~ 不动
+    return re.sub(r"(?<=[\d%])\s*~\s*(?=[\d%])", "-", text)
+
+
 # difficulty 枚举（simple/middle/complex/vague）
 DIFFICULTY_ENUM = ("simple", "middle", "complex", "vague")
 
@@ -157,6 +178,10 @@ class RefineResult:
     params: dict = field(default_factory=dict)  # 技能入参
     run_id: str = ""                  # 追踪用
 
+    def __post_init__(self):
+        # 净化 final_answer：范围 ~ → -，避免渲染器误判删除线（见 _purify_tilde_range）
+        self.final_answer = _purify_tilde_range(self.final_answer)
+
 
 @dataclass
 class RefineRequest:
@@ -173,6 +198,15 @@ class RefineRequest:
     # 增量兼容字段（P1-D 本地用户记忆）：memory_manager.py 产出的跨会话记忆上下文。
     # 默认空 dict；非空时随契约外发，仅作背景上下文，不得当作当前问题的事实。
     memory_context: dict = field(default_factory=dict)
+    # 增量兼容字段（2026-08-25 混合上下文路线）：本地按时间窗+轮数裁剪后的有界对话历史，
+    # 作为可选字段外发给 Coze，由 Coze LLM 自行判断相关性并引用前情（替代代码层窄启发式拼接）。
+    # 默认空 list；非空时随契约外发。历史版本 Coze 忽略此字段亦兼容（pydantic 默认忽略额外字段）。
+    conversation_history: list = field(default_factory=list)
+    # 增量兼容字段（2026-08-25 模式 B 硬弃用本地 is_followup 正则）：is_followup 标记当前问题
+    # 为「类型 B 追问」，现由 refine_answer.py 基于 history 存在性确定性派生（非正则猜），
+    # 供远端 refiner 走 long_timeout（默认 300s）避免多轮上下文追问被截断。
+    # 远端相关性判权已完全交 Coze LLM（经 conversation_history），本地不再做追问分类。
+    is_followup: bool = False
     max_items: Optional[int] = None  # 已废弃且无操作：条目数量不再校验上限，统一直接发送 coze。
 
     def normalize(self) -> List[str]:
@@ -255,6 +289,9 @@ class RefineRequest:
             self.tone_profile = {}
         if not isinstance(self.memory_context, dict):
             self.memory_context = {}
+        # 6.5) conversation_history（2026-08-25 混合上下文）：非 list 一律归一为空 list
+        if not isinstance(self.conversation_history, list):
+            self.conversation_history = []
 
         # 3) query_origin：脚本会盖章，写入 query_meta 字典（不再另设顶层字段）
         qm = self.query_meta if isinstance(self.query_meta, dict) else {}
@@ -311,14 +348,17 @@ class RefineRequest:
     def to_payload(self) -> Dict[str, Any]:
         self.normalize()  # 出站前自愈：任何外发路径都先补全缺失/非法字段
         self.validate()  # 契约校验前置：经自愈后此处应当通过
-        # 仅发送 3 变量（query_meta / original_question / draft_answer）：服务端 GraphInput
-        # 只接收这三字段；question_profile / confirmation / tone_profile / memory_context
-        # 保留在 RefineRequest 内但不再外发（服务端未实现，外发徒增数据面且 SkillSpector
-        # 标"超过 3 变量契约"；待服务端补齐 v1.6 字段后再恢复发送）。
+        # 发送变量（query_meta / original_question / draft_answer / conversation_history）：
+        # 前三者为原始契约三字段；conversation_history 为 2026-08-25 新增的可选字段，
+        # 由本地按时间窗+轮数裁剪后传出，供 Coze LLM 自行判相关性引用前情。
+        # 默认空 list（无历史时不携带），历史版本 Coze 忽略此字段亦兼容。
+        # question_profile / confirmation / tone_profile / memory_context 保留在 RefineRequest
+        # 内但不再外发（服务端未实现；待服务端补齐后再恢复发送）。
         return {
             "query_meta": self.query_meta,
             "original_question": self.original_question,
             "draft_answer": self.draft_answer,
+            "conversation_history": self.conversation_history,
         }
 class Refiner(ABC):
     @abstractmethod
@@ -330,50 +370,62 @@ class Refiner(ABC):
 class CozeRefiner(Refiner):
     """扣子服务器精校（唯一精校后端）：外发 3 变量，≤timeout 秒回收 final_answer；异常兜底草稿。
 
-    超时策略（2026-08-16）：默认 timeout=60s；complex / 模板类问题放宽到 long_timeout
-    （默认 120s）——服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成）耗时长，
+    超时策略（2026-08-16）：默认 timeout=60s；complex / 模板类 / 追问类问题放宽到 long_timeout
+    （默认 300s）——服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成）或结合多轮
+    上下文的追问类问题耗时长，
     60s 会被提前截断。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
     由 build_refiner() 始终实例化。
     """
 
     def __init__(self, endpoint: str, token_env: str = "CT_ADVISOR_COZE_TOKEN",
-                 timeout: float = 60.0, long_timeout: float = 120.0,
+                 timeout: float = 60.0, long_timeout: float = 300.0,
                  answer_mode: str = "fast", race_window: float = 2.0):
         self.endpoint = endpoint
         self.token_env = token_env
         self.timeout = timeout
-        # long_timeout：complex / 模板类问题的等待上限（默认 120s）；其余问题用 timeout（60s）。
+        # long_timeout：complex / 模板类 / 追问类问题的等待上限（默认 300s）；其余问题用 timeout（60s）。
         # 详见 _resolve_timeout() / _is_long_running()。
         self.long_timeout = long_timeout
         # answer_mode 已固定为 fast（2026-08-05 删除 precise）；按难度分流：
         #   simple/middle = race 竞速（早发 / 速度优先，详见 refine_fire_only + collect_race）：
         #     agent 在 step 2 后台调用 --fire-only（draft_answer 留空、difficulty/category/accuracy 未提供→补空串），
-        #     Coze 用**完整** HTTP 超时独立分析 original_question（默认 60s；complex/模板类走 long_timeout=120s），
+        #     Coze 用**完整** HTTP 超时独立分析 original_question（默认 60s；complex/模板类走 long_timeout=300s），
         #     成功后写入 race 缓存文件；agent 在 step 3 并行写本地草稿 + 调用 --collect
         #     [--wait race_window] 收集：缓存命中（Coze 在 step 3→step 4 间已返回）→ 采用 Coze
         #     （中断本地、Coze 胜出）；否则直接采用本地草稿（速度优先——本地秒级先出、Coze 实测
         #     9~25s 慢，常态本地胜出）。
-        #   complex/vague = 串行：前台等待 Coze 完整返回（单次调用 refine()；复杂/模板类 timeout=long_timeout 默认120s，其余 60s），
+        #   complex/vague = 串行：前台等待 Coze 完整返回（单次调用 refine()；复杂/模板类 timeout=long_timeout 默认300s，其余 60s），
         #     且必须把本地已生成的 draft_answer 一并发送（作为 Coze 参考）。
         self.answer_mode = "fast"  # 2026-08-05 删除 precise，仅保留 fast 单一模式
         self.race_window = race_window  # race 竞速：step 4 收集 Coze 后台结果的等待上限（秒）；超时即放弃、用本地
 
     # ------------------------------------------------------------------ #
-    # 条件化超时（2026-08-16）：complex / 模板类问题等待上限放宽到 long_timeout
-    # （默认 120s）；其余问题维持默认 timeout（60s）。复杂/模板类问题服务端
-    # full_analysis 走完整输出模式，生成耗时长，60s 会被提前截断 → 放宽。
-    # 服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
+    # 条件化超时（2026-08-16）：complex / 模板类 / 追问类问题等待上限放宽到 long_timeout
+    # （默认 300s）；其余问题维持默认 timeout（60s）。复杂/模板类问题服务端
+    # full_analysis 走完整输出模式、追问类需结合多轮上下文，生成/检索耗时长，
+    # 60s 会被提前截断 → 放宽。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
     # ------------------------------------------------------------------ #
     _TEMPLATE_TOKENS = ("template", "模板", "doc", "document", "规范", "spec")
 
     def _is_long_running(self, req: "RefineRequest") -> bool:
-        """长任务判定：complex 难度，或 category 命中模板类标记。
+        """长任务判定：complex 难度，或 category 命中模板类标记，或当前为类型 B 追问。
 
-        长任务走服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成），生成耗时长，
-        需用 long_timeout（默认 120s）而非默认 60s。
+        长任务走服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成），或需结合多轮
+        上下文，生成/检索耗时长，需用 long_timeout（默认 300s）而非默认 60s。
+        - is_followup == True：类型 B 追问（refine_answer.py 已基于本地 context_stitch 标记），
+          多轮上下文导致 Coze 处理更久，直接等同长任务。
+        - conversation_history 非空：当前问题处于多轮对话中（refine_answer.py 在有效期内
+          有对话历史时打包进 req）。这是比纯文本 is_followup 更稳的追问信号——无文本盲区，
+          覆盖「第一针/后续/补充」等承接句式漏判的情况，统一走 long_timeout。
         - difficulty == "complex"：明确长任务（串行路径前台等 Coze 完整返回）。
         - category（str 或 list）小写后含模板类 token：模板/文档/规范类问题。
         """
+        if getattr(req, "is_followup", False):
+            return True
+        # 多轮上下文（类型 B 追问的更稳信号）：只要有效对话历史被打包进 req，
+        # 即代表当前问题处于多轮对话中（Coze 需结合前情处理，耗时更久）→ 等同长任务。
+        if getattr(req, "conversation_history", None):
+            return True
         meta = req.query_meta if isinstance(req.query_meta, dict) else {}
         diff = str(meta.get("difficulty", "")).strip().lower()
         if diff == "complex":
@@ -388,7 +440,7 @@ class CozeRefiner(Refiner):
         """解析本次 Coze 调用的有效超时：
 
         - 调用方显式传入 timeout → 优先采用（保留可覆盖旧行为）；
-        - 否则长任务（complex / 模板类）→ long_timeout（默认 120s）；
+        - 否则长任务（complex / 模板类 / 追问类）→ long_timeout（默认 300s）；
         - 其余 → 默认 timeout（60s）。
         """
         if timeout is not None:
@@ -412,7 +464,7 @@ class CozeRefiner(Refiner):
         与 ``refine()``（单发、draft 作兜底）不同，此方法：
           - 仅基于 ``original_question`` 独立分析 Coze
             （``draft_answer`` 留空不发送——调用方此时草稿尚未写出）；
-          - HTTP 超时用 **完整** 时长（默认 60s；complex/模板类走 long_timeout=120s，不给 Coze 强加短帽，
+          - HTTP 超时用 **完整** 时长（默认 60s；complex/模板类走 long_timeout=300s，不给 Coze 强加短帽，
             恢复 ops.md 文档意图）；
           - 成功后把 Coze 结果写入 race 缓存文件（供 step 4 ``--collect`` 读取）；
             超时 / 网络 / 解析异常返回**空串**且不写缓存——

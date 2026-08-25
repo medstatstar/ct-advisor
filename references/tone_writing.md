@@ -9,7 +9,7 @@
 
 ct-advisor's default output follows the canonical tone of the deployed Coze system prompt (de-AI-ified, first-use acronym annotations, trimmed weak-advice words; the local contract snapshot lives under the cloud-deployment workspace, not in this skill). Different users have different writing habits — some prefer short colloquial sentences, some long formal ones, some like to build closeness with "you / we". Tone writing lets the user **provide their own writing samples**; the skill extracts the expression style and writes answers in a consistent voice.
 
-## How it works (pure local, zero outbound)
+## How it works (pure local, no network call)
 
 ```
 user samples (article / email / report excerpts)

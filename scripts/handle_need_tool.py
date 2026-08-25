@@ -46,11 +46,106 @@ SKILLS_DIR = os.environ.get(
 )
 # 映射表路径（本文件同目录）
 MAPPING_PATH = Path(__file__).resolve().parent / "tool_mapping.json"
+# 执行卡产物根目录（2026-08-23）：各技能默认把 out/ 写到**进程 cwd**，
+# 此前 cwd = scripts/ → 产物污染脚本目录（实测 scripts/out/report.xlsx 等）。
+# 改为按技能隔离到 ct-advisor/out/cards/<tool>/。
+CARDS_ROOT = Path(__file__).resolve().parent.parent / "out" / "cards"
+
+# stdout 噪声行（内联图 / 组件标记）：ct-samplesize 单次可输出数万字符 SVG，
+# 直接进 result 会挤爆缝合层上下文 → 剥离并以占位符替代。
+NOISE_PREFIXES = ("__SVG_WIDGET__", "__FIGURE__", "__HTML_WIDGET__")
+MAX_RESULT_CHARS = 4000
 
 
 def _load_mapping() -> dict:
     with open(MAPPING_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _sanitize_result(result):
+    """剥离内联图/组件噪声块并限长（仅对文本兜底结果生效）。
+
+    2026-08-23 修正：首版只按行前缀过滤，但 `__SVG_WIDGET__` 是**多行块**
+    （标记只在首行，后续 <svg>/<g>/<path> 上万行不带前缀）→ SVG 仍整块进 result。
+    改为状态机：命中标记后丢弃其余所有行（内联图恒在数值输出之后）。
+    """
+    if not isinstance(result, str):
+        return result
+    kept, figures = [], []
+    for line in result.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(NOISE_PREFIXES):
+            figures.append(stripped.split()[0].strip("_"))
+            if stripped.startswith("__SVG_WIDGET__") or stripped.startswith("__HTML_WIDGET__"):
+                break  # 多行组件块：其后全部丢弃
+            continue
+        kept.append(line)
+    text = "\n".join(kept).strip()
+    if figures:
+        text += f"\n[已剥离 {len(figures)} 个内联图形块（{'/'.join(sorted(set(figures)))}）：图形不参与文字缝合]"
+    if len(text) > MAX_RESULT_CHARS:
+        text = text[:MAX_RESULT_CHARS] + f"\n…[截断，原长 {len(result)} 字符]"
+    return text
+
+
+def _read_artifacts(tool_cfg: dict, workdir: Path) -> dict:
+    """回读技能产物文件（stdout 无结构化数值时的唯一数据来源）。
+
+    2026-08-23 实测：WorkBuddy 沙箱会把技能写出的 .md/.json 重定向到
+    `<out>/_unsaved/` 子目录（.xlsx/.html 不受影响）。因此每个候选文件都要
+    在 out/、out/_unsaved/ 两处 + 递归兜底里找，否则回读恒为空。
+    """
+    names = tool_cfg.get("result_files") or []
+    if not names:
+        return {}
+    arts = {}
+    for name in names:
+        hit = None
+        for cand in (workdir / "out" / name,
+                     workdir / "out" / "_unsaved" / name,
+                     workdir / name):
+            if cand.is_file():
+                hit = cand
+                break
+        if hit is None:
+            matches = sorted(workdir.rglob(name))
+            hit = matches[0] if matches else None
+        if hit is None:
+            continue
+        try:
+            raw = hit.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:  # noqa: BLE001
+            arts[name] = f"[读取失败: {e}]"
+            continue
+        if hit.suffix == ".json":
+            try:
+                arts[name] = json.loads(raw)
+                continue
+            except Exception:
+                pass
+        arts[name] = raw[:MAX_RESULT_CHARS]
+    return arts
+
+
+def _build_deferred(mapping: dict, primary: str, need_tools) -> list:
+    """多技能命中 → 只执行主判技能，其余生成「请先准备数据」提示项。
+
+    需求（2026-08-23）：一次提问可能同时命中试验格局/信号/文献/样本量，
+    全部串行执行会叠加数分钟联网耗时且参数多半不全。改为**只调最关键的一个**
+    （主判由 route_tool.predict / Coze tool_router 的优先级规则决定），
+    其余以 deferred 形式回给用户，附各自需要准备的参数。
+    """
+    deferred = []
+    for t in (need_tools or []):
+        if t == primary or not t:
+            continue
+        cfg = mapping["skills"].get(t) or {}
+        deferred.append({
+            "tool": t,
+            "required_params": cfg.get("required_params", []),
+            "prep_hint": cfg.get("prep_hint", "需补充该技能的必填参数后单独调用"),
+        })
+    return deferred
 
 
 def _build_cmd(tool_cfg: dict, params: dict) -> list:
@@ -72,6 +167,16 @@ def _build_cmd(tool_cfg: dict, params: dict) -> list:
     # 追加额外参数（如 samplesize 的 --yes：执行卡场景视为已确认，跳过 SAFE PREVIEW）
     for extra in tool_cfg.get("extra_args", []):
         cmd.append(extra)
+    # 条件参数（2026-08-23）：仅当某参数缺失/存在时才追加，用于补齐技能的默认行为落差
+    # （如 ct-safety 缺 --event 时不做 disproportionality → 自动补 --top-events-signal）
+    for rule in tool_cfg.get("conditional_args", []):
+        absent = rule.get("when_absent")
+        present = rule.get("when_present")
+        if absent and params.get(absent) not in (None, ""):
+            continue
+        if present and params.get(present) in (None, ""):
+            continue
+        cmd.extend(rule.get("args", []))
     return cmd
 
 
@@ -147,12 +252,23 @@ def execute_card(card: dict) -> dict:
     question = card.get("original_question") or ""
     mapping = _load_mapping()
     tool_cfg = mapping["skills"].get(tool)
+    # 多命中场景：其余技能延后，附「请先准备数据」提示（需求 2026-08-23）
+    deferred = _build_deferred(mapping, tool, card.get("need_tools"))
+    deferred_note = ""
+    if deferred:
+        items = "；".join(f"{d['tool']}（{d['prep_hint']}）" for d in deferred)
+        deferred_note = (
+            f"本轮只执行最关键的 {tool}。还识别到 {len(deferred)} 个可选数据源需要你先准备信息：{items}。"
+            "确认参数后我再逐个调用。"
+        )
     if not tool_cfg:
         return {
             "tool": tool,
             "status": "error",
             "result": f"未在 tool_mapping.json 中找到技能映射: {tool}",
             "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
             "elapsed_sec": 0,
         }
 
@@ -168,11 +284,15 @@ def execute_card(card: dict) -> dict:
                 "hint": "由本地大模型向用户询问缺失参数（不编造）；样本量/检验效能类必须提供效应量假设",
             },
             "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
             "elapsed_sec": 0,
         }
 
     cmd = _build_cmd(tool_cfg, params)
     timeout = tool_cfg.get("timeout", 120)
+    workdir = CARDS_ROOT / tool
+    workdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     try:
         proc = subprocess.run(
@@ -182,6 +302,7 @@ def execute_card(card: dict) -> dict:
             timeout=timeout,
             encoding="utf-8",
             errors="replace",
+            cwd=str(workdir),
         )
         elapsed = round(time.time() - t0, 1)
         combined = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
@@ -191,14 +312,46 @@ def execute_card(card: dict) -> dict:
                 "status": "error",
                 "result": f"技能执行失败 rc={proc.returncode}: {combined[:2000]}",
                 "draft_answer": draft,
+                "deferred_tools": deferred,
+                "deferred_note": deferred_note,
                 "elapsed_sec": elapsed,
             }
-        result = _extract_json(proc.stdout or "")
+        result = _sanitize_result(_extract_json(proc.stdout or ""))
+        artifacts = _read_artifacts(tool_cfg, workdir)
+        # 假成功守卫（2026-08-23）：rc=0 但技能停在 PREVIEW 安全门时，
+        # 旧实现判 status=ok、把 "would run …" 当数据交给缝合层（ct-literature 实测）。
+        if isinstance(result, str) and "[PREVIEW]" in result and not artifacts:
+            return {
+                "tool": tool,
+                "status": "error",
+                "result": f"技能停在 PREVIEW 安全门未联网执行（缺 --run）：{result[:500]}",
+                "draft_answer": draft,
+                "deferred_tools": deferred,
+                "deferred_note": deferred_note,
+                "elapsed_sec": elapsed,
+            }
+        # 假成功守卫（2026-08-25）：rc=0 但技能停在关键字体系确认门（KW-GATE）时，
+        # 同 PREVIEW 门一样是确认门假成功——stdout 只有确认菜单无检索数据
+        # （ct-registry 实测：--auto-confirm 不覆盖 KW-GATE，TTY 环境下 isatty 判真卡死）。
+        if isinstance(result, str) and "[KW-GATE]" in result:
+            return {
+                "tool": tool,
+                "status": "error",
+                "result": f"技能停在关键字体系确认门（KW-GATE）未联网执行（需 --kw-adopt / --no-expand / 确认词）：{result[:500]}",
+                "draft_answer": draft,
+                "deferred_tools": deferred,
+                "deferred_note": deferred_note,
+                "elapsed_sec": elapsed,
+            }
         return {
             "tool": tool,
             "status": "ok",
             "result": result,
+            "artifacts": artifacts,
+            "workdir": str(workdir),
             "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
             "elapsed_sec": elapsed,
         }
     except subprocess.TimeoutExpired:
@@ -207,6 +360,8 @@ def execute_card(card: dict) -> dict:
             "status": "error",
             "result": f"技能执行超时（>{timeout}s）",
             "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
             "elapsed_sec": timeout,
         }
     except FileNotFoundError as e:
@@ -215,6 +370,8 @@ def execute_card(card: dict) -> dict:
             "status": "error",
             "result": f"技能脚本不存在: {e}",
             "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
             "elapsed_sec": 0,
         }
 

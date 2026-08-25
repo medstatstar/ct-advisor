@@ -232,6 +232,35 @@ def _extract_draft(raw: str) -> str:
         return m.group(1) if m else ""
 
 
+def _record_latency(mode: str, round_id: str, threshold: int) -> None:
+    """F 可观测化（2026-08-23）：纯本地统计每轮工具往返数。
+
+    每次 refine_answer.py 调用即一次 tool round-trip；按 --round-id 分组递增计数，
+    超过 --latency-threshold 时 stderr 输出 [WARN]，提示可能 pre-fire 延迟复发
+    （对应 #1 实测延迟失效模式）。计数器落 <ROOT>/.runtime/latency_<round_id>.json
+    （gitignored 运行态副产物，纯本地、无外部依赖）。度量失败绝不影响主流程。
+    """
+    try:
+        runtime_dir = ROOT / ".runtime"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        cf = runtime_dir / f"latency_{round_id}.json"
+        try:
+            data = json.loads(cf.read_text(encoding="utf-8"))
+        except Exception:
+            data = {"count": 0}
+        data["count"] = int(data.get("count", 0)) + 1
+        cf.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        trips = data["count"]
+        sys.stderr.write(f"[ct-advisor][latency] round={round_id} mode={mode} trips={trips}\n")
+        if trips > threshold:
+            sys.stderr.write(
+                f"[ct-advisor][latency][WARN] round={round_id} trips={trips} exceeds guard "
+                f"threshold {threshold} — possible pre-fire delay regression (check Step 0/1 ordering)\n"
+            )
+    except Exception as _e:  # noqa: BLE001  # 度量失败绝不影响主流程
+        sys.stderr.write(f"[ct-advisor][latency] record skipped: {_e}\n")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="ct-advisor answer refiner (Coze polish, single call)")
     ap.add_argument("payload", nargs="?", help="path to JSON file with the 3 variables (deprecated: use stdin or --payload-inline)")
@@ -264,7 +293,43 @@ def main() -> None:
     # P1-D 本地用户记忆：注入 memory_manager.py 维护的 ct-advisor-memory.json 上下文
     ap.add_argument("--memory", default=None,
                     help="path to ct-advisor-memory.json (from scripts/memory_manager.py); injects local user memory context")
+    # F 可观测化（2026-08-23）：可选延迟护栏度量——统计每轮工具往返数，纯本地、无外部依赖。
+    # 仅在显式传 --latency-report 时启用；计数器落 <ROOT>/.runtime/（gitignored，运行态副产物）。
+    ap.add_argument("--latency-report", action="store_true",
+                    help="F observability: emit a per-invocation latency event to stderr and tally "
+                         "tool round-trips per --round-id (default round key 'default'); pure-local, no network")
+    ap.add_argument("--round-id", default="default",
+                    help="latency-report grouping key: pass a stable id per question so trips are counted per round "
+                         "(e.g. a question hash); omit to accumulate under the 'default' key")
+    ap.add_argument("--latency-threshold", type=int, default=10,
+                    help="latency-report guard threshold: when a round's trip count exceeds this, emit a [WARN] "
+                         "line signalling possible pre-fire delay regression (default 10)")
+    ap.add_argument("--latency-reset", action="store_true",
+                    help="latency-report helper: clear the .runtime latency counter for --round-id and exit")
     args = ap.parse_args()
+
+    # F 可观测化（2026-08-23）：延迟护栏度量。必须在所有分派前执行，以覆盖每种调用模式。
+    # 纯本地、无外部依赖：计数器落 <ROOT>/.runtime/latency_<round_id>.json（gitignored 运行态副产物）。
+    if args.latency_reset:
+        try:
+            cf = ROOT / ".runtime" / f"latency_{args.round_id}.json"
+            if cf.exists():
+                cf.unlink()
+            sys.stderr.write(f"[ct-advisor][latency] reset round={args.round_id}\n")
+        except Exception as _e:  # noqa: BLE001
+            sys.stderr.write(f"[ct-advisor][latency] reset failed: {_e}\n")
+        sys.exit(0)
+    if args.latency_report:
+        _mode = "serial"
+        if args.fire_only:
+            _mode = "fire-only"
+        elif args.collect:
+            _mode = "collect"
+        elif args.ship:
+            _mode = "ship"
+        elif args.forward:
+            _mode = "forward"
+        _record_latency(_mode, args.round_id, args.latency_threshold)
 
     # --card-inline 重试路径（与 --ship 配合）：跳过 Coze 直发，直接用执行卡在代码内跑 handle_need_tool 并缝合。
     # 必须在读 payload 之前处理，避免空 stdin 触发 payload 解析回退。
@@ -327,24 +392,29 @@ def main() -> None:
         elif isinstance(obj.get("memory_context"), dict):
             req.memory_context = obj["memory_context"]
         # query_origin is auto-stamped into query_meta by normalize(); no top-level field.
-        # 类型 B 追问自包含化（2026-08-15）：非 --collect 模式（真实转发路径）下，若当前问题是
-        # 隐式承接追问且本地有上一轮上下文摘要，则拼接为自包含问题再转发，避免 Coze 因无上下文
-        # 重复追问已给参数。纯本地代码（scripts/context_stitch.py），无 LLM、无新增出域。
+        # 类型 B 跨轮连续性（2026-08-25 硬弃用本地 is_followup 正则 + 字符串缝合）：
+        # 非 --collect 模式（真实转发路径）下，永远把有界历史经 conversation_history 外发给 Coze，
+        # 由远端 LLM 判"是否追问 / 继承哪些前情"。本地不再用正则猜追问、不再做字符串前缀缝合
+        # （stitch 属脆弱分类器，会漏判长句式设计演进）。唯一本地职责：结构闸门（is_ctx_valid）
+        # + 24h 硬上限 + 有界裁剪（pack_history_for_coze 内部 prune_history）。
         if not args.collect:
             try:
                 sys.path.insert(0, str(ROOT / "scripts"))
                 import context_stitch as _cs
                 _orig = req.original_question or ""
                 _raw_orig = _orig  # 保留原始问题（供缓存，防多轮嵌套）
-                if _cs.is_followup(_orig):
-                    _cache = _cs.load_cache()
-                    _prev = _cache.get("summary", "")
-                    if _prev and int(_cache.get("rounds", 4)) <= _cs.TTL_ROUNDS:
-                        _stitched = _cs.stitch(_orig, _prev)
-                        sys.stderr.write(f"[ct-advisor] follow-up stitched: {_stitched}\n")
-                        req.original_question = _stitched
-            except Exception as _e:  # noqa: BLE001  # 拼接失败不影响主流程
-                sys.stderr.write(f"[ct-advisor] context stitch skipped: {_e}\n")
+                _cache = _cs.load_cache()
+                if _cs.is_ctx_valid(_cache):
+                    _hist = _cs.pack_history_for_coze(_cache)
+                    if _hist:
+                        req.conversation_history = _hist
+                        # is_followup 现由"有无历史"确定性派生（非正则猜），
+                        # 供远端 refiner 走 long_timeout（300s）避免多轮上下文追问被截断。
+                        req.is_followup = True
+                        sys.stderr.write(
+                            f"[ct-advisor] conversation_history packed: {len(_hist)} rounds\n")
+            except Exception as _e:  # noqa: BLE001  # 打包失败不影响主流程
+                sys.stderr.write(f"[ct-advisor] history pack skipped: {_e}\n")
     except Exception as e:
         # JSON parse failed: distinguish --collect mode (cache lookup) from other modes
         if args.collect:
@@ -439,15 +509,35 @@ def main() -> None:
             merged = coze_answer
         if not merged.strip():
             merged = "⚠️ Coze 返回为空，请基于本地知识库作答并告知用户。"
-        # 更新会话上下文（供下一轮类型 B 追问拼接）：原始问题摘要 + rounds 重置
+        # 更新会话上下文（供下一轮类型 B 追问拼接）：累积多轮历史（q + 结论摘要）。
+        # 保留规则（2026-08-24 修订，OR + 24h 硬上限）：在 2h 内 OR 总数 ≤10 任一即留，
+        # 再 AND 未超 24h（任何超 24h 记录必丢，防孤立旧记录污染）。裁剪统一由
+        # context_stitch.prune_history 负责，此处不再内联，避免规则分散。
+        # 2026-08-24：① 新增 answer_summary（Coze 结论首段），使下一轮 stitch 能携带已定设计实体；
+        # ② 改为累积式 history（不再 rounds=0 覆盖），2h 内连续调用可跨轮关联同一试验设计；
+        # ③ rounds 自增（仅作兜底上限），不再每轮归零。
         try:
             sys.path.insert(0, str(ROOT / "scripts"))
             import context_stitch as _cs2
             _cache_src = locals().get("_raw_orig") or (req.original_question or "")
-            _cs2.save_cache({
-                "rounds": 0,
+            _prev_cache = _cs2.load_cache()
+            # 顶层缓存失效（is_ctx_valid=False：超 24h 或 超 2h 且超 10 轮）则丢弃旧 history，开启新会话
+            _history = _prev_cache.get("history", []) if _cs2.is_ctx_valid(_prev_cache) else []
+            _entry = {
+                "ts": _cs2.time.time(),
                 "q": _cache_src,
-                "summary": _cs2.extract_summary(_cache_src),
+                "summary": _cs2.extract_summary(_cache_src, coze_answer),
+                "answer_summary": _cs2.extract_summary(_cache_src, coze_answer),
+            }
+            _history.append(_entry)
+            # 统一裁剪（OR + 24h 硬上限）
+            _history = _cs2.prune_history(_history)
+            _cs2.save_cache({
+                "rounds": int(_prev_cache.get("rounds", 0)) + 1,
+                "history": _history,
+                "q": _cache_src,
+                "summary": _entry["summary"],
+                "answer_summary": _entry["answer_summary"],
             })
         except Exception:  # noqa: BLE001  # 缓存写入失败不影响主流程
             pass
@@ -523,6 +613,10 @@ def main() -> None:
                 f"若持续失败可运行 `python scripts/check_coze.py` 诊断代理/网络。\n"
             )
             final = ""
+        # 2026-08-23 F 加固：refine_fire_only() 在本环境可能返回 RefineResult 对象（而非纯字符串），
+        # 统一取 .final_answer 以兼容两种返回形态，避免 (final or "").strip() 抛 AttributeError。
+        if not isinstance(final, str):
+            final = getattr(final, "final_answer", "") or ""
         sys.stdout.write(final or "")
         sys.exit(0)
 
@@ -573,6 +667,10 @@ def main() -> None:
             t("error.fallback_local", reason=type(e).__name__, timeout=60) + "\n"
         )
         final = draft
+    # 2026-08-23 F 加固：refine() 在真实出域场景下可能返回 RefineResult 对象（而非纯字符串），
+    # 统一取 .final_answer 以兼容两种返回形态，避免离线/无网回归时 (final or "").strip() 抛 AttributeError。
+    if not isinstance(final, str):
+        final = getattr(final, "final_answer", "") or ""
     # 诊断兜底（2026-08-13）：Coze 失败且无本地草稿时输出友好询问（agent 应征得用户同意后
     # 自动运行 check_coze.py 诊断），而非空输出——空输出会被误判为"没有答案"。
     if not (final or "").strip():

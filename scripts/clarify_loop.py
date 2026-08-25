@@ -405,7 +405,7 @@ def _self_test() -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="ct-advisor local clarification loop (pure-local, zero-outbound)")
+    ap = argparse.ArgumentParser(description="ct-advisor local clarification loop (pure-local, no network call)")
     ap.add_argument("--payload-inline", help="inline JSON payload string (highest priority)")
     ap.add_argument("--self-test", action="store_true", help="run minimal inline self-test, no temp files")
     args = ap.parse_args()

@@ -86,5 +86,5 @@ class CozeBackend(AdvisorBackend):
         """未激活：Coze 后端尚未接入，禁止任何真实出站。启用前需显式实现并移除本异常。"""
         raise NotImplementedError(
             "CozeBackend._post 尚未激活：在 config.json 配置 coze.bot_id/endpoint 并实现本方法前，"
-            "不会读取 token 或发起任何 HTTP 请求。当前默认走 LocalBackend，零出站。"
+            "不会读取 token 或发起任何 HTTP 请求。当前默认走 LocalBackend，完全本地执行。"
         )

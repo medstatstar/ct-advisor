@@ -1,6 +1,6 @@
 {
-  "version": "2026-08-14",
-  "description": "need_tool 执行卡 → 本地技能执行映射表。params 键对齐各技能 CLI 的 argparse 参数；布尔参数 true 才加 flag。",
+  "version": "2026-08-23",
+  "description": "need_tool 执行卡 → 本地技能执行映射表。params 键对齐各技能 CLI 的 argparse 参数；布尔参数 true 才加 flag。2026-08-23 四技能联调新增字段：result_files（stdout 无结构化数值时回读产物文件，支持沙箱 _unsaved/ 回退）、prep_hint（多技能命中时只执行主判，其余技能用此文案提示用户先准备数据）。",
   "skills": {
     "ct-registry": {
       "skill": "ct-registry",
@@ -19,7 +19,8 @@
       "output": "json",
       "timeout": 120,
       "required_params": ["cond"],
-      "extra_args": ["--auto-confirm", "--run", "--print-summary"],
+      "extra_args": ["--auto-confirm", "--run", "--print-summary", "--kw-adopt"],
+      "prep_hint": "试验格局检索：需确认检索主词（适应症 / 靶点 / 药物名，中英文均可）、可选期别与申办方范围",
       "note": "联网检索 ClinicalTrials.gov v2 / CDE / ChiCTR；WAF/浏览器/token 均在本地环境。--auto-confirm: kw 术语确认门在 translation miss 时直接用中文原文检索 CT.gov（可能漏检英文术语，属已知权衡；入口预判调用时避免 sys.exit(2) 卡死）。--run: 2026-08-20 修复——执行卡路径此前停在 ct_registry PREVIEW 安全门（只提示 add --run、不发网络请求），README 示例 2「自动返回实时 landscape」不成立；ct-registry 默认 PREVIEW 是面向交互式 CLI 的确认门，经编排器执行卡调用时用户提问本身即检索指令，无条件联网（对齐 ct-safety 的 run=true 行为）。"
     },
     "ct-safety": {
@@ -35,9 +36,16 @@
         "run": {"flag": "--run", "type": "bool", "default": true, "required": false}
       },
       "output": "json",
-      "timeout": 120,
+      "timeout": 180,
       "required_params": ["drug"],
-      "note": "openFDA FAERS disproportionality 信号检测（PRR/ROR/EBGM + 95%CI）"
+      "extra_args": ["--run"],
+      "conditional_args": [
+        {"when_absent": "event", "args": ["--top-events-signal", "6"],
+         "why": "2026-08-23 联调发现的能力落差：ct-safety 不带 --event 时**只列高频 AE、不做 disproportionality**（实测产物无 PRR/ROR/EBGM 任一字段），而 tool_router 的触发词恰是 prr/ror/ebgm/安全性信号 → 用户问『某药有什么安全信号』会拿到无信号统计的计数表。ct-safety 已有 R13 能力（--top-events-signal N：对 top N 事件跑信号检测），此处在缺 event 时自动补上，无需改动 ct-safety 本体。"}
+      ],
+      "result_files": ["faers_fetch.json", "faers_report.md"],
+      "prep_hint": "FAERS 信号检测：需确认药物通用名（openFDA 用英文通用名，如 semaglutide）、目标不良事件术语（MedDRA PT，可选）、检索起止时间（可选）",
+      "note": "openFDA FAERS disproportionality 信号检测（PRR/ROR/EBGM + 95%CI）。2026-08-23 联调修复：①显式加 --run 进 extra_args——原实现只靠 params.run 的 default:true，而 _build_cmd 仅遍历 params 里**实际存在**的键，Coze 执行卡不带 run 键时 --run 不会被拼上，静默停在 PREVIEW；②新增 result_files——stdout 只打印产物路径、无 PRR/ROR 数值，缝合层无据可依。"
     },
     "ct-literature": {
       "skill": "ct-literature",
@@ -52,9 +60,12 @@
         "with_europepmc": {"flag": "--with-europepmc", "type": "bool", "default": true, "required": false}
       },
       "output": "json",
-      "timeout": 120,
+      "timeout": 240,
       "required_params": ["topic"],
-      "note": "OpenAlex / Europe PMC / Semantic Scholar 文献检索（公开源）"
+      "extra_args": ["--run"],
+      "result_files": [".merged.json", "references_apa.md"],
+      "prep_hint": "文献检索：需确认检索主题（药物 / 靶点 + 适应症）、年份范围、是否限定安全性文献（病例报告 / 药物警戒）",
+      "note": "OpenAlex / Europe PMC / Semantic Scholar 文献检索（公开源）。2026-08-23 联调修复：补 --run——原执行卡停在 PREVIEW 安全门，stdout 返回 '[PREVIEW] would run literature pipeline …' 却仍被判 status=ok，属**假成功**（缝合层拿到零文献仍照常作答）。对齐 ct-registry/ct-safety：经编排器执行卡调用时用户提问本身即检索指令。"
     },
     "ct-samplesize": {
       "skill": "ct-samplesize",
@@ -86,7 +97,8 @@
         "等效|equivalence|BE|生物等效": "equivalence",
         "单组|单臂|单样本": "proportion_one"
       },
-      "note": "样本量/效能计算；默认引擎 coze R 服务，本地 Python 兜底；执行卡场景视为已确认，自动带 --yes 执行计算"
+      "prep_hint": "样本量/效能计算：需确认检验类型（率比较 / 均值比较 / 生存等）与效应量假设（p1+p2 / effect+sd / HR），以及 α、power、单双侧",
+      "note": "样本量/效能计算；默认引擎 coze R 服务，本地 Python 兜底；执行卡场景视为已确认，自动带 --yes 执行计算。2026-08-23 联调：stdout 含 __FIGURE__ / __SVG_WIDGET__ 内联图（单次可达数万字符），由 handle_need_tool._sanitize_result 剥离后再交缝合层，避免上下文爆炸。"
     }
   }
 }

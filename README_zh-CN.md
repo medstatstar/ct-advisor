@@ -1,20 +1,18 @@
 # 临床试验总顾问（ct-advisor）
 
-[🇨🇳 中文 (当前)](./README_zh-CN.md) | [🇺🇸 English](./README.md)
+- **English guide** → [README.md](https://github.com/medstatstar/ct-advisor/blob/main/README.md) · **中文指南** → [README_zh-CN.md](https://github.com/medstatstar/ct-advisor/blob/main/README_zh-CN.md)
 
 <div align="center">
 <img src="assets/icon.svg" width="240" height="240" alt="ct-advisor 图标"/>
 </div>
 
 > **整个 `ct-*` 临床试验技能家族的统一入口 —— 既是方法学与法规证据顾问，也通过本地代码编排器（`orchestrate.py`）把真实数据 / 竞品情报类需求路由到兄弟数据技能并在代码内缝合结果。**
-
-> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清你的试验问题：顾问将**非模糊**问题交给**本地代码编排器**（`orchestrate.py`），由它调用 Coze 云端工作流作答方法学 / 设计 / 统计 / GCP / 安全性 / 法规 / QC / 语气类问题，并在需要时**并行**在**本地**运行对应兄弟技能（`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`）、把结果在**代码内缝合**（`vague` 问题先经本地澄清菜单理清，再重新路由）；它**不重复实现**任何检索或计算逻辑。A 档。**注意：所有非模糊问题都经本地编排器发往 Coze 端点分析（`vague` 先本地澄清再转发，详见下方隐私提示）；本地 `knowledge/` 仅在 Coze 不可用时作为故障兜底。**
-
-> 💡 **性能提示**：所有**非模糊**问题都由**本地代码编排器**（`orchestrate.py`）处理——它向 Coze 端点发起**单次**调用（通常 **约 20 秒**返回；数据智能类问题还会在本地并行跑所需兄弟技能）。由于判定、预取、合并、缝合全部由**代码**完成（不靠大模型），因此对本地大模型的性能依赖很低。但目前已发现推理模型（如 Hunyuan-3、DeepSeek-R1）在本地运行本技能时会耗费大量时间进行毫无意义的深度思考。**如果单次回复等待时间经常超过 3 分钟，建议切换到简单的普通/flash大模型以加快处理速度。**
-
-> ⚠️ **数据出域与隐私提示 —— 安装前请阅读。** 你的问题会经网络发往作者托管的端点 **`https://ct-advisor.coze.site/run`** 进行分析——这是唯一的出域路径（**所有**问题 —— `vague` 先本地澄清再转发，其余直接转发，出站路径不分难度）。出站前 `sanitize()` 会自动脱敏身份证号、手机号、邮箱及少量敏感词，并附带一个不可逆的 sha256 机器标识 `query_origin`（不含明文；**同一设备每次请求一致，属稳定标识，用于审计 / 归因 / 限流**）。系统显示语言也会以 `locale`（如 `zh-CN` / `en-US`）一并附带，用于匹配答案语言——属系统区域字符串，不含 PII。**自动脱敏并非万无一失——请勿输入其他敏感或机密信息**：真实患者姓名、未公开的试验数据、商业机密、密码、API 密钥，或其他任何可识别个人 / 受限的内容。访问该端点的公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`（作者随技能发布），请原样保留，无需也不应替换为自有 token。详见 §5。
+>
+> 不需要命令，也不需要手册。你只要在对话里用**自然语言**说清你的试验问题：顾问将**非模糊**问题交给**本地代码编排器**（`orchestrate.py`），由它调用 Coze 云端工作流作答方法学 / 设计 / 统计 / GCP / 安全性 / 法规 / QC / 语气类问题，并在需要时**并行**在**本地**运行对应兄弟技能（`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`）、把结果在**代码内缝合**（`vague` 问题先经本地澄清菜单理清，再重新路由）；它**不重复实现**任何检索或计算逻辑。A 档。
 
 ---
+
+> **范围现实核对（请先读这段）。** ct-advisor 是**云端辅助**顾问，而非纯本地工具。它工作时需要把你的**问题转发到远程 Coze 引擎**；在**本机本地**运行兄弟 `ct-*` 技能（这些技能本身可能查询 ClinicalTrials.gov、中国 CDE、FDA FAERS/openFDA、OpenAlex、PubChem 等公开注册库/API）；提交**可选**的错误报告；在你的设备上保留语言偏好 / 上下文缓存 / 记忆笔记；以及运行本地连通性诊断。这一切都在 §5 数据与隐私说明里如实写明。
 
 ## 适用人群
 
@@ -71,14 +69,21 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 > 我不太确定自己到底需要什么 —— 我有一份写到一半的方案，还有些疑问。
 
 **助手会这样回（示意）：** 
-> 没关系 —— `route.py` 判定这是 `vague`，我会运行本地澄清菜单（`scripts/clarify_loop.py`）来理清你要什么。几个有界问题（至多 3 轮）即可定位正确帮助：
-> 1. 目标**人群/受试者**是谁（疾病、分期、治疗线数、年龄段）？
-> 2. 你想与什么**对照**比较（标准治疗、安慰剂、另一药物）？
-> 3. 你关注哪个**终点/结局指标**（OS、PFS、ORR、AE 发生率）？
-
-> （你回答后我继续澄清，直到需求清晰，再对 enriched 问题**重新跑难度判定**：数据智能类走本地编排器，否则转发 Coze —— 期间不会甩全量菜单。）
-
-**📌 说明**：当你说“不确定要什么”（如“我不太确定自己到底需要什么”“我不知道该从哪里开始”），顾问运行**本地澄清菜单**（`scripts/clarify_loop.py`，有界 1–3 问/轮、硬上限 3 轮），而不是猜测。菜单按**真正会改变答案的 PICO 维度**追问（目标人群 / 对照 / 终点结局），并累积 `question_profile`。澄清后**对 enriched 问题重新跑难度判定**，按路由表走本地编排器（数据智能）或 Coze，并带 `difficulty="vague"`。
+> 没关系，这种"写到一半、问题还散着"的状态很常见。在正式分析之前，我想先帮你把范围兜清楚——下面两个问题加一组"我能帮你做什么"，你挑着回就行，不用全答。
+>
+> **先补两个最影响方向的信息：**
+> 1. 目标人群/受试者是谁？（疾病、分期、治疗线数、年龄段）——这决定结论能不能套到你的方案上。
+> 2. 你最关心哪类终点？（OS、PFS、ORR、安全性 AE 发生率、生活质量…）*（若你提到"跟什么比"，我再补问对照是什么）*
+>
+> **你大概想要哪种帮忙**（回编号或原话即可）：
+> 1. 方案评审——逐点检查半成品：结构缺哪块、设计漏洞/合规风险在哪。
+> 2. 方案设计咨询——某模块拿不准：随机化/盲法/入排标准/统计假设怎么定。
+> 3. 样本量——给我人群/终点/预期效应量，我转 ct-samplesize 出数+图。
+> 4. 终点与统计计划——主要/次要终点怎么选、假设检验怎么排、FAS/PPS/SS 怎么划。
+> 5. 具体疑问 Q&A——把零散问题直接抛来，我逐条答。
+> 6. 全文把脉——把半成品方案粘贴或上传 docx/pdf，我读完后直接告诉你卡在哪、下一步补什么。
+>
+> 最省事的一步还是第 6 项：把写到一半的方案贴给我，我就不靠猜了。
 
 ### 示例 6 · 切换输出语言
 **你这样说：** 
@@ -164,73 +169,70 @@ ct-advisor 是一个**对话式技能**：你只要把正在做的事告诉助�
 
 **Q：纯方法学要联网吗？** A：要——所有**非模糊**问题都会**单次**发往 Coze 端点（`https://ct-advisor.coze.site/run`）分析；`vague` 问题先经本地澄清菜单理清再转发。本地 `knowledge/` 包**仅作故障兜底**：Coze 不可达时你仍能拿到离线答案，但会标注未经云端精校。
 
+**Q: 发现结果有误怎么办？怎么上报？**
+A: 本技能遵循 ct-base §20.3 错误报告流程。若您怀疑结果有误（或引擎报错），直接说 **"上报问题" / "report a bug" / "提交错误报告"**。技能在检测到疑似缺陷时（如引擎报错、重试仍失败）也会**主动询问**是否上报——**每会话最多 1 次**，您可随时拒绝。无论哪种方式，助手都会：
+1. **生成一份脱敏报告**（11 键白名单：skill / skill_version / test / error_type / error_code / engine_status / description / locale / query_origin / session_hash / attempts——**不含您的原始输入值或个人数据**，仅 `description` 字段由您把关披露，如所用算法/函数、错误消息原文）；
+2. **展示报告全文供您检视**——可补充问题描述或更正任何内容后再确认；
+3. **经您明确确认后发送**——本会话有 coze 调用则发往统一端点 `https://ct-bugreport.coze.site/run`；纯本地则保存脱敏报告 + 提示邮件联系作者（数据不出域）；
+4. **收到回执**——包括您此前从同一来源提交的报告是否已被修复（含修复说明）或仍在处理中。
+
+整个过程您完全可控：报告在**发送前**先展示给您，未经您明确说「发送」绝不传输任何内容。
+
+**Q：如果数据要保密怎么办？** A：本技能只把你的**问题文本**发往 Coze 端点（`https://ct-advisor.coze.site/run`），绝不发送你的原始试验 / 受试者 / 申办方数据。出站前先经 `sanitize()` 脱敏（剥离身份证号、手机号、邮箱及少量敏感词；`query_origin` 是非 PII 的 `sha256` 机器标识，`locale` 为系统语言）。兄弟数据技能（ct-registry / ct-safety / ct-literature / ct-samplesize）**在本地运行**，只有结果回传；机密数据绝不离开本机。若你有严格保密要求，只需在提问时避免填入真实患者 / 申办方数据即可——方法学答语属框架级，无需暴露真实数据。
+
 ---
 
-## 4. 安全与隐私
+## 4. 执行机制与安全预览
 
 ### 安全预览（默认即路由调用兄弟技能）
 - **默认即路由调用**：`data_intel` 类需求（竞品格局 / 安全信号 / 文献 / 样本量）默认**直接 dispatch 到对应兄弟技能**（ct-registry / ct-safety / ct-literature / ct-samplesize）完成分析并返回实时结果，无需额外说「请直接检索」。若你只想要方案、暂不取数，说「只看方案」即可。
 - **可溯源、不编造**：每条事实性 / 规范性断言都带来源标注或 `⚠️ 官方核实` 标记；绝不用流畅措辞填补事实空白。
 - 输出仅供参考；申报 / 决策前请对照官方原文核实。
 
-### 出站与隐私（非模糊问题转发 Coze；模糊先本地澄清；数据技能经 need_tool 本地执行）
-- **出站路径 = 云端分析（Coze，非模糊问题；模糊先本地澄清再转发）**：由于临床试验对答案质量要求很高，本技能会将你的**非模糊**问题**单次**发送到服务器 **`https://ct-advisor.coze.site/run`** 在完整数据库中分析（`scripts/refine_answer.py --ship`（数据智能类问题优先 `scripts/orchestrate.py`），外发 `query_meta`（含 `query_origin` 机器标识与 `locale` 系统语言）+ `original_question` + `draft_answer`（你的本地草稿会一并发往云端以供精校），出站前先经 `sanitize()` 脱敏）。`vague` 问题先经本地澄清菜单理清再转发。公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`（作者公开发布），请原样保留、勿替换为自有 token。Coze 超时/出错时才降级为本地 `knowledge/` 答案，但**仅为故障兜底**。因此 **请勿在提示词中粘贴保密的试验 / 受试者 / 申办方数据** 。
-- **兄弟数据技能在本地执行**：当问题需要注册库 / 信号 / 文献 / 样本量数据时，Coze 返回 `need_tool` 执行卡，技能随后在**本地**执行（自身的公开源检索 / 计算）并把结果缝合进 Coze 草稿——只有执行卡参数与草稿跨边界传输，机密数据绝不离开本机。
-- **机器标识已哈希、非 PII**：`query_origin`（嵌套在 `query_meta` 内）为 `sha256(hostname)`——稳定的按机器标识符，仅用于按机器的审计与归因及 Coze 侧限流。**不含明文主机名、IP 或其他 PII**。
-- **locale 为系统语言、非 PII**：`locale`（嵌套在 `query_meta` 内）为系统显示语言字符串（如 `zh-CN`、`en-US`），仅用于让答案语言与系统一致。**不含明文主机名、IP 或其他 PII**。
-- **错误报告客户端（可选，脱敏）**：当检测到技能缺陷或你明确要求上报 bug 时，`adapters/bug_report.py` 会向作者公共端点 `https://ct-bugreport.coze.site/run` 发送一份 11 键脱敏报告（不含原始输入数据，仅含技能名/版本/错误类型及你确认的问题描述），且**必经你的三阶段确认**。公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/bug_report.py`。
-- **默认不写本地磁盘**：`qa_store` 默认 `noop`，不保留任何问答记录；可选 `qa_store.mode: local` 才会将完整问答追加写入本机 `data/qa_log.jsonl`（未加密，请视为敏感文件并加入 `.gitignore`）。
-- **关于记忆（自改进系统）**：ct-advisor 遵循 WorkBuddy 自改进系统。同类问题出现 ≥ 3 次且跨 ≥ 2 个任务时，规则被**自动**晋升至长期记忆：行为/沟通规则 → `~/.workbuddy/SOUL.md`；工作流/工具规则 → 项目 `AGENTS.md`；跨项目用户偏好 → `~/.workbuddy/MEMORY.md`；项目级记录 → `.workbuddy/memory/MEMORY.md`。这些文件存放在你本机。想看存储内容，说"给我看你的 MEMORY.md"；想删除，说"忘掉我所有偏好"或手动 `rm ~/.workbuddy/MEMORY.md`（全局）/ `rm -rf .workbuddy/memory/`（项目级）。晋升过程静默，以免打断你工作。
-
-
-
-## 5. 进阶参考（开发者）
-
-CLI 助手、运行要求、架构树与扫描器误报说明已移到此处，普通用户无需阅读。规范级内容与版本历史见 [`SKILL.md`](SKILL.md) 与 [`CHANGELOG.md`](CHANGELOG.md)。
-
-### 运行时与要求
-| 项目 | 要求 |
-|---|---|
-| 运行时 | 智能体直接读 `knowledge/` —— **无强制依赖**。 |
-| 可选 CLI 助手 | `python3`（仅标准库）。`scripts/*.py` 用 `json` 加载 `scripts/*.json` —— **无需 PyYAML**。 |
-| 兄弟技能 | `ct-registry`、`ct-safety`、`ct-literature`、`ct-samplesize`（仅用于数据路由 / 接地；竞品情报简报由本技能缝合三源；缺失时优雅降级）。均从 GitHub 安装：`ct-registry`→`https://github.com/medstatstar/ct-registry`、`ct-safety`→`https://github.com/medstatstar/ct-safety`、`ct-literature`→`https://github.com/medstatstar/ct-literature`、`ct-samplesize`→`https://github.com/medstatstar/ct-samplesize`（克隆到 `~/.workbuddy/skills/<slug>`）。缺失时顾问会直接打印其 GitHub 地址。 |
-| 云端分析（Coze） | 所有**非模糊**问题都会单次发往 Coze 端点分析（`vague` 先本地澄清再转发）——需要 `requests`（缺失时自动安装）。本地 `knowledge/` 仅作故障兜底。 |
-
-### 架构
-```
-ct-advisor/
-├── SKILL.md              # 面向智能体的规范：难度判定 → [模糊：澄清菜单 → 重新路由] / [非模糊：本地编排器]
-├── knowledge/            # 可移植方法学包（"大脑"）
-├── scripts/              # 仅标准库、无 LLM 的 CLI 助手（代码编排层）
-│   ├── route.py          # 难度判定（vague / simple / middle / complex）
-│   ├── route_tool.py     # 高置信兄弟技能预取预判（模式 B）
-│   ├── orchestrate.py    # 代码编排器：并行 Coze + 预取、合并、缝合；输出委托块或定界包裹答案
-│   ├── refine_answer.py  # --ship / --card-inline：调用 Coze、代码内跑 need_tool、包裹答案
-│   ├── handle_need_tool.py # 执行 need_tool 执行卡（跑兄弟技能、推断参数）
-│   ├── clarify_loop.py   # 有界本地澄清循环（启发式，硬上限 3 轮）
-│   ├── menu.json         # 澄清菜单树
-│   ├── workflows.json    # A–J 路由与集成契约
-│   ├── i18n.py           # 双语唯一真源
-│   ├── menu.py           # 菜单构建器（Coze 孪生 / 本地预览）
-│   ├── check_deps.py     # 仅本地能力探针
-│   └── search_refs.py    # 专题参考定位器
-├── adapters/             # 推理出口 / 数据接地 / 问答 三层可切换适配
-└── config.json           # 运行时后端选择（非模糊 → orchestrate.py → Coze + 本地技能；模糊先本地澄清再重新路由；兄弟技能经 need_tool 本地执行；Coze 失败时本地 knowledge/ 兜底）
-```
-
-### CLI 示例（开发者）
-```bash
-python3 scripts/check_deps.py     # 本地能力探针（不安装、不联网）
-python3 scripts/menu.py --all     # 把澄清菜单导出为 JSON
-python3 scripts/menu.py --tier data_skill --human --lang zh   # 预览单个 tier
-```
-
-### 扫描器误报说明 
-部分自动化扫描器会标记 `adapters/`，因其含看似网络或凭据相关的字符串。需区分两条路径：(1) **顾问后端** `CozeBackend.advise()` 与 `_post()` 是惰性桩，均抛 `NotImplementedError`，除非你显式实现并在 `config.json` 中启用 Coze 路由，否则不读取 token、也不发起 HTTP 请求——该路径确实惰性。(2) **非模糊问题的云端分析走 Coze（vague 先本地澄清再转发）**：`scripts/refine_answer.py --ship`（数据智能类问题优先 `scripts/orchestrate.py`）每答一题即把 payload POST 到扣子分析器，故 `requests` 由恒定启用的分析器导入（并非仅存在于未激活路径）。按发布原样运行，**每个非模糊问题都会出站（vague 经本地澄清后出站）**——问题文本会发往 `ct-advisor.coze.site/run`（PII 经 `sanitize()` 脱敏，`query_origin` 为非 PII 的 `sha256` 机器标识）。公开凭证以混淆形式（XOR+base64）内嵌于 `adapters/coze_token_embedded.py`——**仓库内无明文密钥**。
+### 延迟提示
+所有**非模糊**问题都由**本地代码编排器**（`orchestrate.py`）处理——它向 Coze 端点发起**单次**调用（通常 **约 20 秒**返回；数据智能类问题还会在本地并行跑所需兄弟技能）。由于判定、预取、合并、缝合全部由**代码**完成（不靠大模型），因此对本地大模型的性能依赖很低——但目前已发现推理模型（如 Hunyuan-3、DeepSeek-R1）在本地运行本技能时会耗费大量时间进行毫无意义的深度思考。**如果单次回复等待时间经常超过 3 分钟，建议切换到简单的普通/flash大模型以加快处理速度。**
 
 ---
 
-**版本**：v0.9.71 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+## 5. 数据与隐私说明
+
+**本技能是云端辅助工具，并非纯本地工具。** 为了给出与时俱进、可溯源的答案，它会把你的提问转发给远程引擎，并可能在本机运行兄弟技能。下面如实说明什么会离机、什么留本地、以及它可能执行的敏感动作—— upfront 写明，不藏末尾。
+
+### 什么会离机（off-device）
+- **分析请求**：非模糊问题的问题文本（先经 `sanitize()` 脱敏，剥离证件号/手机号/邮箱/少量敏感词）发往 `https://ct-advisor.coze.site/run`。**原始试验 / 受试者 / 申办方数据绝不外发**。需要注册库/信号/文献/样本量数据时，Coze 仅返回 `need_tool` 指令，实际检索与计算在**本机本地**完成——但请注意，这些本地兄弟技能（`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`）本身可能查询 **公开注册库/API**（ClinicalTrials.gov、中国 CDE、FDA FAERS/openFDA、OpenAlex、PubChem 等）。那是通往这些公开源的独立出站，并非发往 Coze。
+- **错误报告**：**仅在你明确确认后**发送，且只含 11 键白名单信封（无原始输入、无 PII），发往 `https://ct-bugreport.coze.site/run`。你也可以拒绝；每会话最多提示一次。
+
+每次请求还附带两条匿名元数据：`query_origin`（主机名 SHA-256 哈希，仅限流用）与 `locale`（系统语言，仅用于答案语言匹配）——均不含 PII。
+
+### 什么留在本机但仍是敏感动作（on-device actions）
+为透明起见，下面如实列出技能可能执行的全部动作：
+- **内嵌（公开）令牌**：技能随包附带一个经混淆的 Coze 令牌，用于认证公开端点。它是**设计上共享/公开的凭据**（非个人私密），仅在出站认证时在内存中解码，并在此处公开披露而非隐藏。
+- **本地持久化**：它可能把你的**语言偏好**写入 `config.json`、在 `.runtime/`（已 gitignore）保留短时效**上下文缓存**，并依 SOUL.md 自改进规则将**反复出现的互动模式提升进长期记忆文件**。这些都不含你的问题文本或试验数据。
+- **本地连通性诊断**：若连不上 Coze，经你许可后它会运行 `scripts/check_coze.py` 探测本地代理 / 网络 / 令牌配置并给出修复建议。
+- **子进程编排**：本地代码编排器（`orchestrate.py` / `refine_answer.py`）以**本机子进程**方式运行兄弟 `ct-*` 技能，并在代码内缝合其结果。
+
+> **一句话总结**：问题文本（脱敏后）按需外发做云端分析、兄弟技能可能查询公开注册库、可选错误报告你确认后才发、技能可能在本地保留语言偏好 / 上下文缓存 / 记忆笔记——**原始试验 / 受试者 / 申办方数据永不离开本机**。
+
+---
+
+## 为什么可以信任输出 · 反幻觉机制
+
+ct-advisor 是路由到兄弟技能、并把问题转发给 Coze 精校器的总入口，本身不编造事实。四条防线：
+
+1. **每条事实断言可溯源。** 来自兄弟技能、带数据接地的断言都标注"数据来源：ct-xxx（<日期>）"；方法学 / 法规答语引用权威出处（ICH / NMPA / FDA / EMA 指南），可链接处给出链接。
+2. **标识符一致性比对。** 当引用的标识符（试验登记号、DOI / PMID）解析为 live 记录后，会将解析出的标题 / 作者 / 年份与原始断言做相似度比对；不一致者标 `mismatch`，不视为已核实。
+3. **无法溯源 ⇒ `⚠️ 官方核实`。** 任何无法追溯到公开源的内容都标"待官方核实"，绝不当作确定结论输出。
+4. **不编造。** 试验登记号、获批日期、受试者人数、企业并购 / 管线动态一律不编造；公开源未披露时，输出"公开源未见披露"。
+
+---
+
+## 6. 进阶参考（已迁移到独立文件）
+
+CLI 助手、运行要求、架构树与扫描器误报说明已迁移至 **[references/ADVANCED.md](references/ADVANCED.md)**。普通用户无需阅读，第 1–4 节已覆盖日常使用。规范级内容与版本历史见 [`SKILL.md`](SKILL.md) 与 [`CHANGELOG.md`](CHANGELOG.md)。
+
+---
+
+**版本**：v0.9.102 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：medstatstar@gmail.com（张文彤 / Wintone Zhang）。
 

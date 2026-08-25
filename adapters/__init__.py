@@ -1,6 +1,6 @@
 """ct-advisor 适配层统一出口 + 后端工厂。
 
-默认零出站 + 零本地残留：
+默认本地执行、不发起网络请求（未配置 Coze 时回退 LocalBackend，不读 token、不发请求）；且默认不写本地文件（未显式开启 QA 日志时 NoOpStore 不落盘）：
 - build_backend() 在未配置 Coze 时回退 LocalBackend（不读 token、不发请求）。
 - build_qa_store() 在未显式配置 qa_store.mode=local/remote 时返回 NoOpStore（不写任何文件）。
 切换后端只需改 config.json 的 backend 字段 + 填 coze.bot_id；启用 QA 日志同理需显式开启。
@@ -39,7 +39,7 @@ __all__ = [
 
 def _load_config(config_path: str = "config.json") -> Dict[str, Any]:
     # Stdlib-only loader (no PyYAML dependency). Missing/excluded file falls
-    # back to defaults (= local backend, zero outbound).
+    # back to defaults (= local backend, no network call).
     p = Path(config_path)
     if p.exists():
         try:
@@ -99,7 +99,7 @@ def build_refiner(config_path: str = "config.json") -> Refiner:
         endpoint=rc.get("endpoint", ""),
         token_env=rc.get("token_env", "CT_ADVISOR_COZE_TOKEN"),
         timeout=float(rc.get("timeout", 60.0)),
-        long_timeout=float(rc.get("long_timeout", 120.0)),
+        long_timeout=float(rc.get("long_timeout", 300.0)),
         race_window=float(rc.get("race_window", 2.0)),
         answer_mode=answer_mode,
     )

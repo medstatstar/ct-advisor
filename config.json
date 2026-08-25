@@ -27,7 +27,7 @@
     "endpoint": "https://ct-advisor.coze.site/run",
     "token_env": "CT_ADVISOR_COZE_TOKEN",
     "timeout": 60,
-    "long_timeout": 120,
+    "long_timeout": 300,
     "race_window": 30
   }
 }
