@@ -1,13 +1,13 @@
 ---
 slug: ct-advisor
 name: ct-advisor
-displayName: 临床试验总顾问 / Clinical Trial Chief Advisor
+displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 0.9.103
+version: 0.9.104
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流并转发远程 Coze 引擎精校；统计计算转交 ct-samplesize；原始数据/竞品情报类需求路由到 ct-registry / ct-safety / ct-literature 并在代码内缝合三源产出。本技能会在本机运行兄弟技能、保留语言偏好/上下文缓存/长期记忆等本地状态，并支持可选的脱敏错误报告。"
-description: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流并转发远程 Coze 引擎精校；统计计算转交 ct-samplesize；原始数据/竞品情报类需求路由到 ct-registry / ct-safety / ct-literature 并在代码内缝合三源产出。本技能会在本机运行兄弟技能、保留语言偏好/上下文缓存/长期记忆等本地状态，并支持可选的脱敏错误报告。 / The ct-series TOTAL ENTRY POINT across the full clinical-development lifecycle — a cloud-assisted clinical-trial advisor. Methodology / design / compliance / QC / tone questions run in-house through workflows A–J and are forwarded to the remote Coze engine for refinement; sample-size computation is handed to ct-samplesize; raw-data and competitive-intel needs route to the three sibling data skills (ct-registry / ct-safety / ct-literature) and are stitched in code. The skill runs sibling skills locally, keeps local state (language preference / context cache / long-term memory), and supports an optional de-identified bug report."
+description: "The ct-series TOTAL ENTRY POINT across the full clinical-development lifecycle — a cloud-assisted clinical-trial advisor. Methodology / design / compliance / QC / tone questions run in-house through workflows A–J and are forwarded to the remote Coze engine for refinement; sample-size computation is handed to ct-samplesize; raw-data and competitive-intel needs route to the three sibling data skills (ct-registry / ct-safety / ct-literature) and are stitched in code. The skill runs sibling skills locally, keeps local state (language preference / context cache / long-term memory), and supports an optional de-identified bug report. / 面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。方法学/设计/合规/QC/语气类问题在内部走 A–J 工作流并转发远程 Coze 引擎精校；统计计算转交 ct-samplesize；原始数据/竞品情报类需求路由到 ct-registry / ct-safety / ct-literature 并在代码内缝合三源产出。本技能会在本机运行兄弟技能、保留语言偏好/上下文缓存/长期记忆等本地状态，并支持可选的脱敏错误报告。"
 license: MIT
 triggers:
   - "ct console"
@@ -65,7 +65,7 @@ Single entry point for the ct-series: methodology / design / compliance / QC / t
 
 ## Attachment handling (docx / pdf / ppt)
 
-> **Governance pointer (2026-08-19 rollback):** the layered conversion strategy, user prompts, and confidentiality boundary are consolidated into **ct-base §6.7** (`ct-base/docs/02-governance-redlines.md`); this skill no longer re-declares them — on conflict, ct-base §6.7 wins. The shared converter lives in `ct-base/scripts/office_to_md.py` (injected into each skill at publish). This section keeps only ct-advisor-specific **implementation details**:
+> **Governance pointer (2026-08-19 rollback):** the layered conversion strategy, user prompts, and confidentiality boundary are consolidated into **ct-base §6.7** (`ct-base/docs/03-interaction-constraints.md`); this skill no longer re-declares them — on conflict, ct-base §6.7 wins. The shared converter lives in `ct-base/scripts/office_to_md.py` (injected into each skill at publish). This section keeps only ct-advisor-specific **implementation details**:
 
 1. Append the converted text to the **`original_question`** field and run the normal pipeline (`route.py` → `refine_answer --ship`), wrapped as:
    `...要求：撰写完整规范。以下是模板内容：\n---\n{md}\n---`

@@ -9,6 +9,9 @@ from __future__ import annotations
 
 from typing import Optional
 
+# §16.9: 出站相关常量收口至 adapters/，scripts/ 层不持有硬编码 URL
+COZE_ENDPOINT = "https://ct-advisor.coze.site/run"
+
 
 def probe_get(url: str, timeout: float = 8.0,
               proxies: Optional[dict] = None,

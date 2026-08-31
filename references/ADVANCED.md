@@ -33,7 +33,7 @@ Use `--latency-report` whenever you change Step 0/1 to catch `middle` pre-fire r
 
 ## Attachment handling (docx / pdf / ppt) — detail
 
-Governance (layered conversion, user prompts, confidentiality boundary) is consolidated into **ct-base §6.7** (`ct-base/docs/02-governance-redlines.md`); on conflict ct-base §6.7 wins. Implementation specifics for ct-advisor:
+Governance (layered conversion, user prompts, confidentiality boundary) is consolidated into **ct-base §6.7** (`ct-base/docs/03-interaction-constraints.md`); on conflict ct-base §6.7 wins. Implementation specifics for ct-advisor:
 
 1. Convert the attachment to Markdown via `scripts/office_to_md.py` (same source as the base shared artifact `ct-base/scripts/office_to_md.py`, shipped with the package).
 2. Append the converted text to `original_question` and run the normal pipeline (`route.py` → `refine_answer --ship`), wrapped as:

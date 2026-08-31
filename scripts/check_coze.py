@@ -16,7 +16,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ENDPOINT = "https://ct-advisor.coze.site/run"
+sys.path.insert(0, str(ROOT))  # 确保 adapters/ 可导入（§16.9 出站常量与调用收口至此）
+from adapters.http_probe import COZE_ENDPOINT, probe_get
+
+ENDPOINT = COZE_ENDPOINT
 
 
 def _proxy_envs() -> dict:
@@ -35,8 +38,7 @@ def _port_open(host: str, port: int, timeout: float = 1.5) -> bool:
 
 
 def _probe(proxies=None, timeout: float = 8.0):
-    """小请求探测端点。返回 (ok, 状态码或错误摘要)。出站逻辑收口在 adapters/http_probe.py（§16.9）。"""
-    from adapters.http_probe import probe_get
+    """小请求探测端点。返回 (ok, 状态码或错误摘要)。出站逻辑与常量收口在 adapters/http_probe.py（§16.9）。"""
     return probe_get(ENDPOINT, timeout=timeout, proxies=proxies)
 
 

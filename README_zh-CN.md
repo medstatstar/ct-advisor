@@ -210,6 +210,7 @@ A: 本技能遵循 ct-base §20.3 错误报告流程。若您怀疑结果有误�
 - **本地持久化**：它可能把你的**语言偏好**写入 `config.json`、在 `.runtime/`（已 gitignore）保留短时效**上下文缓存**，并依 SOUL.md 自改进规则将**反复出现的互动模式提升进长期记忆文件**。这些都不含你的问题文本或试验数据。
 - **本地连通性诊断**：若连不上 Coze，经你许可后它会运行 `scripts/check_coze.py` 探测本地代理 / 网络 / 令牌配置并给出修复建议。
 - **子进程编排**：本地代码编排器（`orchestrate.py` / `refine_answer.py`）以**本机子进程**方式运行兄弟 `ct-*` 技能，并在代码内缝合其结果。
+- **随包携带但不产生出站（澄清）**：为保持自包含，发布包内附了 ct-base 共享底座的通用模块，其中 `kw_localize.py` 具备「术语表未命中时调用 MyMemory / Google gtx 在线翻译兜底」的能力（默认开启，可设 `CT_TRANSLATE_ONLINE=0` 关闭）。**ct-advisor 全程零调用该模块**（无关键词本地化需求），因此**不产生任何翻译类出站**；同步 base 版本仅为满足共享件一致性要求。
 
 > **一句话总结**：问题文本（脱敏后）按需外发做云端分析、兄弟技能可能查询公开注册库、可选错误报告你确认后才发、技能可能在本地保留语言偏好 / 上下文缓存 / 记忆笔记——**原始试验 / 受试者 / 申办方数据永不离开本机**。
 
@@ -240,11 +241,9 @@ CLI 助手、运行要求、架构树与扫描器误报说明已迁移至 **[ref
 
 ## 保密声明
 
-> CT 全系列技能由 20+ 个技能构成，按「保密信息出域风险 + 是否对外检索」分为 A、B 两档，完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
+> CT 全系列技能由 20+ 个技能构成，按「输入是否涉密」分为 **A、B 两档**（network / egress / publish 为独立正交属性，详见 ct-base §11），完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
 >
-> - **A 档（非涉密·公开）**：输入为普通数据，可完全本地运行（`network=off`）或对外公开检索（`network=public-retrieval`，如 ct-registry / ct-advisor 等）；不涉及任何保密信息。A 档技能均在 GitHub 公开发布。
-> - **B 档（涉密·内部）**：涉及药企需严格保密的临床试验数据、内部资讯等敏感内容（如 ct-analysis、ct-sdtm、ct-eligibility 等）；B 档在本地处理（`egress=none`，数据不出域）或需审批出站（`egress=approval-req`，如 ct-eligibility）。B 档技能仅限企业内部使用，目前不对外公开发布。
->
-> 若您对这些涉密技能确有实际需求，欢迎与作者联系，定制并安装相关技能。
+> - **A 档（输入非涉密）**：输入为普通数据，不涉及任何保密信息；按 `network` 子属性再分三类——① **全程本地**（`network=off`，零出域）；② **向公开源检索**（`network=public-retrieval`，如 ct-registry / ct-safety / ct-literature，仅公开查询词出域）；③ **coze-only 受控出站**（`network=controlled-coze-opt-in`，如 **ct-advisor**：仅向单一 Coze 端点出站、需用户显式 opt-in、payload 先经 `sanitize()` 脱敏，配套 `egress=cloud`）。⚠️ 注意：③ **不等于「可完全本地运行」**——其问答默认转发云端引擎，仅在云端不可达时才回退本地兜底答案（并会标注）。A 档技能均在 GitHub 公开发布。
+> - **B 档（输入涉密）**：输入含药企需严格保密的临床试验数据 / 方案 / CRF（如 ct-analysis、ct-sdtm、ct-protocol、ct-eligibility 等）；B 档**既能本地处理**（`egress=none`，数据不出域）**也能对外公开检索**（`network=public-retrieval`，如 ct-protocol 调 ct-registry / ct-literature 抓取公开试验设计与文献作参考——仅公开查询词出域）；或需审批出站（`egress=approval-req`，如 ct-eligibility）。但**均不对外公开发布**；涉密输入绝不随包 / 出站；若有定制 / 本地部署需求，欢迎与作者联系。
 >
 > 📧 联系方式：medstatstar@gmail.com，张文彤（Wintone Zhang）

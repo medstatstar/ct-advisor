@@ -112,6 +112,12 @@ def _read_artifacts(tool_cfg: dict, workdir: Path) -> dict:
             hit = matches[0] if matches else None
         if hit is None:
             continue
+        # 路径白名单：仅回读解析后仍在 workdir 之内（含 _unsaved）的产物，
+        # 抵御 result_files 含 ../ 的路径逃逸。
+        try:
+            hit.resolve().relative_to(workdir.resolve())
+        except ValueError:
+            continue
         try:
             raw = hit.read_text(encoding="utf-8", errors="replace")
         except Exception as e:  # noqa: BLE001
@@ -291,7 +297,19 @@ def execute_card(card: dict) -> dict:
 
     cmd = _build_cmd(tool_cfg, params)
     timeout = tool_cfg.get("timeout", 120)
-    workdir = CARDS_ROOT / tool
+    # 路径白名单防御（审计 §16 要求）：tool 已确认为 tool_mapping 已知键；
+    # 再确保解析后 workdir 落在 CARDS_ROOT 之内，杜绝 ../ 逃逸。
+    workdir = (CARDS_ROOT / tool).resolve()
+    if not workdir.is_relative_to(CARDS_ROOT.resolve()):
+        return {
+            "tool": tool,
+            "status": "error",
+            "result": f"非法工具路径（超出允许目录）: {tool}",
+            "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
+            "elapsed_sec": 0,
+        }
     workdir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     try:

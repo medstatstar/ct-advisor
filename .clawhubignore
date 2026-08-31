@@ -74,3 +74,35 @@ config/context_cache.json
 # 均为本地安全副产物，发布前须剔除；发布后可用 publish_inject.py --clean 清理）
 .ctbase_injected.json
 *.ctbase_bak_*
+
+# ── 开发者笔记，不进发布包 ──
+learnings.md
+
+# ── ct-base 统一基线（ClawHub 不读 .gitignore，须自列全量）──
+.env
+*.env
+.env.*
+*.key
+*.secret
+*.token
+secrets.json
+credentials.json
+config.local.json
+*.pyo
+outputs/
+*.cache
+adapters/coze_project/
+**/coze_contract.md
+**/refiner_contract.md
+**/coze_system_prompt_v*.md
+**/ops.md
+scripts/tests/
+
+# ── 补齐双份 ignore 差异项（2026-08-29）──
+*.py[cod]
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.so
+*.egg-info/
