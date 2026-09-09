@@ -2,6 +2,13 @@
 
 ## [Unreleased] (2026-09-09) — 图形化解释策略 (SKILL.md) + README 案例对齐 + ct-bugreport 凭据修复
 
+### SkillHub 发布 v0.9.110（2026-09-09，彤 授权）
+- **平台**：SkillHub（skillhub.cn），`skillId=137567`，namespace `user_ff7413f5`。
+- **版本**：0.9.110（覆盖线上旧 0.9.103）。
+- **发布包构成**：`git archive` 副本（自动排除 `adapters/coze/` 大目录 + `**/refiner_contract.md` 接口文档 + `references/ops.md`），`scrub_copy.py --platform skillhub` 擦除 `.gitignore/.clawhubignore/LICENSE/workbench/*.css|js` 后 `RESULT: PASS`；`localize_frontmatter.py` 将 `displayName` 本地化为 `临床试验总顾问 (ct-advisor)`、`description` 去英文段（仅 SkillHub 副本，源目录 frontmatter 保持双语不变）。
+- **本次增量**：缓存 TTL=6 个月（命中即查、过期强制重生成、存量无时间戳视同过期）；`message` 字段兼容性澄清（未赋值→不出参属正常）；本地镜像同步 Coze v2（4 cfg，doubao-seed-*-260215）；新增 `references/coze_cache_policy.md` + SKILL.md 规则 7；ct-base `coze_io_contract.md §5.5 / §20.15.8` 沉淀 message 兼容性契约。
+- **状态**：`✓ Published`（服务端异步审核/索引刷新，搜索可能短暂滞后显示旧 0.9.103，非失败）。未同步 GitHub（仅发 SkillHub，红线：GitHub push / ClawHub 需分别授权）。
+
 ### 凭据集中收敛：删除 config/coze_token.py，bugreport token 迁入 coze_token_embedded.py（2026-09-09）
 - **问题**：`ct-bugreport.coze.site/run` 此前返回 **403 Authentication failed**。根因：`config/coze_token.py::COZE_TOKEN` 装的是错误 token，且 `config/__pycache__/coze_token.cpython-313.pyc` 缓存残留旧错误 JWT，`bug_report.py`/`main.py` 经 `importlib` 加载时命中字节码缓存 → 实际读到旧错误 token。
 - **修复（参考 ct-base §20.3.5 + `adapters/coze/src/endpoint_token.py`）**：将 bugreport 公共凭据以 XOR+base64 混淆 blob 迁入 `adapters/coze_token_embedded.py::EMBEDDED_SECRETS["ct_bugreport_coze"]`（复用同文件 `OBFUSCATION_KEY`，与 ct-base `endpoint_token.py` 同源同值），新增 `get_bugreport_token()`；重写 FILE ROLE 横幅说明本文件即全部 Coze 连接凭据唯一存放处。
