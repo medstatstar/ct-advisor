@@ -18,6 +18,7 @@ auto_generated: false  # 2026-08-08: 合并 contract 文件后改为手动维护
 | `ref-ops-execution.md` | QTL, GCP training, contract/insurance, re-consent, SIV, recruitment/retention, site closeout, IRB composition, drug return, medical devices, compliance, recruitment ads, discontinuation/withdrawal; cross-file dependency checklist, pre-delivery quality gate, methodology QC output, minimal answer template [B, D, E, G, H] |
 | `ref-ops-gcp-site.md` | Ethics judgment order, informed consent as a continuous process, delegation does not transfer accountability, role responsibilities, WOCBP pregnancy screening; institution filing/PI change, feasibility, monitoring, SDV, protocol amendment, ICF execution, KRI/RBM, adaptive FIH ethics, single-arm external control, cell/gene LTFU, compensation, depot logistics, institution change, CRO audit [D, E] |
 | `ref-ops-safety.md` | Six-judgment, individual-case handling loop, medical monitoring, SAE clock, reproductive toxicity, pregnancy/lactation, death report, overdose handling, AESI; deviation examples/ethics reporting, fraud investigation, GCP inspection prep, CAPA effectiveness; unified fact base, decision hierarchy/RACI, risk-issue-change, CSR writing implementation [D, F, G] |
+| `ref-icae-safety.md` | **ICI irAE 谱、VZV/HSV 再激活机制与流行病学、间质性肺炎/心肌炎/肝炎/肾炎/甲状腺炎/垂体炎 irAE 速查、PD-1/VEGF 双抗 vs PD-1 单抗安全性对比、ICI 因果关系判定要点 [B, C, D, F]** |
 
 ### Clinical Operations 系列契约
 

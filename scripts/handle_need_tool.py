@@ -34,6 +34,7 @@ status 语义：
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -60,6 +61,40 @@ MAX_RESULT_CHARS = 4000
 def _load_mapping() -> dict:
     with open(MAPPING_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+# 调用方语言透传（F3, 2026-09-03）：ct-base language_policy.md §"user_language 备用入参"
+# 规定 coze 计算端经环境变量 CTSS_LOCALE 接收调用方语言（zh/en）。ct-advisor 作为调用方，
+# 按【用户输入文本】内容级检测语言（与系统 locale 解耦，避免中文系统 + 英文输入误判 zh），
+# 经 CTSS_LOCALE 透传给兄弟技能（ct-samplesize v5 coze 引擎据此切 coze 端报告 / 图表语言）。
+# 算法与 ct-base/scripts/i18n.py::detect_text_language 一致，本地自包含（避免跨技能 import）。
+_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]")
+
+
+def detect_text_language(text):
+    """内容级语言检测：含 CJK → zh，纯英文 → en，空 → None。"""
+    if not text or not text.strip():
+        return None
+    letters = re.sub(r"\s+", "", text)
+    if not letters:
+        return None
+    cjk = len(_CJK_RE.findall(text))
+    if cjk == 0:
+        return "en"
+    ratio = cjk / len(letters)
+    return "zh" if (ratio >= 0.05 or cjk >= 2) else "en"
+
+
+def _resolve_call_locale(card: dict, question: str) -> str:
+    """调用方语言：卡片显式 locale > 问题内容级检测 > 中文默认（ct-base 运行期默认 zh）。"""
+    loc = (card.get("locale") or "").strip().lower()
+    if loc:
+        if loc.startswith("zh") or loc in ("chinese", "中文", "cn"):
+            return "zh"
+        if loc.startswith("en") or loc in ("english", "英语"):
+            return "en"
+    det = detect_text_language(question)
+    return det or "zh"
 
 
 def _sanitize_result(result):
@@ -146,10 +181,15 @@ def _build_deferred(mapping: dict, primary: str, need_tools) -> list:
         if t == primary or not t:
             continue
         cfg = mapping["skills"].get(t) or {}
+        ref = (mapping.get("referrals") or {}).get(t)
+        if ref:
+            prep_hint = ref.get("mention", f"@skill:{t}") + "（" + ref.get("reason", "referral-only") + "）"
+        else:
+            prep_hint = cfg.get("prep_hint", "需补充该技能的必填参数后单独调用")
         deferred.append({
             "tool": t,
             "required_params": cfg.get("required_params", []),
-            "prep_hint": cfg.get("prep_hint", "需补充该技能的必填参数后单独调用"),
+            "prep_hint": prep_hint,
         })
     return deferred
 
@@ -256,6 +296,13 @@ def execute_card(card: dict) -> dict:
     params = card.get("params") or {}
     draft = card.get("draft_answer") or ""
     question = card.get("original_question") or ""
+    # F3 (2026-09-03)：调用方语言透传——内容级检测用户语言，经 CTSS_LOCALE 注入子进程
+    # 环境，兄弟技能（coze 引擎 ct-samplesize v5）据此切 coze 端报告 / 图表语言。
+    call_locale = _resolve_call_locale(card, question)
+    call_env = dict(os.environ)
+    call_env["CTSS_LOCALE"] = call_locale
+    if card.get("query_origin"):
+        call_env["CT_QUERY_ORIGIN"] = str(card["query_origin"])
     mapping = _load_mapping()
     tool_cfg = mapping["skills"].get(tool)
     # 多命中场景：其余技能延后，附「请先准备数据」提示（需求 2026-08-23）
@@ -268,6 +315,24 @@ def execute_card(card: dict) -> dict:
             "确认参数后我再逐个调用。"
         )
     if not tool_cfg:
+        # 优雅降级（F1, 2026-09-03）：referral-only 技能（如 meta-analysis）不在
+        # tool_mapping 自动执行——它需数据抽取 + 重型 R 管线，不经 need_tool 机械调用，
+        # 改为引导用户显式 @skill 调用，而不是报硬错卡死整条应答。
+        ref = (mapping.get("referrals") or {}).get(tool)
+        if ref:
+            return {
+                "tool": tool,
+                "status": "referral",
+                "result": {
+                    "message": ref.get("reason", f"{tool} 为 referral-only，不经 need_tool 自动调用"),
+                    "mention": ref.get("mention", f"@skill:{tool}"),
+                    "github": ref.get("github", f"https://github.com/medstatstar/{tool}"),
+                },
+                "draft_answer": draft,
+                "deferred_tools": deferred,
+                "deferred_note": deferred_note,
+                "elapsed_sec": 0,
+            }
         return {
             "tool": tool,
             "status": "error",
@@ -295,6 +360,10 @@ def execute_card(card: dict) -> dict:
             "elapsed_sec": 0,
         }
 
+    # 引擎类型（F5, 2026-09-03）：local = 本地执行引擎（需 --run/--yes 跳过交互确认门）；
+    # coze = 远程 R 服务（v5 无 --yes 闸门，请求信封由执行卡触发直接发送）。
+    # 仅在执行期使用，故置于早期 return（referral / need_params / 路径越界）之后。
+    engine = tool_cfg.get("engine", "local")
     cmd = _build_cmd(tool_cfg, params)
     timeout = tool_cfg.get("timeout", 120)
     # 路径白名单防御（审计 §16 要求）：tool 已确认为 tool_mapping 已知键；
@@ -321,6 +390,7 @@ def execute_card(card: dict) -> dict:
             encoding="utf-8",
             errors="replace",
             cwd=str(workdir),
+            env=call_env,
         )
         elapsed = round(time.time() - t0, 1)
         combined = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")
@@ -336,9 +406,10 @@ def execute_card(card: dict) -> dict:
             }
         result = _sanitize_result(_extract_json(proc.stdout or ""))
         artifacts = _read_artifacts(tool_cfg, workdir)
-        # 假成功守卫（2026-08-23）：rc=0 但技能停在 PREVIEW 安全门时，
-        # 旧实现判 status=ok、把 "would run …" 当数据交给缝合层（ct-literature 实测）。
-        if isinstance(result, str) and "[PREVIEW]" in result and not artifacts:
+        # 假成功守卫（2026-08-23 / F5 2026-09-03）：仅本地引擎技能会因缺 --run/--yes
+        # 停在 PREVIEW 安全门（把 "would run …" 当数据交给缝合层，ct-literature 实测）；
+        # coze 引擎（如 ct-samplesize v5）无此闸门、请求信封直接发送，不因 [PREVIEW] 误判假成功。
+        if engine != "coze" and isinstance(result, str) and "[PREVIEW]" in result and not artifacts:
             return {
                 "tool": tool,
                 "status": "error",
@@ -348,10 +419,9 @@ def execute_card(card: dict) -> dict:
                 "deferred_note": deferred_note,
                 "elapsed_sec": elapsed,
             }
-        # 假成功守卫（2026-08-25）：rc=0 但技能停在关键字体系确认门（KW-GATE）时，
-        # 同 PREVIEW 门一样是确认门假成功——stdout 只有确认菜单无检索数据
-        # （ct-registry 实测：--auto-confirm 不覆盖 KW-GATE，TTY 环境下 isatty 判真卡死）。
-        if isinstance(result, str) and "[KW-GATE]" in result:
+        # 假成功守卫（2026-08-25 / F5 2026-09-03）：仅本地引擎技能会因缺确认词停在
+        # 关键字体系确认门（KW-GATE）；coze 引擎无此门（同上，不因 [KW-GATE] 误判）。
+        if engine != "coze" and isinstance(result, str) and "[KW-GATE]" in result:
             return {
                 "tool": tool,
                 "status": "error",

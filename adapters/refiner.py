@@ -48,11 +48,20 @@ import pathlib
 _SKILL_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(_SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(_SKILL_ROOT))
-from scripts.i18n import t  # noqa: E402
+from scripts.i18n import t, resolve_user_language  # noqa: E402
 
 # 公共凭据统一从 adapters/coze_token_embedded.py 导入（XOR+base64 混淆内嵌，ct-base §5 合规；
 # .py 后缀不被 SkillHub 文件过滤删除；禁明文 JWT 落盘）。
 from adapters.coze_token_embedded import get_token
+
+# ── §8.6 硬件绑定机器标识：统一从本技能 scripts/hardware_id.py 导入（ct-base 共享件 vendored 副本）──
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "scripts"))
+try:
+    from hardware_id import hardware_id as _hardware_id
+except Exception:  # pragma: no cover
+    _hardware_id = None
 
 
 class MissingDependencyError(Exception):
@@ -121,22 +130,86 @@ def _purify_tilde_range(text: str) -> str:
     return re.sub(r"(?<=[\d%])\s*~\s*(?=[\d%])", "-", text)
 
 
+# §20.15 顶层可选 message 字段归一化（ct-base references/coze_io_contract.md §5 信封唯一真相源）
+_MESSAGE_LEVELS = ("tip", "info", "notice", "warning")
+
+
+def _normalize_coze_message(raw: Any) -> Optional[dict]:
+    """归一化 Coze 响应信封顶层可选 ``message`` 字段为统一结构。
+
+    契约（ct-base §5）：结构 ``{level, text, dismissible}``；coze 给裸字符串时按
+    ``{level:"notice", text, dismissible:True}`` 归一化；多条则合并进一段 text。
+    返回 ``{"level": "notice", "text": "...", "dismissible": True}`` 或 None
+    （缺失 / 为空 / 解析失败）。向后兼容：老 coze 不返回 → 返回 None（本地不渲染，呼应 §20.11）。
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
+        return {"level": "notice", "text": raw, "dismissible": True}
+    if isinstance(raw, list):
+        # 多条合并：逐元素归一化取 text，非空则拼为一段（禁止递归数组）
+        parts = []
+        for item in raw:
+            sub = _normalize_coze_message(item)
+            if sub and sub.get("text"):
+                parts.append(sub["text"])
+        if not parts:
+            return None
+        return {"level": "notice", "text": "\n".join(parts), "dismissible": True}
+    if isinstance(raw, dict):
+        text = (raw.get("text") or "").strip() if isinstance(raw.get("text"), str) else ""
+        if not text:
+            return None
+        level = raw.get("level")
+        if level not in _MESSAGE_LEVELS:
+            level = "notice"  # 非法 level 回退默认，仅影响样式不影响位置
+        dismissible = raw.get("dismissible", True)
+        if not isinstance(dismissible, bool):
+            dismissible = True
+        return {"level": level, "text": text, "dismissible": dismissible}
+    # 其它类型（数字/布尔等）视为无效，静默跳过
+    return None
+
+
 # difficulty 枚举（simple/middle/complex/vague）
 DIFFICULTY_ENUM = ("simple", "middle", "complex", "vague")
 
 # accuracy 枚举（good/normal）—— good = 精确，normal = 一般
 ACCURACY_ENUM = ("good", "normal")
 
-def compute_machine_id() -> str:
-    """稳定、不可逆的机器标识，由脚本在调用时自动盖章（覆盖输入，agent 不应手写）。
+def _skill_version() -> str:
+    """读取本技能 SKILL.md frontmatter 的 ``version:`` 作为 coze 信封 ``skill_version``。
 
-    同一台机器每次返回相同值（便于 Coze 侧按机器做审计/归因/限流）——实现为
-    sha256(hostname)，属**主机派生的稳定标识**：不含明文主机名/IP，但低熵主机名
-    理论上可被暴力猜测；且稳定值意味着外部服务可跨请求关联同一设备（已在 README
-    隐私段向用户披露，属接受的设计权衡——若要完全消除设备关联须改用每请求随机值，
-    见 CHANGELOG 0.9.52 曾改随机后被回退的往复）。
+    单一事实来源（ct-base coze_io_contract §1.2）：升版本免改代码；读取失败回退内置常量。
     """
-    return "sha256:" + hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()
+    try:
+        p = _SKILL_ROOT / "SKILL.md"
+        if p.exists():
+            for line in p.read_text(encoding="utf-8").splitlines():
+                if line.startswith("version:"):
+                    return line.split(":", 1)[1].strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return "0.9.104"
+
+
+def compute_machine_id() -> str:
+    """稳定、不可逆、硬件绑定的机器标识，由脚本在调用时自动盖章（覆盖输入，agent 不应手写）。
+
+    同一台物理机器每次返回相同值（便于 Coze 侧按机器做审计/归因/限流）——优先取
+    硬件令牌（SMBIOS UUID / MachineGuid / machine-id，跨 Windows 账号 / 改主机名 /
+    重装系统稳定）；取不到时回退主机名（保证永不崩）。旧实现 sha256(hostname) 在
+    容器 / 云端环境会随会话或账号漂移，已弃用。
+    """
+    if _hardware_id is not None:
+        return "sha256:" + _hardware_id().split(":", 1)[1]
+    try:
+        return "sha256:" + hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()
+    except Exception:  # pragma: no cover
+        return "sha256:" + hashlib.sha256(b"unknown-host").hexdigest()
 
 
 def _parse_query_meta(query_meta: Any) -> Dict[str, Any]:
@@ -177,6 +250,7 @@ class RefineResult:
     need_tool: Optional[str] = None   # 需要本地执行的技能标识（None=无需技能）
     params: dict = field(default_factory=dict)  # 技能入参
     run_id: str = ""                  # 追踪用
+    message: Optional[dict] = None     # §20.15：Coze 业务侧表面提示（顶层可选 message 字段归一化后）
 
     def __post_init__(self):
         # 净化 final_answer：范围 ~ → -，避免渲染器误判删除线（见 _purify_tilde_range）
@@ -354,11 +428,18 @@ class RefineRequest:
         # 默认空 list（无历史时不携带），历史版本 Coze 忽略此字段亦兼容。
         # question_profile / confirmation / tone_profile / memory_context 保留在 RefineRequest
         # 内但不再外发（服务端未实现；待服务端补齐后再恢复发送）。
+        # ── ct-base coze_io_contract §1.2：skill_version 注入 query_meta（与 query_origin 同级，非顶层）──
+        qm = self.query_meta if isinstance(self.query_meta, dict) else {}
+        qm["skill_version"] = _skill_version()
+        self.query_meta = qm
+        # ── ct-base coze_io_contract §1.1：user_language（备用语言提示）注入顶层 params 子对象 ──
+        user_language = resolve_user_language(self.original_question, None)
         return {
             "query_meta": self.query_meta,
             "original_question": self.original_question,
             "draft_answer": self.draft_answer,
             "conversation_history": self.conversation_history,
+            "params": {"user_language": user_language},
         }
 class Refiner(ABC):
     @abstractmethod
@@ -596,7 +677,9 @@ class CozeRefiner(Refiner):
         resp.raise_for_status()
         data = resp.json()
         # 全量直发（2026-08-14）：解析结构化返回，透出 need_tool 分支
-        final = data.get("final_answer") or req.draft_answer
+        # 兼容（2026-09-09）：新版 Coze 工作流返回顶层 `final_answer`；老版本仍返回 `answer`。
+        # 两 key 都认（final_answer 优先），任一命中即采用，都不命中才回退本地草稿。
+        final = data.get("final_answer") or data.get("answer") or req.draft_answer
         result = RefineResult(
             final_answer=strip_display_tags(final),
             cached_answer=data.get("cached_answer") or "",
@@ -605,6 +688,8 @@ class CozeRefiner(Refiner):
             params=data.get("params") or {},
             run_id=str(data.get("run_id") or ""),
         )
+        # §20.15：顶层可选 message 字段（Coze 业务侧表面提示），本地置顶渲染 banner
+        result.message = _normalize_coze_message(data.get("message"))
         return result
 
     def refine_forward(self, req: RefineRequest, timeout: float = None) -> RefineResult:

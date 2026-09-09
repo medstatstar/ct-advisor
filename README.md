@@ -12,7 +12,7 @@
 
 ---
 
-> **Scope reality check (read this first).** ct-advisor is a **cloud-assisted** advisor, not a pure-local tool. In operation it forwards your **question to the remote Coze engine**; runs sibling `ct-*` skills **locally on your machine** (these skills themselves may query public registries/APIs such as ClinicalTrials.gov, China CDE, FDA FAERS/openFDA, OpenAlex, PubChem); submits an **optional** bug report; keeps a language preference / context cache / memory notes on your device; and runs local connectivity diagnostics. All of this is spelled out honestly in §5 Data & Privacy.
+> **Scope reality check (read this first).** ct-advisor is a **cloud-assisted** advisor, not a pure-local tool. In operation it forwards your **question to the remote Coze engine**; runs sibling `ct-*` skills **locally on your machine** (these skills themselves may query public registries/APIs such as ClinicalTrials.gov, China CDE, FDA FAERS/openFDA, OpenAlex, PubChem); submits an **optional** bug report; keeps a language preference / context cache / memory notes on your device; and runs local connectivity diagnostics. All of this is spelled out honestly in [§5 Data & Privacy](#5-data--privacy).
 
 ## Who This Is For
 
@@ -26,7 +26,7 @@ The `ct-*` clinical-trial skill family is built to address needs across the enti
 
 ct-advisor is a **conversational skill**: you simply tell the assistant what you're working on — no commands, no parameter names to remember. Once installed as a WorkBuddy skill, you invoke it in a chat via the Skill tool; there is no extra setup, but it activates only when you call it — not automatically in the background.
 
-Below are 6 real conversational examples ordered from simple to advanced. Each shows **"You say"** and a sketch of **"The assistant replies"**, plus how to get the actual data / computation.
+Below are 8 real conversational examples ordered from simple to advanced. Each shows **"You say"** and a sketch of **"The assistant replies"**, plus how to get the actual data / computation.
 
 ### Example 1 · A simple methodology question (forwarded, no menu) 
 **You say:** 
@@ -76,12 +76,12 @@ I'm not sure what I actually need — I have a half-written protocol and some qu
 > 2. Which **endpoint** do you care about most (OS, PFS, ORR, AE rate, quality of life…)? *(If you mention "compared to what", I'll also ask the comparator.)*
 >
 > **What kind of help do you want** (reply with a number or in your own words):
-> 1. Protocol review — point-by-point check of the draft: what's missing, where the design has gaps / compliance risks.
+> 1. Protocol review — point-by-point check of the draft: what's missing, where the design has gaps / compliance risks. (Note: the Coze side only does a **basic** point-by-point review + severity grading + revision suggestions; for a **deep multi-role review / revision-risk scoring**, explicitly call `@skill:ct-protocol`, which runs locally and offline, not via the cloud.)
 > 2. Design consulting — one module is unclear: randomisation / blinding / eligibility / statistical assumptions.
 > 3. Sample size — give me population / endpoint / expected effect, I'll route to ct-samplesize for numbers + figures.
 > 4. Endpoints & statistical plan — how to choose primary/secondary endpoints, how to sequence hypothesis tests, how to define FAS/PPS/SS.
 > 5. Specific Q&A — just throw your scattered questions at me, I'll answer them one by one.
-> 6. Full read-through — paste or upload the half-written protocol (docx/pdf); after reading I'll tell you exactly where it's stuck and what to add next.
+> 6. Full read-through — paste or upload the half-written protocol (docx/pdf/ppt); after reading I'll tell you exactly where it's stuck and what to add next. (The generated protocol / spec is delivered as formal text — no graphical decoration.)
 >
 > The easiest step is still #6: paste the half-written protocol and I stop guessing.
 
@@ -114,7 +114,7 @@ We're drafting a phase-3 protocol in this indication. Give me the published RCT 
 **Assistant replies (sketch):** 
 Two handoffs: (1) **ct-literature** for the evidence base (RCTs + systematic reviews, 2021–2026, de-duplicated, citation-linked) for the introduction; (2) **ct-samplesize** for the n computation once you confirm assumptions (α, power, effect size, dropout). The advisor carries the evidence-derived parameter framework (e.g. expected event rates) straight into the computation.
 
-**📌 Note:** Cross-skill collaboration — literature evidence (A-tier retrieval) feeds the protocol background, and the same evidence-based assumptions flow into the sample-size calculation (A-tier compute). Every claim is labeled with its data source and date.
+**📌 Note:** Cross-skill collaboration — literature evidence (A-tier retrieval) feeds the protocol background, and the same evidence-based assumptions flow into the sample-size calculation (A-tier compute). Every claim is labeled with its data source and date. (Note: the Coze-side "protocol writing / basic review" is an auxiliary output; for a **deep protocol review** call `@skill:ct-protocol`.)
 
 ---
 
@@ -130,8 +130,8 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 | Statistics / estimand / sample size framework | "Help me set the primary estimand for a superiority trial" |
 | GCP / deviation / audit readiness | "What makes a site audit-ready under GCP?" |
 | Safety & operations (SUSAR / DSUR / signal) | "How do I handle a SUSAR in a multinational trial?" |
-| Documents & QC (CSR / protocol / SAP) | "Redline my CSR discussion section" |
-| Reply tone / rewrite | "Rewrite this patient letter in a warmer tone" |
+| Documents & QC (CSR / protocol / SAP) | "Redline my CSR discussion section" (basic review / rewrite; for deep multi-role review use `@skill:ct-protocol`) |
+| Reply tone / rewrite | "Rewrite this patient letter in a warmer tone" (one-off request; cross-session tone memory is not yet enabled) |
 
 ### ② Real data & competitive intel (routed to sibling skills)
 | Situation | Try saying in chat |
@@ -180,6 +180,14 @@ You stay in full control: the report is shown to you **before** anything is sent
 
 **Q: What if my data must stay confidential?** A: The advisor only sends your **question text** to the Coze endpoint (`https://ct-advisor.coze.site/run`) — never your raw trial / patient / sponsor data. Outbound payloads pass through `sanitize()` first (strips IDs, phone numbers, emails, and a small set of sensitive keywords; `query_origin` is a non-PII `sha256` machine id, `locale` is your OS language). Sibling data skills (ct-registry / ct-safety / ct-literature / ct-samplesize) run **locally** and only their results cross back; confidential data never leaves your machine. If you have strict confidentiality needs, simply keep real patient / sponsor data out of your question — the advisory answers are framework-level and don't require exposing it.
 
+**Q: Is there a depth limit on protocol review?** A: Yes. The Coze side only does a **basic** protocol review (point-by-point + severity grading + revision suggestions). For a **deep multi-role review** (PI / site / regulator perspectives, revision-risk scoring, a structured review.json, run locally offline), explicitly call `@skill:ct-protocol`; this advisor does not impersonate that capability.
+
+**Q: Will formal deliverables (protocol / review / computation) be illustrated?** A: **No.** Formal documents such as the protocol body, protocol-review comments, and sample-size computation sheets stay as plain text. For data / explanation / decision / flow / comparison results that warrant visualization, an **independent appendix** is offered only after your confirmation and is never embedded in the body (see the Graphical-rendering note below in §4).
+
+**Q: Does meta-analysis (forest plot / R recompute) run automatically?** A: **No, not automatically.** Meta-analysis requires you to explicitly call `@skill:meta-analysis` (R recompute / forest plots are done by that skill); this advisor only refers you to it.
+
+**Q: Does a rewrite remember my tone preference?** A: **No, not across sessions.** Rewrites are one-off, stateless requests; the personalized tone / memory function (tone_profile + memory_context) is currently DEFERRED (the Coze v1.5 field is not implemented), so every rewrite ignores history.
+
 ---
 
 ## 4. Execution Model & Safe Preview
@@ -188,6 +196,12 @@ You stay in full control: the report is shown to you **before** anything is sent
 - **Dispatched by default:** For `data_intel` asks (competitive landscape / safety signals / literature / sample size), the advisor **dispatches directly to the relevant sibling skill** (ct-registry / ct-safety / ct-literature / ct-samplesize) by default to complete the analysis and return live results — no need to say "please fetch the data now". If you only want the plan and not the data yet, say "just show the plan".
 - **Traceable, not fabricated:** Every factual / normative claim carries a source citation or an `⚠️ needs official verification` marker; it never fills factual gaps with fluent prose.
 - Outputs are for reference only; validate against official sources before regulatory submissions.
+
+### Graphical-rendering note
+- **Formal deliverables stay plain text:** the protocol body, protocol-review comments, regulatory-communication files, and sample-size computation sheets — the "finished products you hand off" — default to **no graphics**, preserving formality and traceability.
+- **Data / explanation may be illustrated:** results involving multi-branch decisions, sequential flows, hierarchy, design comparison, or severity grading may use decision trees / flowcharts / comparison matrices / severity color blocks to aid understanding.
+- **Independent appendix, only with your OK:** any visualization is delivered as an **independent appendix** and never embedded in the formal body; especially for formal documents, if you want a visual aid, confirm first and I'll generate an appendix that does not alter the original text.
+- **Pipeline safety:** graphics appear only *outside* the answer `<<<CT_ANSWER_START/END>>>` delimiters and never rewrite the answer body.
 
 ### Latency note
 Every **non-vague** question is handled by the local orchestrator (`scripts/orchestrate.py`), which forwards to the Coze endpoint in a **single call** (usually returns in **~20s**; data-intel questions also run the needed sibling skill locally in parallel). A `vague` question is clarified locally first (a few seconds via the Local Clarify Loop), then re-routed. Because the orchestrator, prefetch, merge, and stitching are all **code** (not the LLM), dependence on the local model's performance is low — but reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to over-think locally. **If a single reply routinely takes longer than 3 minutes, switch to a simpler / flash model to speed things up.**
@@ -233,7 +247,7 @@ CLI helpers, runtime requirements, the architecture tree, and scanner false-posi
 
 ---
 
-**Version**: v0.9.102 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.9.110 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang).
 
@@ -247,3 +261,5 @@ For feature requests, bug reports, or other feedback, please contact the author 
 > - **Tier B (confidential input)**: accept strictly confidential clinical-trial data / protocols / CRFs from pharma sponsors (e.g., ct-analysis, ct-sdtm, ct-protocol, ct-eligibility); Tier B is processed locally and never leaves the boundary (egress=none), or additionally requires policy approval (egress=approval-req, e.g. ct-eligibility). Tier B packages contain zero confidential data but are NOT publicly published (stays fully local) — confidential input never ships with the package or leaves the machine. For custom / on-prem deployment, contact the author.
 >
 > 📧 Contact: medstatstar@gmail.com (Wintone Zhang / 张文彤)
+
+> 🌐 Other languages: [中文 README](README_zh-CN.md)

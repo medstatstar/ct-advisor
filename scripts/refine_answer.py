@@ -103,6 +103,50 @@ def _detect_lang(text: str) -> str:
     return "zh-CN" if cjk >= max(1, len(text) * 0.15) else "en"
 
 
+# §20.15：用户可经提示词关闭 message 置顶提示（逐次关键词本轮回退，关闭意图不回传 coze 端）
+_MESSAGE_DISMISS_ZH = ("关闭提示", "不显示提示", "隐藏提示", "隐藏系统提示", "关闭系统提示",
+                       "不要提示", "关掉提示", "别显示提示", "去掉提示", "屏蔽提示")
+_MESSAGE_DISMISS_EN = ("no notice", "hide message", "hide notice", "disable tips",
+                       "disable message", "suppress tips", "turn off notice",
+                       "dismiss notice", "no message", "hide tips")
+
+
+def _is_message_dismissed(question: str) -> bool:
+    """判断用户本轮回传的提问是否要求关闭 message 置顶提示。
+
+    仅匹配明确关闭意图关键词，避免误伤正常提问（§20.15）。关闭意图不回传 coze 端。
+    """
+    if not question:
+        return False
+    q = question.lower()
+    return any(k in q for k in _MESSAGE_DISMISS_EN) or any(k in question for k in _MESSAGE_DISMISS_ZH)
+
+
+def _format_message_banner(msg: dict, lang: str = "zh-CN") -> str:
+    """§20.15：把归一化后的 message 渲染为置顶 banner 文本（Prepend 到答案最前）。
+
+    level 仅影响样式前缀（tip/info/notice/warning），位置一律最前。
+    dismissible=True 时附「回复 X 可隐藏」提示。
+    """
+    text = (msg.get("text") or "").strip()
+    if not text:
+        return ""
+    level = msg.get("level", "notice")
+    zh = lang == "zh-CN"
+    prefix = {
+        "tip": "💡 提示" if zh else "💡 Tip",
+        "info": "ℹ️ 说明" if zh else "ℹ️ Note",
+        "notice": "📌 提示" if zh else "📌 Notice",
+        "warning": "⚠️ 提醒" if zh else "⚠️ Heads-up",
+    }.get(level, "📌 提示" if zh else "📌 Notice")
+    sep = "：" if zh else ": "  # 中文全角冒号无空格；英文半角冒号后空格，符合各自排版习惯
+    banner = f"**{prefix}**{sep}{text}"
+    if msg.get("dismissible", True):
+        hint = "（回复「关闭提示」可隐藏此提示）" if zh else '(reply "no notice" to hide)'
+        banner = f"{banner}\n\n{hint}"
+    return banner
+
+
 def _render_registry_landscape(res: dict, lang: str = "zh-CN") -> str:
     """把 ct-registry 聚合结果（landscape）渲染为用户友好 markdown 表格。
 
@@ -188,6 +232,17 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
                     f"以下补充信息需要先由你向用户追问并补齐参数后才能获取：\n{miss_txt}")
         return (f"{coze_answer}\n\n---\n\n{NEED_PARAMS_MARKER}\n"
                 f"Additional data requires you to ask the user for these missing params first:\n{miss_txt}")
+    if status == "referral":
+        # F1, 2026-09-03：referral-only 技能（如 meta-analysis）不经 need_tool 自动调用；
+        # 缝合层把 Coze 原答案 + 显式调用引导一起透出，而不是当作错误。
+        rp = tool_out.get("result") or {}
+        msg = rp.get("message", "") if isinstance(rp, dict) else str(rp)
+        mention = rp.get("mention", f"@{tool}") if isinstance(rp, dict) else f"@{tool}"
+        if lang == "zh-CN":
+            return (f"{coze_answer}\n\n---\n\n## 需显式调用的本地技能：{tool}\n\n"
+                    f"{msg}\n\n请使用：{mention}")
+        return (f"{coze_answer}\n\n---\n\n## Local skill to invoke explicitly: {tool}\n\n"
+                f"{msg}\n\nUse: {mention}")
     err = tool_out.get("result") or ""
     if lang == "zh-CN":
         return (f"{coze_answer}\n\n---\n\n## 补充信息获取失败（来源：{tool}）\n\n"
@@ -541,6 +596,20 @@ def main() -> None:
             })
         except Exception:  # noqa: BLE001  # 缓存写入失败不影响主流程
             pass
+        # §20.15：Coze 顶层 message 字段 → 置顶 banner（用户提示词可关闭；仅抑显示，意图不回传 coze）
+        if getattr(result, "message", None) and not _is_message_dismissed(req.original_question):
+            _banner = _format_message_banner(result.message, _detect_lang(req.original_question))
+            if _banner:
+                merged = f"{_banner}\n\n---\n\n{merged}"
+        # 缓存来源声明（2026-09-09，彤 规范）：命中云计算缓存 → 答案最前明示，非本次实时计算
+        if getattr(result, "cache_hit", False):
+            _lang = _detect_lang(req.original_question)
+            _decl = (
+                "📦 本答案来自云计算缓存（历史运行结果，非本次实时计算）。如需最新结果，请追问要求重新生成。"
+                if _lang == "zh-CN"
+                else "📦 This answer is from the cloud cache (a previous run, not freshly computed for this request). Ask again for a fresh generation if needed."
+            )
+            merged = f"> {_decl}\n\n{merged}"
         _emit_wrapped(merged)
         sys.exit(0)
 
@@ -581,6 +650,7 @@ def main() -> None:
             "need_tool": result.need_tool,
             "params": result.params or {},
             "run_id": result.run_id,
+            "message": result.message,  # §20.15：顶层可选 message 字段，供消费端（如工作台）置顶渲染
         }
         # 失败回退标记（stderr 同时输出，供 agent 判定是否本地兜底）
         if result.need_tool is None and not result.cache_hit and not result.final_answer.strip():

@@ -1,4 +1,4 @@
-# AGENTS.md — ct-advisor v0.9.70 (ct- series A-tier entry point)
+# AGENTS.md — ct-advisor v0.9.110 (ct- series A-tier entry point)
 
 > This document is ct-advisor's self-improvement contract. It follows ct-base AGENTS.md structure and is written in English per §4 (references·AGENTS are English-only for published ct- skills).
 
@@ -11,7 +11,7 @@
 ## Core Rules
 
 ### 1. Environment Detection
-- Python via Anaconda (`C:\Tools\anaconda3\python.exe`); R via `C:\Tools\R-4.5.1\bin\x64\Rscript.exe`.
+- Python via Anaconda (`C:\Tools\anaconda3\python.exe`); R via `C:\Tools\R-4.6.1\bin\x64\Rscript.exe`.
 - Optional CLI helpers (`scripts/*.py`) use stdlib only — no third-party packages.
 
 ### 2. Code Execution

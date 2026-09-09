@@ -63,7 +63,14 @@ TOOL_TRIGGERS = {
         # 2026-08-21：补英文别名（README 示例 3/4/8 实测漏判根因；裸 trials 靠 METHOD/DEF 过滤兜底）
     "ct-safety": re.compile(
         r"faers|安全性信号|不良事件信号|信号检测|disproportionality|\bprr\b|\bror\b|\bebgm\b|"
-        r"safety signals?|pharmacovigilance|adverse event signals?"),  # 2026-08-21：英文别名（示例 3/7）
+        r"safety signals?|pharmacovigilance|adverse event signals?"
+        # 2026-09-04 扩展：irAE/因果关系判定/具体 AE 类型
+        r"|irae|免疫相关不良事件|免疫相关性|因果关系判定|相关性评价"
+        r"|不良反应因果关系|ae因果关系|去激发|再激发|dechallenge|rechallenge"
+        r"|带状疱疹|vzv|水痘-带状疱疹|herpes zoster"
+        r"|间质性肺炎|免疫性肺炎|心肌炎|免疫性肝炎|甲状腺炎|垂体炎|免疫性肾炎"
+        r"|pneumonitis|myocarditis|hepatitis|nephritis|thyroiditis|hypophysitis"
+        r"|immune[- ]related adverse event|causality assessment"),  # 2026-08-21+2026-09-04
     "ct-literature": re.compile(
         r"文献|综述|发表|pubmed|引用|文献检索|病例报告|个案报告|已发表|系统综述|meta\s*分析|证据摘要|药物警戒|"
         r"\bliterature\b|published|systematic[- ]reviews?|case reports?|evidence summary"),  # 2026-08-21：英文别名（示例 3/8）

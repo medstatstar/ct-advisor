@@ -98,6 +98,10 @@ adapters/coze_project/
 **/ops.md
 scripts/tests/
 
+# ── 工作台 HTML 整体排除（2026-09-06 新增，§16.7 ③）──
+# 本地 Web 操作界面，暂不发布（内部开发资产，含端点/配置契约等实现细节）
+workbench/*.html
+
 # ── 补齐双份 ignore 差异项（2026-08-29）──
 *.py[cod]
 *.swp

@@ -52,7 +52,10 @@ def find_rscript():
     if path:
         return path
     defaults = [
+        r"C:\Tools\R-4.6.1\bin\x64\Rscript.exe",
+        r"C:\Tools\R-4.6.1\bin\Rscript.exe",
         r"C:\Tools\R-4.5.1\bin\x64\Rscript.exe",
+        r"C:\Program Files\R\R-4.6.1\bin\x64\Rscript.exe",
         r"C:\Program Files\R\R-4.5.1\bin\x64\Rscript.exe",
         "/usr/local/bin/Rscript",
         "/usr/bin/Rscript",

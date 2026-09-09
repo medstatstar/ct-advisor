@@ -1,5 +1,235 @@
 # Changelog
 
+## [Unreleased] (2026-09-09) — 图形化解释策略 (SKILL.md) + README 案例对齐 + ct-bugreport 凭据修复
+
+### 凭据集中收敛：删除 config/coze_token.py，bugreport token 迁入 coze_token_embedded.py（2026-09-09）
+- **问题**：`ct-bugreport.coze.site/run` 此前返回 **403 Authentication failed**。根因：`config/coze_token.py::COZE_TOKEN` 装的是错误 token，且 `config/__pycache__/coze_token.cpython-313.pyc` 缓存残留旧错误 JWT，`bug_report.py`/`main.py` 经 `importlib` 加载时命中字节码缓存 → 实际读到旧错误 token。
+- **修复（参考 ct-base §20.3.5 + `adapters/coze/src/endpoint_token.py`）**：将 bugreport 公共凭据以 XOR+base64 混淆 blob 迁入 `adapters/coze_token_embedded.py::EMBEDDED_SECRETS["ct_bugreport_coze"]`（复用同文件 `OBFUSCATION_KEY`，与 ct-base `endpoint_token.py` 同源同值），新增 `get_bugreport_token()`；重写 FILE ROLE 横幅说明本文件即全部 Coze 连接凭据唯一存放处。
+- **进一步（彤 规范）**：连接 key 一律放入 `adapters/coze_token_embedded.py`，`config/coze_token.py` **不应保留**；workbench 前端「Bearer Token」是**用户私有 LLM key**（前端直连大模型时用），属私有凭据、**绝不随技能发布**——此前 `/api/config` 把 `config/coze_token.py` 里的 bugreport 项目凭据误下发到前端，属错误暴露。故**删除 `config/coze_token.py` 及 `config/__pycache__/coze_token*.pyc`**。
+- **动作**：
+  - `adapters/bug_report.py::_load_bugreport_token()` 改为加载 `adapters/coze_token_embedded.py` 并调用 `get_bugreport_token()`（异常回退空串）。
+  - `adapters/coze/src/main.py::/api/config` 不再注入任何项目 Coze 凭据：返回 `token: ""`（可选经 `CT_WORKBENCH_LLM_KEY` 环境变量注入用户私有 key）；更新 docstring 说明前端 token 为用户私有 LLM key。
+  - 清理引用：`workbench/workbench.config.json` `tokenFile` → `adapters/coze_token_embedded.py`；`workbench/index.html` 设置框标签由「Bearer Token（公开凭据）」改为「Bearer Token（私有 LLM key）」并改提示文案、更新两处注释；`adapters/bug_report.py` `send_to_endpoint` docstring 更正凭据来源。
+- **验证**：经 `bug_report.py::send_to_endpoint()` 默认 loader（现读取 `adapters/coze_token_embedded.py::get_bugreport_token()`）真发 → **200 / report recorded (feishu)**；ct-advisor 计算端点（`coze_token_embedded.py` 未动）维持 **200**。两端点全绿。
+
+### §20.15 Coze message 字段：置顶提示 + 用户可关闭（2026-09-09，对齐 ct-base §20.15 / coze_io_contract §5）
+- **背景**：ct-base 新增规范——Coze 可在响应信封顶层多返回可选 `message` 字段；本地技能找到后**优先显示在给用户输出最前面**作为提示，且用户可用提示词要求关闭。此前 ct-advisor 完全未实现（`_call_coze` 解析响应时不取 `message`，`refine_answer.py` 也无置顶/关闭逻辑）。
+- **Refiner（`adapters/refiner.py`）**：
+  - `RefineResult` 新增 `message: Optional[dict]` 字段；
+  - 新增 `_normalize_coze_message(raw)`：按 ct-base §5 契约归一化——`{level,text,dismissible}` / 裸字符串 / 多条合并；`level∈{tip,info,notice,warning}`（默认 notice，仅样式）；缺失/空/解析失败返回 None（向后兼容，不渲染）；
+  - `_call_coze` 解析响应时 `result.message = _normalize_coze_message(data.get("message"))`。
+  - `_call_coze` 答案解析**兼容新旧版信封**：新版工作流返回顶层 `final_answer`（优先），老版本返回 `answer`（兜底），任一命中即采用，都缺失才回退本地草稿（实测老信封样例 `{"answer":...,"message":...}` 与新版同款处理）。
+- **渲染（`scripts/refine_answer.py`）**：
+  - 新增 `_is_message_dismissed(q)`（中文「关闭提示/不显示提示/隐藏提示…」、英文 `no notice`/`hide message`/`disable tips`… 关键词本轮回退；仅抑显示、关闭意图不回传 coze、不误伤正常提问）；
+  - 新增 `_format_message_banner(msg, lang)`（按 level 选前缀 emoji+标签，dismissible 时附「回复『关闭提示』可隐藏」提示）；
+  - 主链路 `merged` 输出前：若 `result.message` 且未被关闭，则 Prepend banner 到答案最前（`banner\n\n---\n\n{merged}`）；
+  - `--forward` 结构化 JSON 输出新增 `message` 字段，供消费端（如工作台）置顶渲染。
+- **边界**：`message` 仅承载表面提示，不放关键结论/数值/溯源（那些走 `notes`/`warnings`）；与 §20.9 机器信号（契约漂移/端点回退）职责分离、可堆叠。
+
+### Coze 镜像缓存质量闸：仅 accuracy=good 入缓存 + 读闸自愈（2026-09-09，彤 规范，镜像侧待部署）
+- **背景**：后台真实提问「拉一下司美格鲁肽在 2 型糖尿病的注册试验，2021–2026」实跑命中陈旧低质缓存（"未收录，建议去 CDE/CT.gov 官网自行查询"），`need_tool=None`（图 cache_hit→END 先于 tool_router 短路），本应触发 ct-registry（tool_router 规则表「注册试验」+ 本地 route_tool.predict 均命中 ct-registry / cond=司美格鲁肽）。
+- **写路径质量闸（根治）**：`cache_manager.py::set_cache_answer` 新增 `accuracy` 参数并**仅放行 `accuracy=="good"`**（normal/poor/未标注一律跳过，返回 False）——从源头杜绝低质/敷衍答案入库；`full_analysis_node`（自评 accuracy）与 `review_node`（取 query_meta 标注，默认 normal→默认不入缓存）两写点显式传参。单一强制点，未来新增写点自动继承。
+- **读路径自愈闸（存量闭环）**：`cache_check_node` 命中后若文本命中极窄"敷衍非答案"特征（未收录/建议通过以下官方路径/请自行检索/这个我也不知道/not in the knowledge base 等）→ 视为未命中，走正常重生成（触发 tool_router→need_tool=ct-registry）。
+- **验证**：`py_compile` 4 文件 OK；质量闸单测 normal/poor/NORMAL/空/None 全拦截。
+- ⚠️ 属 Coze 端改动，**镜像侧已改、线上未部署**（红线：双侧同步待授权）。
+
+### 缓存答案透明性：来源声明 + 质疑强制重生成（2026-09-09，彤 规范）
+- **需求**：① 缓存答案须明确声明「来自云计算缓存」；② 用户明确质疑答案正确性 → 强制重新生成。
+- **缓存来源声明（本地渲染层）**：
+  - `scripts/refine_answer.py` 主链路：`result.cache_hit=True` 时在答案最前加 `> 📦 本答案来自云计算缓存（历史运行结果，非本次实时计算）…`（中英随提问语言）；
+  - `workbench/index.html` `bubble()`：`meta.cached` 时在答案上方渲染同款金色声明条；`--forward` JSON 本就带 `cache_hit` 机器字段供消费端自渲染。
+- **质疑强制重生成（Coze 图内，纯规则确定性）**：`graphs/nodes/cache_check_node.py` 新增 `_CHALLENGE_HINTS` + `_looks_like_challenge`——检测 `original_question` + 最近 3 条对话历史（质疑通常针对上一轮答案），命中即返回 cache_hit=False（缓存不服务质疑轮，走正常重生成 → review/full_analysis → tool_router）。中文：对吗/正确吗/确定吗/有误/错了吧/质疑/请复核/重新生成/重算…；英文：are you sure/is this correct/verify/double-check/recalculate/wrong/incorrect…
+- **验证**：`py_compile`（cache_check_node / refine_answer）OK；challenge 匹配自检 10 例全过（7 命中质疑 / 3 正常提问不误伤）；工作台 JS 语法 OK。
+- ⚠️ cache_check_node 属 Coze 端改动，**镜像侧已改、线上未部署**（红线：双侧同步待授权）；refine_answer / index.html 为本地改动。
+
+### Coze 镜像：GraphOutput 预置 message 字段（§20.15 出参结构件，2026-09-09，彤 授权）
+- **背景**：coze 图经 `output_schema=GraphOutput` 过滤出参——不声明 `message`，即使节点写入 state.message 也会在 ainvoke 出参边界被丢弃，本地 §20.15 渲染层永远收不到（实测 /run 顶层仅 final_answer/cache_hit/cached_answer/run_id 佐证）。
+- **改动（`graphs/state.py`）**：`GlobalState`（state 通道）与 `GraphOutput`（出参契约）各新增 `message: Optional[Any] = None`；形态放宽 Any（{level,text,dismissible} 或裸字符串，ct-base §5），避免裸字符串被 pydantic 拒绝。
+- **兼容**：缺省 None → 老本地/无提示场景不返回提示（§20.11 向后兼容）；老入参不带 message 不受影响（extra=ignore）；当前无节点写入 message，纯结构预置、不改变现有出参内容。
+- **验证**：`py_compile` OK；pydantic 单测——默认 None、dict/裸串 message 均可构造、`model_dump()` 含 message 键。
+- ⚠️ Coze 端改动，**镜像侧已改、线上未部署**（红线：双侧同步待授权）。
+
+### Coze 镜像：advisorlog 表去 draft_answer → 固定字段异步写入（2026-09-09，彤 告知表架构变更）
+- **背景**：飞书 advisorlog 表 schema 移除 `draft_answer` 列。原 `async_feishu_writer.py` 每次写入前都调用 `_get_table_fields()` 动态查询表格字段并过滤（每次多一次飞书 API）；且记录含已不存在的 `draft_answer`。
+- **改动（`graphs/nodes/async_feishu_writer.py`）**：
+  - 删除 `_get_table_fields()`（不再动态询问表格架构）；
+  - 新增固定字段清单常量 `ADVISORLOG_FIELDS`（8 列：difficulty/category/original_question/organized_problems/accuracy/final_answer/query_origin/inittime，无 draft_answer）——表 schema 再变更只改常量一处；
+  - 记录构造改为按固定清单取字段（去 all_fields/table_fields 过滤分支）；
+  - `draft_answer` 函数参数保留（三个调用点兼容）但不再写入记录（docstring 注明）。
+- **验证**：`py_compile` OK；静态断言 ADVISORLOG_FIELDS 8 列、无 draft_answer、`_get_table_fields` 已删除。
+- ⚠️ Coze 端改动，**镜像侧已改、线上未部署**（红线：双侧同步待授权）。
+
+### Coze 镜像：缓存有效期 TTL=6 个月，命中即查、过期强制重生成（2026-09-09，彤 规范）
+- **背景**：原缓存无时间过期机制（仅 LFU 容量淘汰 + 手动清库），时效敏感问题（注册试验/指南等）的 good 答案也可能因数据过时而误用。
+- **改动（`graphs/nodes/cache_manager.py`）**：
+  - 新增常量 `CACHE_TTL_SECONDS = 6*30*24*3600`（6 个月 ≈180 天；0=关闭）；
+  - schema 加 `created_at REAL`（建表 + 存量在线 ALTER 补列，与 history_fp 同模式）；
+  - `set_cache_answer` 写入 `created_at=now`；**ON CONFLICT 更新不覆盖 created_at**——TTL 自首次生成起算，刷新不续期；
+  - 读路径（`get_cached_answer` / `find_cache_match` Tier1+Tier2）**每次命中检查有效期**：过期 → 删除该条并视为未命中（强制重生成自愈）；存量无 `created_at` 条目视同过期（无法证明新鲜）；
+  - 新增 `_delete_key` / `_is_entry_expired` / `_expire_and_purge`。
+- **验证**：`py_compile` OK；内存后端 TTL 单测 7 项全过（新鲜命中 / 过期→None+删除 / 无时间戳视同过期 / Tier1 过期 miss / 常量 180 天）。
+- ⚠️ Coze 端改动，**镜像侧已改、线上未部署**（红线：双侧同步待授权）。
+
+### 文档校正：coze_cache_policy.md 对齐 v2 配置现状（2026-09-09，彤 要求）
+- 本地镜像已同步 Coze 端 v2 代码包（`ct-advisor_coze_project_latest_v2.tar_ea00666b.gz`）；`references/coze_cache_policy.md` 同步更正：
+  - 顶部注记：模型描述由"切到 `glm-4-7-251222`"更正为 v2 真相——`config/` 下 **4 个** `*_cfg.json`（full_analysis / generate_organized_problems / judge_difficulty / review），模型名均为 `doubao-seed-*-260215`（线上实测可跑）；**`cache_check` 节点已无独立 cfg**（v2 移除 `cache_check_cfg.json`）。
+  - §9 速查表新增"模型配置（v2）"行，明确 4 个 cfg 清单 + cache_check 无独立配置 + 改模型只动这 4 个文件；部署包行注明镜像已同步 v2。
+- 注：此前总结误记"§9 写有 5 处 config/cache_check_cfg"——实际旧文档该处仅顶部注记含模型名偏差，已一并修正。
+
+### message 字段兼容性澄清（2026-09-09，彤 确认）
+- **结论**：`message`（§20.15 表面提示）当前**全图无任何节点赋值** → LangGraph 将未赋值通道从最终 JSON 出参中丢弃 → 实际响应**不含 `message` 键**；这是预期且正常的行为（未赋值即不应出参），非 bug。
+- **兼容性已就位（无需改代码）**：
+  - `adapters/refiner.py`：`data.get("message")` 取字段 + `_normalize_coze_message` 对 `None/str/list/dict/数字/布尔` 全部安全降级（无效值→None）；
+  - `scripts/refine_answer.py:600`：`getattr(result,"message",None)` + 真值守卫，None/空 → 跳过 banner、不中断主流程；
+  - 单测 10 类输入全过（含缺失/畸形/非预期类型），`message=None` 正确跳过渲染。
+- 文档 `references/coze_cache_policy.md` §7 由"已预置/必出参"更正为"可选保留字段，当前不出参属正常"；顶部注记更新为"已部署（glm-4-7 + 可写 /tmp 缓存持久）"。
+
+### 文档化：新增 references/coze_cache_policy.md + SKILL.md 规则 7（2026-09-09）
+- 新建 `references/coze_cache_policy.md`：把 2026-09-09 定稿的缓存治理与信封约定集中固化——① 缓存生命周期（写闸/内容读闸/质疑闸/TTL 四闸总览）；② 写路径 accuracy=good 质量闸；③ TTL=6 个月（命中即查、过期删条并强制重生成、存量无时间戳视同过期、刷新不续期）；④ punt 内容读闸特征词；⑤ 质疑强制重生成词表；⑥ 缓存来源声明（本地渲染层、不污染缓存文本）；⑦ 响应信封兼容（final_answer 正式/answer 备用/message §20.15 预置）；⑧ advisorlog 固定字段写（ADVISORLOG_FIELDS，无 draft_answer）；⑨ 配置/维护速查表；⑩ 新老终端双向兼容。
+- `SKILL.md` Knowledge Map 新增规则 7：缓存命中自动带"来自云计算缓存"声明、用户质疑自动强制重生成——**全部自动化，agent 原样透传即可**，不得手动重生成/剥离声明；策略与词表见该文件。
+
+### scripts/i18n.py：补齐语言持久化 API（2026-09-09）
+- 问题：`scripts/switch_lang.py` 依赖 `i18n.set_lang_session()` / `i18n.set_lang_permanent()`，但 `scripts/i18n.py` 从未实现这两个函数（仅实现测试用 `set_lang()`），且 `_current_lang()` 只查进程级 override、未读 session 文件与 `config.json`；导致 `switch_lang.py` 一 import 即 `ImportError`，界面语言切换完全不可用。`system_prompt.md:17` 与 `AGENTS.md:51` 的契约早已声明此两函数存在——底座实现缺失。
+- 修复：`scripts/i18n.py` 新增 `set_lang_session(locale)`（写 `data/.lang_session`）/`set_lang_permanent(locale)`（写 `config.json` `language`）/`_normalize_lang_code()`，并重写 `_current_lang()` 实现解析链 `process override → session file → config.json language → OS locale`（与 `switch_lang.py` docstring 一致）。同步 ct-base 共享底座 `scripts/i18n.py`（两副本逐字节相同，保持一致）。
+- 验证：无损单元测试 9 项全过（含 zh-CN→zh 归一化、session/permanent 写入与回落、进程 override 优先级）；真实 CLI `switch_lang.py en` / `--permanent` 运行成功并即时还原，零副作用。
+- **规范回写 ct-base**：`docs/02-security-model.md` §5 凭据段新增「连接凭据集中存放」「workbench 前端私有 LLM key 另行储存」两条（全库统一），并修正两处过期文件名 `adapters/coze_token.py` → `adapters/coze_token_embedded.py`；ct-base CHANGELOG 同步。
+- **验证**：`py_compile` 三文件全过；`get_bugreport_token()` 与 `bug_report._load_bugreport_token()` 均返回 739 字符且与 ct-base 公共凭据逐字节同值；全目录 `.py` 无残留 `config/coze_token.py` 实际加载引用（仅说明性注释）。
+
+### SKILL.md
+- 新增 `Graphical explanation policy (answer visualization, 2026-09-09)` 节：A 层正式交付物（方案正文/审评/监管文件/计算书）默认不加图形，仅可做"独立附页"且须先问用户；B 层理解辅助（决策/流程/结构/对比/严重度）欢迎图形化；决策流 + 询问触发条件 + 低压力话术 + pipe 安全约束（图形只放 `<<<CT_ANSWER_START/END>>>` 之外）。
+
+### README_zh-CN.md / README.md（双语同步）
+- 示例计数修正：intro "6" → "8"。
+- 方案评审/写作声明 ct-protocol 边界：Coze 侧仅基础版评审（逐条+严重度+建议）；深度多角色评审须显式 `@skill:ct-protocol`（示例5 选项1、示例8 说明、场景索引①、新增 FAQ）。
+- 新增「图形化呈现约定」节（§4）与 FAQ：正式交付物保持纯文本，数据/解释类可视化以独立附页提供且需确认。
+- 新增 FAQ：荟萃分析仅转介（须显式 `@skill:meta-analysis`，不自动触发）；改写类一次性、跨会话个性化语气记忆 DEFERRED。
+- 附件清单补全 ppt（docx/pdf/ppt）。
+
+---
+
+## v0.9.110 (2026-09-04) — 同步 Coze 端修复（模型更换 + received_at 字段）+ 结构扁平化
+
+### 同步 Coze 端修复
+
+| 修复 | 文件 | 内容 |
+|---|---|---|
+| 模型停运 | `config/generate_organized_problems_cfg.json` | `doubao-seed-2-0-lite-260215` → `doubao-seed-2-0-mini-260215` |
+| 缺少 received_at | `src/graphs/state.py` | `FullAnalysisInput` 添加 `received_at: Optional[float]` |
+| 缺少 received_at | `src/graphs/state.py` | `CacheCheckInput` 添加 `received_at: Optional[float]` |
+| 缺少 received_at | `src/graphs/nodes/review_node.py` | `ReviewInput` 添加 `received_at: Optional[float]`（同时补 `from typing import Optional`） |
+
+### 结构扁平化
+
+- `adapters/coze/project_20260812_152011/projects/` → `adapters/coze/`（移除两层多余嵌套，对齐 ct-base）
+- 新打包：`ct-advisor_coze_v1.9_20260904.zip`（8.39 MB）
+- `scripts/build_knowledge_index.py` 默认知识目录路径修正
+- `coze_modification_guide.md` 基准路径更新
+
+---
+
+## v0.9.109 (2026-09-04) — Coze system prompt v1.7（引文触发 + 评审清单 + 收口标记）+ ct-safety 触发词扩展 + ICI 安全性知识模块
+
+### 结构扁平化
+
+- **改动**：`adapters/coze/project_20260812_152011/projects/` → `adapters/coze/`（移除两层多余嵌套）
+- **新打包**：`ct-advisor_coze_v1.8_20260904.zip`（8.39 MB）
+- **对齐 ct-base**：与 ct-base `adapters/coze/` 同级结构一致（assets/config/knowledge/scripts/src 平铺）
+- **路径修正**：`scripts/build_knowledge_index.py` 默认知识目录改为 `../../knowledge`（原 `../../project_20260812_152011/projects/knowledge`）
+- **文档更新**：`coze_modification_guide.md` 基准路径更新为 `adapters/coze/`
+
+---
+
+## v0.9.108 (2026-09-04) — Coze system prompt v1.6（超长Q结构化引导 + 场景规则）+ ct-safety 触发词扩展 + ICI 安全性知识模块
+
+### Coze System Prompt v1.6（`adapters/coze/project_20260812_152011/projects/assets/coze_system_prompt_v1.4.md`）
+
+- **版本号**：v1.5 → v1.6（long-Q + 场景规则 版本）
+- **背景**：分析 CTDB_advisorlog.xlsx 中 9 个 original_question > 100 字的长问题（全部 complex，平均回答 2665 字），诊断出五类结构性问题：铺垫过多、数据幻觉、窄问宽答、模板复述、事实/推断混排。
+
+#### 新增规则
+
+| 编号 | 规则 | 适用场景 | 优先级 |
+|---|---|---|---|
+| 0a | **超长问题结构化引导**：保留全文不删减，在全文前附加「用户问题清单」和「关键参数表」，按问题清单逐点回答 | Q > 5000 字（如 TGFR 方案评审） | P0 |
+| 10 | **成本/财务/市场数据禁幻觉**：必须标注假设条件；无来源不写精确值；无法估算写"需用户提供" | 成本测算、市场数据 | P0 |
+| 11 | **窄问窄答**：直接回答主题，不前置通用框架；问"哪些"→列表，问"如何"→步骤 | 窄问题（如 RBM 措施） | P1 |
+| 12 | **模板规范不复述**：只写"撰写要求/填写规范"，模板原有内容直接引用不重抄 | 模板→规范类 | P1 |
+| 13 | **事实推断分离**：事实与推断分列，事实标注来源，推断明确标注，市场数据只给范围 | 行业研究/市场分析 | P2 |
+
+#### 输出前自检新增项
+
+- 通用：`数据有来源?→无则改定性` | `窄问无通用框架?→删` | `模板不复述?→删` | `事实推断分离?→分列`
+- Complex：`逐点覆盖问题清单?→补漏`
+
+#### 编号调整
+
+- 原 Simple 10-12 → 14-16，Middle 13-15 → 17-19，Complex 16-20 → 20-24（顺延）
+
+---
+
+### ct-safety 触发词扩展
+
+- **Coze 端**：`tool_router_node.py` 在 ct-safety 规则中新增 `irAE`、`免疫相关`、`因果关系`、`不良反应`、`带状疱疹`、`herpes`、`vzv` 等触发词
+- **本地端**：`scripts/route_tool.py` 同步扩展
+- **效果**：PD-1/VEGF 双抗+带状疱疹等含"不良反应/irAE/因果关系判定"关键词的临床问题可正确触发 ct-safety 工具
+
+---
+
+### ICI 安全性知识模块（`knowledge/ref-icae-safety.md`，新建）
+
+- **覆盖内容**：ICI irAE 谱（PD-1/PD-L1/CTLA-4/双抗对比）、VZV/HSV 再激活机制与流行病学、间质性肺炎/心肌炎/肝炎/肾炎/甲状腺炎/垂体炎 irAE 速查、PD-1/VEGF 双抗 vs PD-1 单抗安全性对比、ICI 因果关系判定要点
+- **来源标注**：NCCN、ASCO、JAMA Oncol、各产品说明书；发生率数据为文献范围值（非精确），引用时核对原始来源
+- **配套更新**：`knowledge/reference-index.md` 新增索引条目
+
+---
+
+## v0.9.107 (2026-09-03) — 接口闭环（F1–F5 / test_seven_flows 漂移修复）+ 对齐 ct-base coze_io_contract §1/§2
+
+- **背景**：按 ct-base `references/coze_io_contract.md` 统一契约，对所有 coze 调用强制补齐入参信封与飞书日志字段（与 ct-safety / ct-registry 同标准）。用户确认「coze 调用不分计算/检索端点，一律遵守」「飞书 searchlog 肯定存在」。
+- **§1.2 `skill_version`（顶层信封，与 query_origin 同级）**：`adapters/refiner.py` 新增 `_skill_version()`（读 `SKILL.md` `version:`，失败回退 `"0.9.104"`），`RefineRequest.to_payload()` 在出站前把 `skill_version` 注入 `query_meta`（**与 `query_origin` 同级**——ct-advisor 的 `query_origin` 嵌套在 `query_meta` 内，故 `skill_version` 同位置，符合「与 query_origin 同级」字面要求；coze 服务端从 `query_meta` 读取）。
+- **§1.1 `user_language`（备用语言提示，进 params）**：`to_payload()` 注入顶层 `params: {"user_language": resolve_user_language(original_question)}`，按用户输入文本做 zh/en 内容级判定（复用 `scripts/i18n.py`）；coze 端可忽略（备用提示）。
+- **§2.1 `skill_version` → 飞书（特殊落点：并入 `final_answer` 列，不新增独立列）**：coze 服务端参考代码 `adapters/coze/project_20260812_152011/projects/src/graphs/nodes/async_feishu_writer.py` 从 `query_meta` 读 `skill_version`，与 §2.2 的 `runtime_sec` 一起并入既有 `final_answer` 列（见下「ct-advisor 专用落点」）。
+- **§2.2 `runtime_sec` → 飞书（计算持续秒数，只进飞书、不出参）**：`main.py` 的 `/run` 与 `/stream_run` 入口收到 `request.json()` 即刻打 `payload["received_at"]`；`state.py` 的 `GlobalState` / `GraphInput` 新增 optional `received_at`；三处 `async_feishu_write` 调用（review / full_analysis / cache_check）透传 `received_at=state.received_at`；writer 内 `runtime_sec = round(time.time()-received_at, 3)` 与 `skill_version` 合并进 `final_answer` 列 JSON 对象 `{"answer": 原始 final_answer, "skill_version": ..., "runtime_sec": ...}`（见下），仅非空才包裹。`GraphOutput` 不出 `runtime_sec`（§2.2 红线不动）。
+- **⚠️ ct-advisor 飞书落点（已决，用户 2026-09-03）**：ct-advisor 飞书表（`Pog0bGNMbaCWMIsGRNpckHcnn9f` / `tblA2mEaE7TJtI0u`）为描述性列（无统一 searchlog 的 `querystr`/`resultstr` 列）。用户明确：§2.1/§2.2 **不新增独立列**，直接并入既有 `final_answer` 列，与原始写入值组成 JSON 对象 `{"answer": 原始 final_answer, "skill_version": ..., "runtime_sec": ...}`（仅当契约元数据非空才包裹，向后兼容：无 `skill_version` 且无 `received_at` 时 `final_answer` 仍存原始文本）。故 writer 已移除 `skill_version`/`runtime_sec` 独立列写入，仅 `final_answer` 列承载二者。
+- **⚠️ 待用户处理（部署）**：`adapters/coze/project_20260812_152011/` 是 coze 工作流部署源，以上 §2.1/§2.2 改动需**重新打包上传 Coze 控制台部署**才在线上生效（ct-advisor 既有「本地基准，待重新部署生效」惯例）。
+- **验证**：客户端 `py_compile` + 行为测试（中文→`zh`/英文→`en`/`skill_version=0.9.104` 进 `query_meta`/幂等）；服务端 6 文件 `py_compile` + 飞书 writer 逻辑单测（有元数据时 `final_answer` 列为 `{"answer":"原始答案","skill_version":"0.9.104","runtime_sec":~1.237}` 的 JSON 对象、独立 `skill_version`/`runtime_sec` 列消失、写库键仅含真实表列；无元数据时 `final_answer` 保持原始文本、历史格式逐字节一致）。
+
+- **背景（test_seven_flows.py 契约漂移修复）**：v0.9.106 修完 F3/F4/F5 后跑 `test_seven_flows.py` 仍崩——根因不在本次改动，而在 coze 节点 `tool_router_node._match_tool` 自 2026-08-23 起把返回从「首个命中即返回」改为「收集全部命中 + 按 `TOOL_PRIORITY` 选主判」，返回结构由 2 元组变 **3 元组** `(主判技能, 默认参数, 全部命中列表)`；测试脚本 `coze_tool, coze_defaults = coze_match(q) or (None, {})` 仍按旧 2 元组解包，命中即抛 `too many values to unpack`，整测试在首个流程就崩、后续 6 个流程从未执行（崩溃掩盖了 F4 的预期漂移）。按规矩**不碰 coze 部署源**（`adapters/coze/` 由用户人工打包部署），只在 ct-advisor 自己的测试脚本内对齐真实契约。
+- **修复 1 · 解包对齐 3 元组**：`test_seven_flows.py` 改为 `matched = coze_match(q); (coze_tool, coze_defaults, coze_hits) = matched if matched else (None, {}, [])`，并打印 `hits` 提升多源可观测性（coze 节点 2026-08-23 的 `need_tools`/`deferred_tools` 机制正是依赖第 3 元组）。
+- **修复 2 · F4 预期漂移重定点（保留真实异判覆盖）**：原 F4 问「查 PD-1 抑制剂三期临床试验并算一下样本量」期望 前端=samplesize / Coze=registry → 委托 registry；但现状下该问**只命中 samplesize**（coze `TOOL_PRIORITY` 中 samplesize 最高，且 registry 触发词刻意不含「三期临床试验」以防模板误触发），故 Coze 与前端同判 samplesize、编排器正确包裹——原期望在结构上已不可能成立。重定点为「前端=registry（经『三期』） / Coze=literature（该问只命中文献）→ 委托 literature」，仍为 **真实前端≠真实 Coze** 的异判场景，验证 orchestrator 把已执行的 registry 预判并入草稿、委托 Coze 主判 literature（与 `orchestrate.py` SELF_TEST 的 mock 异判互补，覆盖真实代码链路）。
+- **非回归**：coze 节点 `_match_tool` 是只读引用（未改），编排器 `build_output` 的「`coze_tool != prefetch_tool` → 委托」路径本就正确（mock SELF_TEST 8/8 通过），本次仅修测试脚本的过时假设。
+- **附带修复 · 契约测试解释器对齐环境规则（v0.9.107 同批）**：验证 #1 时发现 `test_sibling_contract.py` 在本沙箱掉到 2/4——根因是测试用 `cfg["cmd"]="python"` 解析到 managed 3.13.12 解释器，而 ct-safety / ct-literature 在模块顶层 `import xlsxwriter`、managed 环境未预装该包，`--help` 即 rc=1（属沙箱≠部署的环境缺口，非代码回归；Anaconda `C:\Tools\anaconda3\python.exe` 已装 xlsxwriter 3.2.9）。按用户环境规则（Python 必须用 Anaconda，不用 managed）新增 `_interpreter()`：优先 Anaconda、缺失回退运行测试的解释器；契约测试改用它对兄弟技能跑 `--help`。恢复 **4/4 = 100%**，且今后整套测试应在 Anaconda 下运行方与生产一致。
+- **验证**：`python -m py_compile scripts/test_seven_flows.py` 通过；`test_seven_flows.py` 七大流程 **7/7 = 100%**（修复前崩溃 0 执行）；`route_tool.py --self-test` 22/22 + 参数 6/6；`orchestrate.py --self-test` 8/8；F4 单列确认真实异判 前端=ct-registry / Coze=('ct-literature', {'max':20}, ['ct-literature'])。
+
+## v0.9.105 (2026-09-03) — 与兄弟技能接口两处修复（F1 referral-only / F2 margin 丢参）
+
+- **F2 · `ct-samplesize` `--margin` 静默丢失（明确 bug，已修）**：`tool_mapping.json` 的 `effect_params` 长期列了 `margin`，但 `ct-samplesize.params` 字典从未定义 `margin` 键；`_build_cmd` 只遍历 params 键拼 flag，导致 Coze/用户传入的非劣效/等效（NI/equivalence）边际假设 `margin` **永远拼不出 `--margin`**（模型能收不能传）。新增 `"margin": {"flag": "--margin", "type": "float", "default": null, "required": false}` 到 params，与 `samplesize_power.py` 的 `--margin` 入参对齐；NI/equivalence 检验现在能正确透传边际效应量。
+- **F1 · `meta-analysis` 接口不对称（降级为 referral-only，已修）**：此前 `SKILL.md` 把它标 tier-A 依赖、`AGENTS.md` 路由叙事也含它，但 `tool_mapping.json` 无条目、`route_tool.py` 无触发词——Coze 若返回 `need_tool:"meta-analysis"`，`handle_need_tool.py` 直接报硬错「未在 tool_mapping.json 中找到技能映射」，广告可路由、实际不可调（self-test 22/22 全绿且 meta-analysis 从不是目标，印证从未纳入路由）。改动：
+  - `tool_mapping.json` 新增顶层 `referrals` 注册表（`meta-analysis` → `mention`/`reason`/`github`），作为 referral-only 单一数据源；
+  - `handle_need_tool.py` 未映射分支：命中 referrals 时返回 `status:"referral"`（结构化 message/mention/github）而非硬错 `status:"error"`，不再卡死整条应答；`_build_deferred` 对 referral-only 技能生成清晰「请 @skill 调用」提示；
+  - `refine_answer.py` `_merge_answer` 新增 `referral` 状态分支：把 Coze 原答案 + 显式调用引导一起透出（用户可见，而非当成错误）；
+  - `SKILL.md`：`dependencies` 移除 meta-analysis 自动依赖（改注释说明 referral-only）、Requirements「Sibling skills」行与「Boundaries with Sibling Skills」段标注 meta-analysis 为 referral-only、引导 `@skill:meta-analysis`；
+  - `orchestrate.py` 不受影响（meta-analysis 从不经 route_tool 预判，referral 经 `--ship` 路径的 `_merge_answer` 处理；其 error 兜底分支对未知状态安全降级）。
+- **验证**：`python -m json.tool tool_mapping.json` 通过；`route_tool.py --self-test` 22/22 绿（meta-analysis 仍非目标，符合预期）；`handle_need_tool.py` 经 `--card '{"need_tool":"meta-analysis",...}'` 实测返回 `status:"referral"`（修复前为 `status:"error"` + 硬错文案）。
+- **遗留（后续立项，不在本版）**：F3 `query_origin`/`locale` 不向兄弟技能透传；F4 缺真实兄弟技能集成测试（orchestrate/route_tool 自测全 mock 桩）；F5 coze 引擎技能（ct-samplesize v5 / meta-analysis）的 SAFE PREVIEW 语义需逐条对齐 ct-base §5。
+
+## v0.9.106 (2026-09-03) — 兄弟技能接口一致性闭环（F3 语言透传 / F4 真实契约测试 / F5 SAFE PREVIEW 引擎对齐）
+
+- **F3 · 调用方语言向兄弟技能透传（已修）**：新增 `handle_need_tool.detect_text_language` / `_resolve_call_locale`（与 ct-base `scripts/i18n.py` 同算法、本地自包含，避免跨技能 import）；`execute_card` 按【用户输入文本】内容级检测语言（中文系统 + 英文输入不被误判 zh），经环境变量 `CTSS_LOCALE` 注入子进程环境（兄弟技能 coze 计算端按 ct-base `language_policy.md` §"user_language 备用入参" 读此变量切报告/图表语言）。卡片若显式带 `locale` 则优先；否则回退中文默认。**端到端证明（零网络）**：`CTSS_LOCALE=en` → ct-samplesize v5 coze 信封 `user_language:"en"`，`=zh` → `"zh"`（实测 `--dry-run` 信封随变量切换）；`_resolve_call_locale` 单测 英文问→en / 中文问→zh / 显式 en→en 全过。注：`query_origin` 按 ct-base §8.6 由兄弟技能（客户端同机）自行生成 `sha256(hostname)`，归因一致，ct-advisor 不再重复透传（卡片若带 `query_origin` 仍经 `CT_QUERY_ORIGIN` 透传以备关联）。
+- **F4 · 真实兄弟技能 CLI 契约测试（已修，最高 ROI 工程债）**：新增 `scripts/test_sibling_contract.py`——对 `tool_mapping.json` 每个自动执行技能真实 subprocess 跑 `<cmd> <args> --help`（argparse 解析即退出，零网络 / 零 coze），断言 ① 脚本存在且路径落在 `SKILLS_DIR` 内（防 `../` 逃逸）② rc==0 ③ 映射表声明的每个 flag（`params` / `extra_args` / `conditional_args`）都出现在兄弟 `--help` 文本里。**抓出 CLI 漂移**（兄弟改了 CLI 没同步映射表会立刻红）——正是此前 PREVIEW/KW-GATE 守卫踩坑的根因类型，过去 orchestrate/route_tool 自测 + `test_seven_flows.py` 全程 mock 桩完全侦测不到。实测 4/4 通过（ct-registry 12 / ct-safety 7 / ct-literature 7 / ct-samplesize 11 个契约 flag 全命中）。
+- **F5 · SAFE PREVIEW 按引擎类型对齐 ct-base §5（已修）**：`tool_mapping.json` 为每个技能加 `engine` 字段（`ct-samplesize`=`coze`，其余三兄弟=`local`）；`ct-samplesize` 移除 `extra_args` 的 `--yes`（实证 v5 coze 后端 `requires_confirmation=False`，`--yes` 对 coze 是 no-op，且 §5 规定 coze 引擎 `--yes` 不适用——仅 legacy 本地引擎保留）；`handle_need_tool` 的两个「假成功」守卫（PREVIEW / KW-GATE）改为**引擎感知**：仅 `engine!="coze"`（本地引擎技能因缺 `--run`/`--yes` 停在交互确认门）才判假成功，coze 引擎无此闸门、请求信封由执行卡直接发送，不因 `[PREVIEW]`/`[KW-GATE]` 误判。
+- **验证**：`python -m py_compile scripts/handle_need_tool.py scripts/test_sibling_contract.py` 通过；`test_sibling_contract.py` 4/4 绿；`route_tool.py --self-test` 22/22 绿；`handle_need_tool` referral 回归（`meta-analysis`→`status:"referral"`、未知技能→`status:"error"`）；`--margin` 拼参仍 OK；ct-samplesize `--dry-run` 信封 `user_language` 随 `CTSS_LOCALE` 切换。
+- **未做 / 已知（v0.9.107 已修）**：`test_seven_flows.py` 原 `coze_match(q) or (None, {})` 2-unpack 报错（coze 节点 `_match_tool` 自 2026-08-23 起返回 3 元组 `(主判, 默认参数, 全部命中)`）——见 v0.9.107。
+
+## v0.9.104 (2026-08-31) — 发布前检查整改（ct-base §16 闸门全绿）
+
+- **§16.8 共享件一致性闸门解除（原 P0 阻断）**：以 ct-base 真源覆盖 `scripts/i18n.py`、`scripts/kw_localize.py`（纯增量，调用方无破坏）；`scripts/i18n_messages.json` 重组为 base 精确子集，ct-advisor 专属 102 键（`menu.*`/`ground.*`/`out.format.*`）迁至新增 `scripts/i18n_skill_messages.json`（消除 `publish_inject` 整体覆盖会抹掉专有条词的陷阱）；剔除 13 个 R/install 死键（`error.fallback_diagnose` 等活键保留）。重跑 `shared_sync_check` 退出码 0（剩余 2 项 WARN 为纯 Python 技能不需 `merge_spec`/`i18n_r_messages`，合法）。
+- **§16.9 出站归位**：`scripts/check_coze.py` 硬编码 `ENDPOINT = "https://ct-advisor.coze.site/run"`（脚本层唯一 coze URL 副本）收口至 `adapters/http_probe.py`（`COZE_ENDPOINT`），`scripts/` 层不再持有硬编码 URL；实际网络调用本就在 `adapters/http_probe.py::probe_get`，符合 §16.9。
+- **handle_need_tool.py 路径白名单（审计整改）**：建 `workdir` 前校验解析后落在 `CARDS_ROOT` 内，杜绝 `../` 逃逸；`_read_artifacts` 每次读取前校验 `hit` 仍解析在 `workdir` 之内，抵御 `result_files` 含 `../` 的路径逃逸。冒烟验证：正常工具落 `CARDS_ROOT` 内、`../EVIL.txt` 逃逸被跳过。
+- **README 档位修正（§16.0 HIGH 闭环）**：中文 A 档补 `controlled-coze-opt-in` 子属性（与 `SKILL.md` frontmatter 一致，原误归类 `public-retrieval`）；英文 A 档"run fully locally"补同等说明；补"发布包内含未调用的 ct-base 共享模块"说明，澄清 `kw_localize` 在线翻译兜底在 ct-advisor 零调用、不产生实际出站，消除审计 HIGH 疑虑。
+- **欠提交改动入库**：v0.9.103 的 6 个已改未提交文件（双 ignore 对齐 ct-base 基线、F07 双语顺序、§13.1 保密声明对齐、规范拆分后文档路径修正）随本次一并提交。
+- **待人工验证**：§16.6 对话示例实测留痕需以 0.9.104 重跑（本机 Coze 往返），发布前补齐。
+
 ## v0.9.103 (2026-08-25) — 发布前对齐 ct-base §16 + Mode B 追问自包含化闭环（升版：SkillHub 预注册 0.9.102 占位导致需 bump）
 
 - **发布前对齐 ct-base §16（逐项核对）**：

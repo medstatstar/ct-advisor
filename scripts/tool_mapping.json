@@ -1,9 +1,10 @@
 {
-  "version": "2026-08-23",
+  "version": "2026-09-03",
   "description": "need_tool 执行卡 → 本地技能执行映射表。params 键对齐各技能 CLI 的 argparse 参数；布尔参数 true 才加 flag。2026-08-23 四技能联调新增字段：result_files（stdout 无结构化数值时回读产物文件，支持沙箱 _unsaved/ 回退）、prep_hint（多技能命中时只执行主判，其余技能用此文案提示用户先准备数据）。",
   "skills": {
     "ct-registry": {
       "skill": "ct-registry",
+      "engine": "local",
       "cmd": "python",
       "args": ["{SKILLS_DIR}/ct-registry/scripts/ct_registry.py"],
       "params": {
@@ -25,6 +26,7 @@
     },
     "ct-safety": {
       "skill": "ct-safety",
+      "engine": "local",
       "cmd": "python",
       "args": ["{SKILLS_DIR}/ct-safety/scripts/ct_safety.py"],
       "params": {
@@ -49,6 +51,7 @@
     },
     "ct-literature": {
       "skill": "ct-literature",
+      "engine": "local",
       "cmd": "python",
       "args": ["{SKILLS_DIR}/ct-literature/scripts/ct_literature.py"],
       "params": {
@@ -69,9 +72,10 @@
     },
     "ct-samplesize": {
       "skill": "ct-samplesize",
+      "engine": "coze",
       "cmd": "python",
       "args": ["{SKILLS_DIR}/ct-samplesize/scripts/samplesize_power.py"],
-      "extra_args": ["--yes"],
+      "extra_args": [],
       "params": {
         "test": {"flag": "--test", "type": "str", "default": null, "required": false},
         "alpha": {"flag": "--alpha", "type": "float", "default": 0.05, "required": false},
@@ -81,6 +85,7 @@
         "k_groups": {"flag": "--k_groups", "type": "int", "default": 2, "required": false},
         "side": {"flag": "--side", "type": "str", "default": "two", "required": false},
         "sd": {"flag": "--sd", "type": "float", "default": null, "required": false},
+        "margin": {"flag": "--margin", "type": "float", "default": null, "required": false},
         "p1": {"flag": "--p1", "type": "float", "default": null, "required": false},
         "p2": {"flag": "--p2", "type": "float", "default": null, "required": false}
       },
@@ -98,7 +103,14 @@
         "单组|单臂|单样本": "proportion_one"
       },
       "prep_hint": "样本量/效能计算：需确认检验类型（率比较 / 均值比较 / 生存等）与效应量假设（p1+p2 / effect+sd / HR），以及 α、power、单双侧",
-      "note": "样本量/效能计算；默认引擎 coze R 服务，本地 Python 兜底；执行卡场景视为已确认，自动带 --yes 执行计算。2026-08-23 联调：stdout 含 __FIGURE__ / __SVG_WIDGET__ 内联图（单次可达数万字符），由 handle_need_tool._sanitize_result 剥离后再交缝合层，避免上下文爆炸。"
+      "note": "样本量/效能计算；引擎=coze 远程 R 服务（v5 唯一后端，无本地回退）。SAFE PREVIEW 按 ct-base §5 双语义：coze 引擎无 --yes 闸门，请求信封由执行卡触发直接发送，故 extra_args 不携 --yes（§5 规定 coze 引擎 --yes 不适用）；本地引擎技能（ct-registry/ct-safety/ct-literature）才用 --run/--auto-confirm 跳过交互确认门。locale 由 ct-advisor 经 CTSS_LOCALE 环境变量透传（内容级检测用户语言），对齐 coze 端 user_language。2026-08-23 联调：stdout 含 __FIGURE__ / __SVG_WIDGET__ 内联图（单次可达数万字符），由 handle_need_tool._sanitize_result 剥离后再交缝合层，避免上下文爆炸。"
+    }
+  },
+  "referrals": {
+    "meta-analysis": {
+      "mention": "@skill:meta-analysis",
+      "reason": "meta-analysis 需数据抽取 + 重型 R 管线，不经 need_tool 自动调用；请用户显式调用并附数据集 / 效应量矩阵。",
+      "github": "https://github.com/medstatstar/meta-analysis"
     }
   }
 }

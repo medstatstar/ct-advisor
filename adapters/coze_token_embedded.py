@@ -1,4 +1,16 @@
-# NOTE: This file contains an obfuscated PUBLIC shared credential (XOR+base64). It is NOT a secret. See user authorization 2026-08-03.
+# ╔═════════════════════════════════════════════════════════════════════════╗
+# ║ FILE ROLE · 本文件 = ct-advisor 全部 **Coze 连接凭据** 的唯一存放处          ║
+# ║   · ct_advisor_coze  → 后端精校端点 ct-advisor.coze.site/run              ║
+# ║       get_token()          由 adapters/refiner.py 调用                    ║
+# ║   · ct_bugreport_coze → 错误报告端点 ct-bugreport.coze.site/run           ║
+# ║       get_bugreport_token() 由 adapters/bug_report.py 调用               ║
+# ║   · 两者均为项目共享的**公开**凭据（XOR+base64 混淆内嵌，非加密），           ║
+# ║     随技能发布（2026-08-03 用户授权）。                                     ║
+# ║   · 旧的 config/coze_token.py 已于 2026-09-09 删除，凭据全部收敛到本文件。   ║
+# ║   · ⚠️ 本文件只放公开共享凭据，**绝不内嵌用户私有 LLM key**。               ║
+# ║     前端私有 LLM key 由用户在 workbench 设置框另行填入（不随技能发布）。     ║
+# ╚═════════════════════════════════════════════════════════════════════════╝
+# NOTE: This file contains obfuscated PUBLIC shared credentials (XOR+base64). They are NOT secrets. See user authorization 2026-08-03.
 """ct-advisor 公共凭据库（XOR+base64 混淆内嵌，镜像 ct-registry 的 OBFUSCATION 模式）。
 
 背景（2026-08-02）：用户授权将 coze 长期 token 随技能**公开发布**，避免每次经环境变量
@@ -48,6 +60,25 @@ EMBEDDED_SECRETS = {
         "CwlLkUlSW5VNQk7ISJaKhYCChc6MBQrJy4XRV4UIXgRU3kBEHQ4OyZCJTAeJks8NUJVIBgAeCY"
         "hP1wfdWNXMXsaVkVeJSAeLwIrCF81WxYqdzBUIWQvY1hBFGgmITl0JycvOEY8SnkaLhxTbBtRV"
         "WxPQEEGHlMxBRdOOCc7USQmIw=="
+    ),
+    # 错误报告端点 ct-bugreport.coze.site/run 的共享公开凭据。
+    # 与 ct-base/adapters/coze/src/endpoint_token.py::EMBEDDED_SECRETS["ct_bugreport_coze"]
+    # 同源同值（全家族共用一份公共凭据，见 ct-base §5）。2026-09-09 由 config/coze_token.py 迁入。
+    "ct_bugreport_coze": (
+        "Bg1nCQYxChogG2cwOgAsHCELL14_XFlDPnorVT1AOFc4PTEDP0A6FzYyfBYsVGACf2p6HHQh"
+        "U0FjGzYcJSQiQGMnDAA8eiUOP1cdAndaLgBMBg1nEQdFJBogG2cMCzI3WgwYCVs6A2tEBWpXCR"
+        "YeEQg6BD0aO0QUBiM9ewQrDF0UeEZ5MHQYMT9JJgwXOBgfHEglHxMzeykVNWg_BX4DFHwBUjZ"
+        "9Ox4gECpfS3sqA0oWZAI0Uk41eBt8IHAaLjBkUyocDkAhGE5WICkSRA41IB0_W0JLKkMFUDlHA"
+        "lY5PTpePm4pFR4yZAYtD2cMUmpfCWMPNkJhGF0eCjQEB3RRVkw_floIBERPAk8ALksAJE1FOyJ"
+        "PGSkoJFgHKBZVSDxbFncyXh59DlpQLh5KUyoMKEMiGGBWIS4kGCE2I1c_WFpaBwooCT1HDg0XP"
+        "kYGEB41GiAjFAcGPn8ZaR91DmBQNQ5OUF1GC0EbHk8PVgo_aQBRKEcVA2BZDwgtNyUcLDA7XT0"
+        "rEVosOyMcZAFSSEtDV2tJIXQGURBDBgoHL0QaPmYkWw43ZRgWFHsHA2FyMmgQCUVFIlcBHjUhB"
+        "GYbOjcRTyw0UhsXRH9_PlM2Agx5PiUfGl4XEU8RJE8XGiAFEGUiendXHGAtVCxXNiMRJxsmHRt"
+        "TKRZWGSgTBGUOR39gL0sXFU0bWTwjRD4HRl4mXgM8ZFslAFUZVn9KVE82ABJMNxY1ID48ImwmB"
+        "gs_egUJUG4pdx1SInRWUQwUVTEzOyMhO34hIjAPX1YGVkU6a0RfA34SCRJMI1YiLycuHx4kDA0"
+        "3WCsqCHoRYl12PFA6Ni5eID0FPkEfHU8XWh4uR1chU3QyaXp9UXQJBhh1UCsBIyYIIWMQPxs9S"
+        "D4IJHcyRXV3MwpVMz9BFggkXDEYPlQCAz8HTgRTDmEadml2EHY4M0F4MC8iJDIGSxQ3XyIPWgE"
+        "2EhwcHG53KGkuFhB0GDBOHiRcFQ=="
     ),
     # "another_public_key": "<obfuscated blob>",
 }
@@ -137,4 +168,15 @@ def get_token(cli_token: str = None, token_path: str = None,
     参数与旧版一致（保持 refiner.py / refine_answer.py 的调用不变）。
     """
     return get_secret("ct_advisor_coze", cli_token, token_env,
+                      token_path or DEFAULT_TOKEN_PATH)
+
+
+def get_bugreport_token(cli_token: str = None, token_path: str = None,
+                        token_env: str = "CT_BUGREPORT_COZE_TOKEN") -> str:
+    """错误报告端点便捷封装：等价于 get_secret("ct_bugreport_coze", ...)。
+
+    由 adapters/bug_report.py 调用（替代原 config/coze_token.py::COZE_TOKEN）。
+    与 ct_advisor_coze 共用同一混淆密钥与读取优先级（CLI > env > 局部文件 > 内嵌 blob）。
+    """
+    return get_secret("ct_bugreport_coze", cli_token, token_env,
                       token_path or DEFAULT_TOKEN_PATH)
