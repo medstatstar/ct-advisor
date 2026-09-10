@@ -15,7 +15,11 @@ query_meta is a JSON string with three fields:
 
 Robustness: any exception falls back to printing draft_answer and exits 0, so the agent
 always gets a usable answer and the conversation never breaks due to a script crash.
-By default it calls the Coze refiner (single call, 60s timeout; on Coze timeout/error it degrades to the local draft as a fault fallback — there is no local-only mode).
+By default it calls the Coze refiner with a single call and a conditional timeout — 90s default
+(`refiner.timeout`), widened to 300s (`refiner.long_timeout`) for long tasks (complex difficulty /
+template-type category / follow-up with packed conversation history). On Coze timeout/error it
+degrades to the local draft as a fault fallback — there is no local-only mode; the stderr fallback
+line reports the *actual* resolved timeout, not a hardcoded value.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ from typing import Set
 ANSWER_START = "<<<CT_ANSWER_START>>>"
 ANSWER_END = "<<<CT_ANSWER_END>>>"
 NEED_PARAMS_MARKER = "<<<CT_NEED_PARAMS>>>"
+INSTALL_MARKER = "<<<CT_INSTALL_REQUIRED>>>"
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -40,7 +45,7 @@ from adapters import build_refiner, RefineRequest, RefineResult, MissingDependen
 from scripts.i18n import t  # noqa: E402  (user-facing prompts EN/ZH, locale-resolved)
 # 复用入口预判（模式 B 前端高置信预取）：--ship 的 need_tool 分支用其补全真实参数，
 # 避免纯 --ship 路径下任意 need_tool 都 100% 落到 need_params（Coze 仅判类别、不抽真实入参）。
-from route_tool import predict as _predict_tool  # noqa: E402
+from route_tool import predict as _predict_tool, suggest_footer  # noqa: E402
 
 def _load_auto_approve_endpoints(config_path: str) -> Set[str]:
     """从 config.json 加载 auto_approve_endpoints 白名单。"""
@@ -220,9 +225,15 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
     status = tool_out.get("status")
     if status == "ok":
         res = _render_skill_result(tool_out.get("result"), lang)
+        # 2026-09-10（用户要求）：调用兄弟技能后，缝合层追加一行「建议直接用该技能」——
+        # 缝合结果是可读摘要，用户若要核实 / 获取更详细的原始输出，应直接运行该技能本身。
         if lang == "zh-CN":
-            return f"{coze_answer}\n\n---\n\n## 补充信息（来源：{tool}）\n\n{res}"
-        return f"{coze_answer}\n\n---\n\n## Supplementary data (Source: {tool})\n\n{res}"
+            return (f"{coze_answer}\n\n---\n\n## 补充信息（来源：{tool}）\n\n{res}"
+                    f"\n\n💡 *以上为该技能结果的可读摘要；如需核实或获取更详细的原始输出，"
+                    f"建议直接使用 `{tool}` 技能。*")
+        return (f"{coze_answer}\n\n---\n\n## Supplementary data (Source: {tool})\n\n{res}"
+                f"\n\n💡 *The above is a readable summary of this skill's result; "
+                f"to verify it or get the full detailed output, run the `{tool}` skill directly.*")
     if status == "need_params":
         mp = tool_out.get("result") or {}
         missing = mp.get("missing", []) if isinstance(mp, dict) else []
@@ -243,6 +254,157 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
                     f"{msg}\n\n请使用：{mention}")
         return (f"{coze_answer}\n\n---\n\n## Local skill to invoke explicitly: {tool}\n\n"
                 f"{msg}\n\nUse: {mention}")
+    if status == "install_required":
+        # 2026-09-10 A/B 档门控：A 档技能未安装。
+        # 🔴 安装姿态（同日第二轮，用户要求）：安装要下载并写入本地技能目录，**可能触发本机
+        # 安全警告**，故默认 `install_mode="suggest"` —— **只建议、不执行**：向用户说明用途 +
+        # 给出命令，由用户自行执行；仅当用户给出**明确授权**（卡片 install_consent="approved"
+        # 重跑 → install_mode="authorized"）才可由 agent 代为执行。拒绝 → 带
+        # install_consent="declined" 重跑（由代码产出未取数兜底答案）。
+        rp = tool_out.get("result") or {}
+        rp = rp if isinstance(rp, dict) else {}
+        purpose = rp.get("purpose") or ""
+        # 2026-09-10 修正：安装通道统一为 SkillHub。
+        # `install_command` 由 handle_need_tool._install_command() 生成（含 --dir 与完整
+        # 解释器路径，实测可执行）；**不得**渲染裸 `skillhub install` —— PATH 中无该命令
+        # （~/.local/bin/skillhub 在本机不存在，其 bash 启动器另有 Windows 路径 bug）。
+        sid = rp.get("skillhub") or tool
+        cmd = rp.get("install_command") or ""
+        hint = rp.get("install_hint") or ""
+        note = rp.get("install_note") or ""
+        authorized = rp.get("install_mode") == "authorized" or bool(rp.get("install_authorized"))
+        missing = rp.get("missing") or []
+        miss_txt = "\n".join(f"- {m}" for m in missing) if missing else ""
+        if lang == "zh-CN":
+            tail = f"\n若安装后仍需补参数，请一并提供：\n{miss_txt}" if missing else ""
+            cmd_line = f"- 安装命令：`{cmd}`\n" if cmd else ""
+            how_line = f"- 取包说明：{hint}\n" if hint else ""
+            note_line = f"- ⚠️ {note}\n" if note else ""
+            if authorized:
+                act = ("用户**已明确授权**安装（install_consent=approved）→ 执行上述安装命令；"
+                       "成功后带**原执行卡**重跑，由代码调用该技能并缝合。")
+            else:
+                act = ("🔴 **只建议、不执行**：向用户说明该技能用途，把上面的安装命令原样给出"
+                       "（**用户可自行执行**），并说明「安装会写入本地技能目录、可能触发本机"
+                       "安全提示」。**在用户明确授权前，不得代为执行该命令**；"
+                       "用户回复授权安装 → 在卡片加 \"install_consent\": \"approved\" 重跑。")
+            return (f"{coze_answer}\n\n---\n\n{INSTALL_MARKER}\n"
+                    f"需调用 A 档技能「{tool}」补充信息，但本地尚未安装"
+                    f"（{'用户已授权安装' if authorized else '**建议安装**'}）。\n"
+                    f"- 用途：{purpose}\n"
+                    f"- SkillHub 标识：`{sid}`\n"
+                    f"{cmd_line}{how_line}{note_line}\n"
+                    f"{act}"
+                    + ("" if authorized else
+                       "用户拒绝 → 在卡片加 \"install_consent\": \"declined\" 重跑，"
+                       "以自身能力作答并标注「数据未取数」。")
+                    + tail)
+        tail = f"\nIf params are still needed after install:\n{miss_txt}" if missing else ""
+        cmd_line = f"- Install command: `{cmd}`\n" if cmd else ""
+        how_line = f"- How to fetch: {hint}\n" if hint else ""
+        note_line = f"- ⚠️ {note}\n" if note else ""
+        if authorized:
+            act = ("The user has **explicitly authorised** the install (install_consent=approved) "
+                   "→ run the install command above; on success re-run with the original card so "
+                   "code executes the skill and stitches.")
+        else:
+            act = ("🔴 **Suggest only — do not execute**: tell the user what the skill does and "
+                   "hand them the install command verbatim (**they may run it themselves**), noting "
+                   "that installing writes into the local skills directory and may trigger a local "
+                   "security prompt. **Do not run it on their behalf before explicit authorisation**; "
+                   "if they authorise it, re-run with \"install_consent\": \"approved\" added to the card.")
+        return (f"{coze_answer}\n\n---\n\n{INSTALL_MARKER}\n"
+                f"The Tier-A skill \"{tool}\" is needed for the supplementary data but is not "
+                f"installed (**{'installation authorised by the user' if authorized else 'installation suggested'}**).\n"
+                f"- Purpose: {purpose}\n"
+                f"- SkillHub name: `{sid}`\n"
+                f"{cmd_line}{how_line}{note_line}\n"
+                f"{act}"
+                + ("" if authorized else
+                   " Decline → re-run with \"install_consent\": \"declined\" added; the answer is "
+                   "then produced from own capability and marked \"data not retrieved\".")
+                + tail)
+    if status == "unreleased_b":
+        # 2026-09-10 A/B 档门控：B 档技能（输入涉密）不对外发布 → 直接说明 + 用自身能力作答。
+        # 英文路径自带英文文案（payload 的 message / purpose_note 恒为中文，直接复用会让
+        # 英文答案夹中文——2026-09-10 修）。
+        rp = tool_out.get("result") or {}
+        rp = rp if isinstance(rp, dict) else {}
+        tier = rp.get("tier") or "B"
+        registered = rp.get("registered", True)
+        purpose = rp.get("purpose") or ""
+        if lang == "zh-CN":
+            msg = rp.get("message") or f"{tool} 属 B 档技能，不对外发布。"
+            note = rp.get("purpose_note") or ""
+            return (f"{coze_answer}\n\n---\n\n## 需调用的 B 档技能：{tool}（不对外发布）\n\n"
+                    f"{msg}\n\n{note}\n\n"
+                    f"以上回答基于 ct-advisor 自身能力与方法学框架给出；该技能的深度分析未实际执行，"
+                    f"涉及需用真实方案 / 数据运行才能得出的结论请以本地技能结果为准。")
+        if registered:
+            msg = (f'The Tier-B skill "{tool}" (confidential input: subject data / protocol / CRF) '
+                   f'is **not publicly released** — no public repository, so it cannot be installed.')
+        else:
+            msg = (f'"{tool}" is not in ct-advisor\'s skill registry and is treated as Tier B by '
+                   f'default — it is not publicly released and cannot be installed.')
+        note = (f"The skill's capability (e.g. in-depth protocol review / statistical review / data QC) "
+                f"must run in its own local environment against real data; ct-advisor does not "
+                f"impersonate it.")
+        p = f"- Purpose: {purpose}\n" if purpose else ""
+        return (f"{coze_answer}\n\n---\n\n## Tier-B skill required: {tool} (not publicly released)\n\n"
+                f"{msg}\n{p}\n{note}\n\n"
+                f"The answer above is based on ct-advisor's own capability and methodology framework; "
+                f"the skill's in-depth analysis was not actually executed. For conclusions that require "
+                f"running against real protocols / data, rely on the local skill's output.")
+    if status == "unpublished_a":
+        # 2026-09-10 A/B 档门控：A 档（输入非涉密）但尚未发布 → 当前不可安装。
+        # 与 install_required 分开：不给安装地址（未上架 / 空仓库装完仍不可用）、不征询同意；
+        # 与 local_fallback 分开：不是用户拒绝，而是上游尚未公开。
+        # 只渲染面向用户的字段（message / purpose / next_step）；result.hint 是给 agent 的
+        # 处置指引，**不得混进用户可见正文**（2026-09-10 修）。
+        # 英文路径自带英文文案（payload 里的 message 由代码生成、恒为中文，直接复用会让
+        # 英文答案夹中文——2026-09-10 修，unreleased_b 同此处理）。
+        rp = tool_out.get("result") or {}
+        rp = rp if isinstance(rp, dict) else {}
+        purpose = rp.get("purpose") or ""
+        if lang == "zh-CN":
+            msg = rp.get("message") or f"{tool} 属 A 档技能但尚未公开发布，当前无法安装。"
+            nxt = rp.get("next_step") or (
+                "可先分别调用已上架的兄弟技能（ct-registry / ct-safety / ct-literature）取数，"
+                "再由 ct-advisor 就地缝合；待该技能正式发布后再由它统一编排。")
+            p = f"- 该技能用途：{purpose}\n" if purpose else ""
+            return (f"{coze_answer}\n\n---\n\n## 需调用的 A 档技能：{tool}（尚未公开发布）\n\n"
+                    f"{msg}\n{p}"
+                    f"以上回答基于 ct-advisor 自身能力与方法学框架给出；该技能未实际执行，"
+                    f"凡需其取数或运行才能确认的内容（试验登记号、安全信号数值、文献条目、"
+                    f"竞品情报评分等）均未经核验，请勿直接引用为事实。\n{nxt}")
+        msg = (f'The Tier-A skill "{tool}" (non-confidential input) has not been publicly '
+               f'released yet — it is not listed on SkillHub — so it cannot be installed now.')
+        nxt = rp.get("next_step_en") or (
+            "In the meantime you can call the published sibling skills "
+            "(ct-registry / ct-safety / ct-literature) separately and have ct-advisor stitch "
+            "the results; once this skill is released it will orchestrate them itself.")
+        p = f"- Purpose: {purpose}\n" if purpose else ""
+        return (f"{coze_answer}\n\n---\n\n## Tier-A skill required: {tool} (not yet publicly released)\n\n"
+                f"{msg}\n{p}"
+                f"The answer above is based on ct-advisor's own capability and methodology framework; "
+                f"the skill was not executed, so anything requiring its data or runtime (registry IDs, "
+                f"safety-signal values, literature records, competitive-intel scores) is unverified — "
+                f"do not cite it as fact.\n{nxt}")
+    if status == "local_fallback":
+        # 2026-09-10 A/B 档门控：用户拒绝安装 → 自身能力作答，明确标注未取数（反幻觉红线）。
+        rp = tool_out.get("result") or {}
+        rp = rp if isinstance(rp, dict) else {}
+        msg = rp.get("message") or f"未调用 {tool} 取数。"
+        hint = rp.get("hint") or ""
+        if lang == "zh-CN":
+            return (f"{coze_answer}\n\n---\n\n## 数据未取数说明\n\n"
+                    f"{msg}\n\n{hint}\n\n"
+                    f"⚠️ 本回答未调用 {tool} 实际取数：试验登记号、安全信号数值、文献条目等"
+                    f"需检索才能确认的内容均未经核验，请勿直接引用为事实。")
+        return (f"{coze_answer}\n\n---\n\n## Data not retrieved\n\n"
+                f"{msg}\n\n{hint}\n\n"
+                f"⚠️ {tool} was not called, so nothing was retrieved: identifiers, safety-signal "
+                f"values, literature records and similar items are unverified — do not cite them as fact.")
     err = tool_out.get("result") or ""
     if lang == "zh-CN":
         return (f"{coze_answer}\n\n---\n\n## 补充信息获取失败（来源：{tool}）\n\n"
@@ -610,6 +772,14 @@ def main() -> None:
                 else "📦 This answer is from the cloud cache (a previous run, not freshly computed for this request). Ask again for a fresh generation if needed."
             )
             merged = f"> {_decl}\n\n{merged}"
+        # 2026-09-10（第十四轮，用户要求）：**先自身作答，末尾再建议**兄弟技能。
+        # 未自动调用任何兄弟技能、但问题与某技能沾边（弱命中 / 咨询意图）时，
+        # 在最终答案**最末**追加一行软建议；不阻断、不改写答案。
+        if not need_tool:
+            _st = (_predict_tool(req.original_question).get("suggest_tools") or [])
+            if _st:
+                merged = merged + suggest_footer(
+                    _st, lang=_detect_lang(req.original_question))
         _emit_wrapped(merged)
         sys.exit(0)
 
@@ -719,10 +889,16 @@ def main() -> None:
         sys.stdout.write(draft)
         sys.exit(0)
     last_error = ""
+    # 回退消息报告的实际有效超时（长任务 300s / 普通 60s）。先给默认值，避免 build_refiner 失败时未定义。
+    eff_timeout = 90
     try:
-        final = build_refiner(
-            config_path=args.config,
-        ).refine(req)
+        refiner = build_refiner(config_path=args.config)
+        # 复用 refiner 的同一套条件化超时判定，避免消息硬编码 60s 与真实等待时长不符。
+        try:
+            eff_timeout = refiner.resolve_timeout(req)
+        except Exception:  # noqa: BLE001  判定失败不阻断主流程，退回该 refiner 的默认超时
+            eff_timeout = getattr(refiner, "timeout", 90)
+        final = refiner.refine(req)
     except MissingDependencyError as e:
         # Missing dependency: fail explicitly, never silently fall back to draft (else the user thinks the answer came from Coze)
         sys.stderr.write(
@@ -734,7 +910,7 @@ def main() -> None:
         # Any non-dependency exception (network/timeout/Coze 5xx etc.) is labelled as fallback to avoid being mistaken for a Coze-refined answer
         last_error = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
         sys.stderr.write(
-            t("error.fallback_local", reason=type(e).__name__, timeout=60) + "\n"
+            t("error.fallback_local", reason=type(e).__name__, timeout=eff_timeout) + "\n"
         )
         final = draft
     # 2026-08-23 F 加固：refine() 在真实出域场景下可能返回 RefineResult 对象（而非纯字符串），

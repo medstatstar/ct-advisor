@@ -1,5 +1,797 @@
 # Changelog
 
+## [Unreleased] (2026-09-10) — 兄弟技能调用新增 A/B 档门控（检查安装 / 提示安装 / B 档不对外发布）
+
+> **同日第二轮修正（彤 2026-09-10 补充要求）** —— 见文末「追加修正」小节：
+> ① `ct-pipeline` **尚未发布**（SkillHub 未上架、GitHub 仅空占位仓库）→ 新增第 4 个状态 `unpublished_a`；
+> ② 发布状态判据**改为以 SkillHub 上架为准**（GitHub 空仓同样 200，会误判）→ 新增 `scripts/probe_publication.py`；
+> ③ `ct-samplesize` 已补装 → 契约测试由 SKIP 转为实跑并全绿。
+>
+> **同日第三轮修正（回归最初目标复查时发现）** —— 见文末「第三轮：安装通道实测修复」小节。
+>
+> **同日第四轮修正（彤 2026-09-10 追加要求：安装改为「建议」）** —— 见文末「第四轮：安装姿态改为
+> 『建议安装』」小节。要点：**安装需下载技能包并写入本地技能目录，可能触发本机安全警告** →
+> 默认姿态由「征询同意后代办安装」改为「**只建议安装**」（把命令原样交给用户，用户可自行执行）；
+> 仅当用户**明确授权**（`install_consent="approved"` → `install_mode="authorized"`）才可由 agent 代办。
+> 门控状态集合不变（仍 4 个），`install_required` 仅新增 `install_mode` 授权门。
+>
+> **同日第五轮修正（彤 2026-09-10：README 示例按实测校对）** —— 见文末「第五轮：README 示例逐条实测校对」小节。
+> 实跑 8 个示例后发现 README 的**机制描述**与真实返回不一致（日期标签、并行三源、vague 直连 Coze、
+> 一次执行卡只跑一个技能、样本量为 JSON 而非叙事改写、Coze 60s 超时回退等），已按实测逐条改写
+> `README.md` / `README_zh-CN.md`，并连带修正 `references/ADVANCED.md` 与 `knowledge/system_prompt.md`
+> 中的同类旧说法（GitHub clone 安装、`requests` 自动安装、日期标签）。
+> 复查「同意 → 安装 → 调用」这一环时，实测发现**给出的安装命令根本执行不了**（三重坑），
+> 该环实为断链；已新增自带安装器 `scripts/install_sibling.py` 并跑通**端到端闭环**
+> （未装 → install_required → 执行命令装成 v0.10.0 → 重跑同卡 `status=ok`，真实取到 50 项试验）。
+> 判据仍是「4 个状态」，第三轮只修安装通道本身，**未改动门控语义**。
+>
+> **同日第六轮修正（彤 2026-09-10：串行回退消息超时值纠偏）** —— 见文末「第六轮」小节：
+> 串行路径的 `FALLBACK_TO_LOCAL_DRAFT` 消息此前把超时**硬编码为 60s**，长任务（300s）超时会误报；
+> 已改为由 `refiner.resolve_timeout()` 解析出的**真实有效超时**。
+>
+> **同日第七轮修正（彤 2026-09-10：默认超时 60s → 90s）** —— 见文末「第七轮」小节：
+> `refiner.timeout` 由 **60 提到 90**（`long_timeout=300`、`race_window=30` 不变）；运行时默认值、
+> 条件化超时判定与注释、回退消息兜底、全部文档同步更新。版本 v0.9.111 → **v0.9.112**。
+>
+> **同日第八轮修正（彤 2026-09-10：README 案例改为「用户可见」表述）** —— 见文末「第八轮」小节：
+> 案例里的「助手实际返回」原为内部协议 dump（need_tool / JSON / 检索日志 / 产物路径），过于 IT 化；
+> 已按「用户所见即所得」改写为**自然语言回答 + 一行内部机制注**，多轮案例补「首轮追问 + 补参后最终答案」。
+>
+> **同日第九轮修正（彤 2026-09-10：示例 1 换题 + 兄弟技能调用后提示「直接用该技能」）** —— 见文末「第九轮」小节：
+> ① 示例 1 原为泛泛的「E9(R1) 五要素」问答，改为**具体场景**（III 期肿瘤 OS、进展后交叉用药 → 估计目标怎么设）并实跑取回答案；
+> ② 调用兄弟技能时缝合层**由代码追加一行 💡**：所给为可读摘要，如需核实或获取更详细的原始输出，建议直接运行该技能；
+> ③ 英文 README 开头与中文版**同步**（去掉与实测不符的「并行预取」表述），并修复中文版被存成 LF 的换行与 5 处 `\r>` 残字、3 处 HTML 实体。
+>
+> **同日第十轮修正（彤 2026-09-10：示例 1 暴露的「答案长度失控」根因修复）** —— 见文末「第十轮」小节：
+> 示例 1 的答案「讲得很细却没回答问题」，追查发现根因在**云端出答案提示词**——`full_analysis` 与 `review`
+> 两个节点都写着「不设字数上限」，并把 difficulty 降级为「仅作详略软信号 / 质量优先于标签」，于是任何
+> 单点方法学问题都返回多节长报告。实测：问「怎么把总 I 类错误率控制在 0.05」得到 **5 节 / 4522 B**，
+> 含 DSMB 角色与决策流程、信息时间选取等**完全没被问到**的内容；问「主要估计目标该怎么设」两轮在
+> 治疗政策 / 假设策略之间摇摆、**始终不给推荐**，另一轮长到被 `max_completion_tokens` **截断在「### 四」**。
+> v1.5 本有档位字数上限（simple ≤150 / middle ≤400 / complex ≤600 字），但只写在**无任何代码引用**的
+> `coze_system_prompt_v1.4.md`，故长期失效。已把**作答契约**（C1 先答后展 / C2 边界锁定 / C3 难度即字数
+> 硬上限 / C4 单一推荐）写入 4 个**真正生效**的 `config/*.json`（full_analysis / review /
+> generate_organized_problems / judge_difficulty），同步知识库镜像与本地 brain，清除「不设字数上限」表述；
+> 示例 1 换成**单点有唯一正解**的题（期中分析 α 控制）。版本 v0.9.114 → **v0.9.115**；Coze 部署包 **v1.11**
+> （需上传 + 重建镜像才生效）。
+
+> **同日第十一轮修正（彤 2026-09-10：C3 由「字硬上限」校准为「预期量级 + 硬天花板」）** —— 见文末「第十一轮」小节：
+> 第十轮的 C3 只有上限没有下限，且明文压过「完整覆盖」，于是模型靠**删要素**达标 → 答案有时过精简；
+> 同时存在单位不一致（`config/*.json` 写 `字`，知识库与 `steps.md` 写 `words`，差约 1.6 倍，而
+> `methodology-core.md` 确实被云端读取）。已改为 **simple ~100/≤200 · middle 300–500/≤700 · complex 500–800/≤1000（中文字符）**，
+> 明确「**要素完整优先于字数**」，并规定删减顺序：跑题 → 重复 → 压缩。版本 v0.9.115 → **v0.9.116**；部署包重出为 **v1.12**。
+
+> **同日第十三轮修正（彤 2026-09-10：README 示例改版 —— 实操题上位）** —— 见文末「第十三轮」小节：
+> 用户提议用**角色实操题**替换前面偏空泛的案例，故：示例 1 改为「受试者因 SAE 提前退出的交通补贴怎么给（GCP）」、
+> 新增示例 2「IB 列为『少见』但实测 15%，PV 要不要更新 IB 与标签」；原「控 α」例移出示例区，原示例 2–8 顺延为 **3–9**（共 9 例）。
+> 改版过程中实测发现示例 2 被**误判为注册库检索**并弹补参追问：根因是本地 registry 触发词含裸词「在研」，
+> 命中了「在研|究者手册」。同时发现上一轮云端 `_kb_hit` **只接上了 GUIDELINE 两处**、`TOOL_RULES` 主循环仍是裸子串
+> `kw in q`（即 `ror` ⊂ `error` 的修复并未真正生效），且边界写法 `(?!s?[a-z])` 会因正则回溯**误伤所有复数召回**。
+> 三处均已修，并新增云端词表回归测试 `scripts/test_tool_router.py`（**39/39**）。版本 v0.9.116 → **v0.9.117**。
+
+> **同日第十四轮修正（彤 2026-09-10：云端补英文咨询意图护栏 + 回答姿态改为「先自身作答、末尾建议」+ 收紧调用门槛）** —— 见文末「第十四轮」小节：
+> ① 云端 `tool_router_node` 补齐**中英咨询意图护栏**（镜像本地 `route_tool` 的 DEF / METHOD / DOC，外加「明确取数动作」例外），
+> 根治「英文方法学问句（…how do I keep the overall type I error rate at 0.05?）被裸词 trial 判成检索注册试验」；
+> ② 按用户口径**收紧调用门槛**：只有**强触发词**（具名数据源 / 具名统计量 /「检索动词＋明确对象」句式）才**自动调用**兄弟技能；
+> 泛词（信号 / 文献 / 试验 / 安全性 / 设计）降级为**弱命中 → 不调用**；
+> ③ 回答逻辑改为「**先基于自身能力作答，最后再建议是否安装 / 调用兄弟技能**」：新增 `route_tool.suggest_footer` 软建议页脚，
+> 接进 `orchestrate.build_output` 与 `refine_answer --ship`；`install_required` 由「阻断式委托」改为「答案在前、安装建议在后」。
+>
+> **同日第十五轮修正（彤 2026-09-10：接手复核发现的两处不一致 →「① 按代码文件改；② 修改」）** —— 见文末「第十五轮」小节：
+> ① 交接口径更正（仅文档）—— 交接文件原把「查 XX 药的文献」当弱命中抽验句，**与代码 / 测试矛盾**（该句按强触发规则
+> ③ 本就是 `ct-literature` 强命中），**以代码为准**更正；
+> ② 修复「**软建议溢出**」—— 护栏命中时此前仍回落弱词表，裸弱词 `trials?` 会给纯定义 / 方法论题附一条题不对路的
+> `ct-registry` 建议（已消灭的误报换位置继续出现）；现改为**只保留强命中的建议**，本地 `route_tool` 与云端
+> `tool_router_node._suggest_tools(strong_only=…)` 同步修。
+>
+> **同日第十六轮（彤 2026-09-10：按 v1.15 线上实测重写 README 案例回答）** —— 见文末「第十六轮」小节：
+> 两份 README 各新增**示例 10 / Example 10**，首次把「**soft suggestion**」这一用户可见尾巴写进对外案例 ——
+> ① 纯方法学题（英文问句）**末尾零建议**；② 泛词题（查 XX 药的安全性信号有哪些）**自身作答在前、末尾一行建议**。
+> 案例全部取自当次端到端**实测输出**原文，并如实标注「云端对英文问句返回中文正文」。
+>
+> **同日第十七轮（彤 2026-09-10：删除示例 7，编号顺延）** —— 见文末「第十七轮」小节：
+> 删除原**示例 7「切换输出语言」**，其后 3 例顺延（原 8/9/10 → **7/8/9**），现共 **9 例**；
+> 引导句的示例计数与多轮编号引用同步更新，删除后编号连续无断号。
+> 语言切换能力本身未删（FAQ「中文系统下输出是中文吗」仍完整说明）。
+>
+> **同日第十八轮（彤 2026-09-10：删除示例 9，末例移除）** —— 见文末「第十八轮」小节：
+> 删除现**示例 9「只沾边兄弟技能的方法学题」**（第十六轮按实测新增那条），现共 **8 例**，编号 1–8 天然连续；
+> 引导句的计数与多轮编号引用同步更新，「两种尾巴对照」的引导语整句移除。
+> 软建议机制说明未受影响（§2「调用门槛」与 §4「安全预览」两处仍在）。
+
+### 背景（彤 2026-09-10 要求）
+- **A 类技能**：先检查是否安装；未安装则提示用户安装。用户**拒绝** → 给出自身能力范围内的分析结果；用户**同意** → 安装后调用该技能完成分析。
+- **B 类技能**：直接提示需要调用 B 类技能、但该技能不对外发布，然后用自身能力范围内的功能完成分析。
+
+### 审计结论（改造前）
+5 条要求 4 条未实现、1 条仅文字规范未落代码；另有 4 个连带缺陷。实测（Anaconda base）：
+- Coze 下发 B 档 `ct-protocol` → `handle_need_tool.py` 落到「未在 tool_mapping.json 中找到技能映射」**硬错**；
+- A 档技能缺失（`CT_SKILLS_DIR` 指向空目录）→ `技能执行失败 rc=2: No such file or directory` **硬错**，无安装提示、无征询。
+
+### 改造
+- **`scripts/tool_mapping.json`**：新增顶层 `tiers` —— ct 系列 A/B 档登记（23 条：A 档 9 / B 档 12 / 元层 2），每条含 `tier` / `published` / `github` / `purpose`；`default_tier: "B"`（未登记技能保守按 B 档处理）。**权威口径** = ct-base §11（唯一分类轴 `input_sensitivity`）+ §13.1（保密声明）；`published` 判据见下方「追加修正」——**已改为以 SkillHub 上架为准**。本表是档位与安装地址的**单一事实来源**。
+- **`scripts/handle_need_tool.py`**：`execute_card` 在 subprocess 之前插入**档位门控**，新增 3 个状态 ——
+  - `unreleased_b`：B 档（或未登记）技能 → 说明「该技能不对外发布、无法安装」+ 用自身能力作答；**不再走「未映射」硬错**；
+  - `install_required`：A 档未安装 → 结构化上报 `github` / `install_hint` / `purpose` / `missing`（缺失参数一并算好，供同轮追问）；
+  - `local_fallback`：卡片带 `install_consent="declined"` → 自身能力作答 + 标注「未取数」。
+  新增 `_resolve_tier()` / `_skill_installed()` 两个纯本地探测函数（不执行、不联网）。**🔴 本模块只做「检测 + 上报」，绝不执行安装** —— ct-base §5「禁止静默安装」红线：安装须由 agent 在用户明确同意后执行，非交互模式不得阻塞。
+- **`scripts/refine_answer.py`**：新增 `INSTALL_MARKER = "<<<CT_INSTALL_REQUIRED>>>"`；`_merge_answer` 补 3 个状态分支（中英双语），拒装路径组装为「Coze 草稿 + 数据未取数说明」，B 档路径组装为「Coze 草稿 + 需调 B 档技能但不对外发布」。
+- **`scripts/orchestrate.py`**：`build_output` 识别 3 个新状态 —— `install_required` 走**委托**路径（需人工决策，非 error，`extra.install_request` 透出 github/install_hint）；`unreleased_b` / `local_fallback` 由**代码直接缝合包裹**（无技能可执行，免一次委托往返）；无预判且 Coze 要 B 档技能时**短路**为直接包裹。`_render_delegate` 新增 `extra` 参数。
+- **`scripts/check_deps.py`**：`KNOWN_DEPS` 硬编码表**删除**，改为从 `tool_mapping.json` → `tiers` 读取。**修正既有档位标注错误** —— 旧表把 `ct-registry` / `ct-safety` / `ct-literature` 标成 `tier B`、`ct-samplesize` 标成 `tier A`，与 ct-base §11 及 `SKILL.md` `dependencies`（四个全 A）三处矛盾，等于把三个确认已发布的公开技能标为「不发布」。输出改为分组呈现：A 档（可安装，逐个探测）+ B 档/meta（列出但明示「无可安装项」）。
+- **`SKILL.md`**：新增 **"🔴 A/B Tier Gate"** 小节（三分支表 + 「安装是用户决定，不是 agent 决定」红线）；Step 3b 行、Requirements「Sibling skills」行、「Skill-card execution protocol」的「Only two cases need you」→「Only three cases」（补 `install_required`）、「Boundaries with Sibling Skills」（补档位划分段）。
+- **`knowledge/system_prompt.md`**：`Missing a sibling skill` 段改写为**分档降级**（A 档：给 GitHub 地址 + 征询安装；B 档：说明不对外发布 + 自身能力作答 + 标注「深度分析未实际执行」），并说明 runner 的三个新状态。
+- **`scripts/test_sibling_contract.py`**：新增 `run_tier_gate()` 9 条断言（B 档 → `unreleased_b`；未登记 → 保守 B；A 档未装 → `install_required`；拒绝 → `local_fallback`；已装不误报；referral 不被吞；注册表自洽 ×2；check_deps 档位正确）。
+  **连带修复**：契约测试路径白名单在**软链接安装**下恒误报「脚本路径越界」（`resolve()` 后落到真实路径、与 `SKILLS_DIR` 不同根，本机实测契约 0/4）→ 改为两级判定（解析后在内 **或** 未解析路径在 SKILLS_DIR 下且不含 `..`，保留防逃逸语义）；未安装技能由 FAIL 改 **SKIP**（A/B 档门控下「未安装」是合法状态，非契约漂移）。
+
+### 规范连带修正（ct-base）
+- `ct-base/docs/05-version-build.md` §11 的 `publish` 口径与 §13.1 冲突（§11 称 B 档包「可发布」并把 `ct-protocol` 标为「已发布」；§13.1 称 B 档「均不对外公开发布」）→ 按 GitHub 实测（B 档 404）**以 §13.1 为准**修正 §11，详见 ct-base CHANGELOG 2026-09-10 条。
+
+### 验证
+- `scripts/test_sibling_contract.py` → 契约 **3/3 = 100%**（ct-samplesize 未安装，SKIP）+ **A/B 档门控 9/9 = 100%**，`exit=0`。
+- `scripts/orchestrate.py --self-test` → **8/8 = 100%**（原有八条决策路径无回归）；新增四路径实测（B 档短路包裹 / `install_required` 委托 / `local_fallback` 包裹 / `unreleased_b` 包裹）输出正确。
+- `scripts/route_tool.py --self-test` → 工具命中 **22/22** + 参数抽取 **6/6**。
+- `scripts/test_modeB.py` → **10/10**。
+- `scripts/test_seven_flows.py` → 环境性失败（依赖本地 Coze 节点 `adapters/coze/project_20260812_152011/...`，该目录按 §16.7 不随发布副本），与本次改动无关。
+- 实测三场景：B 档 `ct-protocol` → `unreleased_b`；A 档未装 → `install_required`（含 github/install_hint）；A 档未装 + `install_consent=declined` → `local_fallback`。
+
+### 追加修正（同日第二轮，彤 2026-09-10）
+**触发的两点新信息**：①「`ct-samplesize` 装了，补一下」；②「`ct-pipeline` 尚未发布」；并指定**发布状态以 SkillHub 上架为准，GitHub 可能有空库**。
+
+1. **发布判据改为 SkillHub（权威源）** —— 此前 `tiers.published` 按 `github.com/medstatstar/<slug>` 的 HTTP 200/404 核定，**该判据是错的**：GitHub 上「已创建但从未推送内容」的空占位仓库同样返回 200。实测 `ct-pipeline`：仓库存在但 `size=0`、contents 返回 `This repository is empty`、`created_at == pushed_at = 2026-08-07`，在 SkillHub 上**搜索无结果**（`api.skillhub.cn/api/v1/search`）。即第二轮审计前，`published=true` 会让 `install_required` 给用户一个**装了也是空目录**的假安装地址（「假可安装」）。
+2. **新增 `scripts/probe_publication.py`**（发布状态复核工具）——
+   - **判据**：SkillHub 搜索 API 按 `publicSlug` **精确命中**（`slug` 或 `namespace.publicSlug` 全等，避免 `ct-safety` 命中 `ct-safety-review` 之类包含式误判）→ 已发布；
+   - **GitHub 仅作诊断**（说明「为什么没上架」：空占位仓库 / 404 / 非空但未上架 → 提示人工确认）；**多端点故障转移**（`--search-url` > env > 公网 `api.skillhub.cn` > CLI `metadata.json`；本机 `metadata.json` 指向内网 LB，直连会证书不匹配，故公网端点优先）；命中端点后缓存复用，避免 21 项 × N 端点重复重试；
+   - 端点全不可达时**不判定**（`verified=None`）并**显式报「未能判定」**，退出码 1 —— 绝不把「查不到」写成「一致」（首版曾误报 ✓，已修）；
+   - `--fix` 回写 `published`（**字节级读写**，避免 `read_text/write_text` 的通用换行转换把全文件 CRLF→LF 造成无关 diff；回写前先 `json.loads` 自校验）；`--json` 机器可读；`--only` / `--handle` / `--no-github`。
+   - **实测结论（2026-09-10，零漂移）**：已上架 = `ct-registry` v0.10.0 / `ct-safety` v0.9.10 / `ct-literature` v1.0.2 / `ct-samplesize` v5.7.26 / `meta-analysis` v2.9.19 / `statsoft-cli` v2.8.2 / `statdata-transfer` v2.2.1（+ `ct-advisor` v0.9.110）；未上架 = 全部 B 档 12 个 + 元层（`ct-base` / `ct-update`）+ **A 档的 `ct-pipeline` / `ct-synthdata`**。即 **A 档 ⊅ 已发布**：档位（输入涉密性）与发布状态是**两个正交维度**。
+3. **新增第 4 个门控状态 `unpublished_a`（A 档但尚未发布）** ——
+   - `handle_need_tool.py`：门控 ②「`not published` → `unpublished_a`」，只说明「尚未公开发布（未在 SkillHub 上架）、当前无法安装」，**不给安装地址**、**不征询同意**（没有可同意的事），随后本地作答 + 标注未取数。
+   - 🔴 **顺序修正（本轮踩到并修掉）**：该门**必须排在 `if not tool_cfg` 之前**。`ct-pipeline` 只登记在 `tiers` 里、**不在 `skills` 自动执行表**，若排在之后会落进「未在 tool_mapping.json 中找到技能映射: ct-pipeline」**硬错**——正是本次改造要消灭的行为。首版把该门写在 `if not _skill_installed(tool_cfg)` 内部，实测即落硬错，已上移到门控 ①（B 档）之后。
+   - `refine_answer.py`：新增 `unpublished_a` 渲染分支；⚠️ **只渲染面向用户的字段**（`message` / `purpose` / `next_step`），`result.hint` 是给 agent 的处置指引，**不得混进用户可见正文**（首版把内部提示渲染进了正文，已修）。新增 `next_step` 字段（面向用户的可执行建议：先分别调用已上架的 `ct-registry` / `ct-safety` / `ct-literature`，由本技能就地缝合）。
+   - `orchestrate.py`：新增 `_unpublished_payload()`；预判路径把 `unpublished_a` 并入「代码直接缝合包裹」组；**无预判**路径下 Coze 索要「B 档 **或** 未发布的 A 档」时一律**短路包裹**（不可安装，委托只是多一次无谓往返）。
+   - **双语补齐（顺带修既有 i18n 缺陷）**：`payload.message` 由代码生成、恒为中文，英文答案会出现「英文骨架夹中文正文」。`unreleased_b` 与 `unpublished_a` 两分支改为**英文路径自带英文文案**，中文路径用 payload 文案。
+4. **`ct-samplesize` 补装后续** —— 本机 `~/.workbuddy/skills/ct-samplesize` 已就位（symlink 至 skills 仓）。契约测试由 **SKIP → 实跑**：`--help rc=0`，**11 个契约 flag 全部命中**，契约 **4/4 = 100%**。其 `engine=coze`（远程 R 服务）不影响 `--help` 契约校验。
+5. **`install_hint` 改为 SkillHub 优先** —— `install_required` 与 `check_deps.py` 的安装提示改为 `skillhub install <slug>`（SkillHub 已上架为权威口径），GitHub `git clone` 降为备用路径；`install_required` 的 `result` 新增 `skillhub` 字段。
+6. **`tool_mapping.json` `tiers.note` / `authority` 重写**：明确「tier 由 §11 `input_sensitivity` 决定，`published` 与之正交，判据 = SkillHub 上架」；`ct-pipeline` 条目补 `note` 记录实测证据（空占位仓库 + 未上架）与「走 `unpublished_a`、不给安装地址」。
+7. **`check_deps.py`**：文件头档位语义改写为「A 档 = 非涉密，**已发布才可安装**」；A 档未发布项提示语由「库内夹具」改为「尚未对外发布——不属于可安装项（给出安装地址只会得到空仓库）」，并注明命中时走 `unpublished_a`。
+8. **测试** —— `run_tier_gate()` 由 9 条扩到 **13 条**：新增 `ct-pipeline` → `unpublished_a`（**断言不得为硬错、不得含 `install_hint`**）、`ct-synthdata` → `unpublished_a`、注册表自洽（已发布 A 档必须带 `github`；存在未发布 A 档且确为 `false`）。
+9. **规则文档同步**：`SKILL.md`（A/B Tier Gate 表新增「A · NOT published」行；Step 3b / Requirements「Sibling skills」/「Only three cases」/「Boundaries」段补 `unpublished_a` 与 SkillHub 判据；`summary` / `description` 同步）；`knowledge/system_prompt.md`（降级段改为三分支：A 档已发布/A 档未发布/B 档，并声明「A 档 ⊅ 已发布」+ 两个工具脚本）；`README.md` / `README_zh-CN.md`（安装 FAQ 补「A 档未上架的怎么办」）。
+10. **ct-base 连带修正**：`docs/05-version-build.md` §11 —— 「实测佐证」由 GitHub 200/404 口径**改为 SkillHub 上架口径**（含逐条版本号），并显式声明「**A 档 ⊅ 已发布**」；`ct-pipeline` 条目补「**尚未发布**、当前不可安装」；A 档 `publish: public` 条目补「仅表示允许并可发布，不代表已发布」。
+
+#### 追加验证（全绿）
+| 测试 | 结果 |
+|---|---|
+| `test_sibling_contract.py` | 契约 **4/4**（`ct-samplesize` 实跑，11 flag 全中）+ A/B 档门控 **13/13**，`exit=0` |
+| 七分支真实 subprocess 实测 | ① A 档已发布未装 → `install_required`（hint = `skillhub install ct-registry`）② + `declined` → `local_fallback` ③ `ct-pipeline` → `unpublished_a`（无 install_hint）④ `ct-synthdata` → `unpublished_a` ⑤ B 档 → `unreleased_b` ⑥ 未登记 → `unreleased_b`（`registered=false`）⑦ `meta-analysis` → `referral` —— **7/7 正确** |
+| `orchestrate.build_output` | 无预判 + Coze 要 `ct-pipeline` → **不委托**、含「尚未公开发布」；预判 `unpublished_a` → 包裹；回归：预判 `install_required` 仍委托且带 `install_request` —— **全部正确** |
+| `refine_answer._merge_answer` | `unreleased_b`（注册/未注册）× `unpublished_a` × 中英双语 —— 渲染正确、无内部提示泄漏、无中英混杂 |
+| `probe_publication.py` | 21 项全部判定、**零漂移**、`exit=0`；**注入漂移实测**：改 `ct-pipeline` → `published=true` → 检出 1 处漂移 + `exit=1`；`--fix` 自动回写为 `false`，**与原始文件 byte-identical**（换行风格保持），JSON 校验通过 |
+
+#### 遗留
+- `ct-pipeline` / `ct-synthdata` 完成 SkillHub 上架后，重跑 `probe_publication.py --fix` 即自动转回 `install_required` 路径，无需改代码。
+- `test_seven_flows.py` 仍为环境性失败（缺 `adapters/coze/project_20260812_152011/`，按 §16.7 不随发布副本），与本次改动无关。
+
+---
+
+### 第三轮：安装通道实测修复（2026-09-10，回归最初目标复查时发现）
+
+**动因**：复查「A 类：先检查是否安装 → 提示安装 → 同意则安装后调用」这一环。
+门控四状态本身正确，但**「同意」之后那一步是断的** —— 交给用户的安装命令执行不了。
+
+#### 实测抓到的三重坑（全部有据）
+1. **裸命令不存在**：`skillhub install <slug>` 里的 `skillhub` **不在 PATH**
+   （`which skillhub` 失败；`~/.local/bin/skillhub` 本机不存在；skill-publish 另记载该
+   bash 启动器有 Windows 路径 bug）。此前 `install_hint` 与两份 README、`SKILL.md`、
+   `system_prompt.md`、`check_deps.py` 都在教用户敲它。
+2. **本机轻量版 CLI 装不了**：`~/.skillhub/skills_store_cli.py` 是 **v2026.3.6（44KB）精简版**，
+   索引/下载端点指向**内网 LB**（`http://lb-*.clb.gz-tencentclb.com`），实测下载得到非 zip →
+   `Downloaded file is not a valid zip archive`。而 filesrv 上的完整版是 **v2026.8.5（226KB）**。
+3. **UNC 路径经 shell 会烂**：完整版 CLI 在网络盘，路径是 UNC。把 UNC 写进命令串经
+   bash/Git-Bash 传递会被**二次拼接**（`\\filesrv\c$\filesrv\c$\...`）→
+   `can't open file`。首次修复用 `os.path.abspath(__file__)` **无效** —— Windows 上
+   `os.getcwd()` 返回的已是解析后真实路径，拼出来仍是 UNC。
+
+#### 修复
+1. **新增 `scripts/install_sibling.py`**（纯标准库）—— 把安装收敛成**一条由同解释器执行的命令**：
+   ① 先查 SkillHub search API **精确核验上架**（未上架即拒装，退出码 3，防止把未发布/B 档技能装进来）；
+   ② 下载 zip 并校验根含 `SKILL.md`；
+   ③ 解压到 `<dir>/<slug>/`（先解到临时目录再改名，避免半成品被探测成「已安装」；含 zip 路径穿越防护）。
+   路径以**参数列表**传给 subprocess（不经 shell）→ 天然规避 MSYS 路径转换与 UNC 拼接。
+   另有 `--force` / `--dry-run` / `--json`，非法 slug → rc=2、已存在 → rc=4。
+2. **`handle_need_tool.py`**：新增 `_helper_path()` / `_cli_has_flag()` / `_skillhub_id()`；
+   `_install_command()` 改为首选自带安装器，CLI 降为后备；路径一律 `as_posix()`
+   （正斜杠）且**拒绝出厂 UNC 形态**；`--dir` 亦转正斜杠（默认 `SKILLS_DIR` 在 Windows 上
+   是 `C:\...` 形态，反斜杠嵌进 shell 命令会被当转义符吃掉）。
+   `install_required` 载荷新增 `install_command` 字段，`skillhub` 字段由**拼出来的未验证 URL**
+   改为 API 实测的 `canonicalName`（`@user_ff7413f5/<slug>`）。
+3. **`refine_answer.py`**：渲染改用 `install_command`（并保留取包说明），不再渲染裸命令。
+4. **`tool_mapping.json`**：`tiers` 新增 `install` 段（authority / namespace / cli_candidates /
+   cli_note / command_template / command_note / verify_url），把上述三重坑与正确用法**固化进注册表**，
+   避免后人再写回坏命令。
+5. **文档同步**：`SKILL.md`（Tier Gate 表 install_required 行、Boundaries「Missing sibling skill」、
+   「Only three cases」段）、`knowledge/system_prompt.md`（A 档安装段 ×3）、
+   `README.md` / `README_zh-CN.md`（安装 FAQ）、`scripts/check_deps.py`（A 档安装提示）——
+   全部由 `skillhub install` / `git clone` 改为 `python scripts/install_sibling.py <slug> --dir <skills-dir>`。
+6. **测试**：`run_tier_gate()` 13 → **17 条**（新增 4 条：命令指向 `install_sibling.py` 而非裸
+   `skillhub`、为绝对路径 + 显式 `--dir` 且目录值正确、**不含 UNC**、引用的安装器文件确实存在）；
+   新增 `run_install_helper()` **7 条离线断言**（非法 slug ×4 → rc=2、已存在无 `--force` → rc=4
+   且**早于联网核验**、`--help` 可解析）。联网路径由 e2e 手工验证，不进单元测试。
+
+#### 第三轮验证
+| 项 | 结果 |
+|---|---|
+| **端到端闭环**（本机真实联网） | 未装 → `install_required` → 执行 `install_command` → **`✓ 已安装 ct-registry v0.10.0`** → 重跑同卡 → **`status=ok`**（50 项试验，16.4s，含 `phase_mix` / `region_mix` 真实取值） |
+| `install_sibling.py` 分支实测 | dry-run 报 v0.10.0；真装落位含 `SKILL.md` + `scripts/ct_registry.py`（即 `tool_mapping` 期望的入口）；重复安装 → rc=4；`ct-pipeline`（未上架）→ rc=3；`ct-protocol`（B 档）→ rc=3；`../evil` → rc=2 |
+| `test_sibling_contract.py` | 契约 **4/4** + 门控 **17/17** + 安装器 **7/7**，`exit=0` |
+| 其余回归 | `orchestrate --self-test` **8/8**；`route_tool --self-test` **22/22 + 6/6**；`test_modeB` **10/10**；`check_deps` 档位标注正确 |
+| `SyntaxWarning` 全库扫描 | `scripts/*.py`（34 个）**零告警** —— 本轮两次因 docstring 里的 `\c` 触发告警并污染 stdout（导致下游 JSON 解析失败），已修 |
+
+#### 第三轮遗留
+- `install_sibling.py` 的**联网路径未进单元测试**（保持测试零网络），仅靠 e2e 手工验证 +
+  离线拒绝分支回归保护。
+- 本机 `~/.skillhub/skills_store_cli.py` 仍是精简版 v2026.3.6（下载端点走内网 LB）。
+  自带安装器已不依赖它，故不影响功能；如需修复该 CLI，走 `skillhub self-upgrade` 或替换为完整版。
+
+---
+
+### 第四轮：安装姿态改为「建议安装」（2026-09-10，彤追加要求）
+
+**要求原文**：「安装可能不能自动安装，会触发安全警告。改为建议安装，或者用户明确授权后再安装。」
+
+**问题**：第三轮把安装命令修到「实测可执行」后，门控的默认语义仍是
+「**征询同意 → agent 代办安装**」——只要用户点头，agent 就会去执行一条**下载 zip 并写入技能目录**
+的命令。这类动作在本机会触发安全提示 / 权限询问（甚至被直接拦下），而文档与提示语把「同意」写得
+过于轻（"是否安装？"），容易被理解成一次普通的确认。[^sec5]
+
+[^sec5]: ct-base §5 只禁止「静默安装」（安装前须有人的审查节点），未规定**默认姿态**。本轮把默认
+姿态收紧为「建议 / 明确授权」，是对该红线的**加强**而非放宽，并已回写 ct-base §5。
+
+#### 改动（一个授权门 + 全套文案）
+1. **`handle_need_tool.py`** —— 新增授权门：
+   - 新增 `_APPROVE_WORDS`（approved / authorize(d) / consent / granted / yes / ok / agree / true …）；
+   - `install_required` 载荷新增 **`install_mode`**（`"suggest"` 默认 / `"authorized"`）、
+     `install_authorized`（布尔）、`install_note`（面向用户的「会写入本地技能目录、可能触发安全提示」说明）；
+   - 只有 `install_consent` **明确命中授权词**才转 `authorized`；**缺省 / 含糊表态一律 `suggest`**；
+   - `hint` 分两套：suggest → **「只建议、不执行」**（把命令原样给出，用户可自行执行；授权前不得代办）；
+     authorized → 允许执行安装命令后带原卡重跑；
+   - `install_hint` 去掉「由 agent 代为取包安装」式表述，改为「安装通道：SkillHub」。
+   - 🔴 门控**状态集合不变**（`unreleased_b` / `unpublished_a` / `install_required` / `local_fallback` /
+     `ok` …），故 `orchestrate.py` 的分流结构无需改动，只是在 `install_required` 分支内按
+     `install_mode` 给出两种 `note`。
+2. **`refine_answer.py`** —— 渲染分两态：suggest 版显式写出「**只建议、不执行**」「用户可自行执行」
+   「在用户明确授权前，不得代为执行该命令」+ 安全提示 + `install_consent` 回执路径（中英双语）；
+   authorized 版改为「用户**已明确授权**安装 → 执行上述安装命令」。标题行亦区分
+   （`（**建议安装**）` vs `（用户已授权安装）`），authorized 版不再附「拒绝」分支文案。
+3. **`tool_mapping.json`** —— `tiers.note` 内 `install_required` 的描述同步为「给安装建议（默认
+   `install_mode=suggest`，不代办）」。
+4. **文档同步** —— `SKILL.md`（frontmatter summary/description、Step 3b 行、Tier Gate 表
+   `A · published, NOT installed` 行重写、Tier Gate 收尾红线段、「Only three cases」段、
+   Boundaries 段、Tier split 段）、`knowledge/system_prompt.md`（新增「**Install posture**」红线条目，
+   改写 A 档安装段 ×3 与 runner 状态说明）、`README.md` / `README_zh-CN.md`（安装 FAQ 改写为
+   「建议安装 / 授权后代办」）、`scripts/check_deps.py`（A 档安装提示与汇总行）。
+5. **`ct-base/docs/02-security-model.md` §5** —— 追加「**技能包安装（sibling skill）**」子条：
+   经 SkillHub 安装兄弟技能包同样属「修改用户环境」且可能触发安全警告 → **建议优先、授权后执行**，
+   检测侧代码只检测 + 上报，参考实现指向 ct-advisor `handle_need_tool.py` + `install_sibling.py`。
+
+#### 验证（全绿，零网络）
+| 项 | 结果 |
+|---|---|
+| `test_sibling_contract.py` | 契约 **4/4** + 门控 **32/32**（17 → 32：新增 15 条）+ 安装器 **7/7**，`exit=0` |
+| 新增断言（门控） | 默认 `install_mode=suggest` 且 `install_authorized is False`；suggest 指引含「只建议」+「不得代为执行」+「明确授权」；**不含**「执行 install_command」；`install_note` 含安全提示；**5 个含糊取值**（`''`/`maybe`/`later`/`ask-me-tomorrow`/`sure?`）均不升级为已授权；`approved` → `install_mode=authorized`；authorized 指引允许执行命令；渲染层 suggest/authorized 措辞可区分（zh + en） |
+| `orchestrate.py build_output` 实跑 | suggest → `note` 为「只建议、不执行」；authorized → `note` 为「用户已明确授权 → 执行其 install_command」；`install_request.install_mode` 透出正确 |
+| 端到端渲染实跑 | 空技能目录 + `ct-registry` 卡：zh suggest 版含命令/安全提示/授权回执，authorized 版改为「已明确授权」并去掉拒绝分支 |
+| 其余回归 | `orchestrate --self-test` **8/8**；`route_tool --self-test` **22/22 + 6/6**；`test_modeB` **10/10** |
+| `SyntaxWarning` 全库扫描 | `scripts/*.py` **零告警**（本轮新增文案含 `"install_consent": "approved"` 转义，已确认不污染 stdout） |
+
+#### 第四轮遗留
+- 未改**授权词表**的国际化（`_APPROVE_WORDS` 为英文词 + `yes/ok`）；中文授权语（"授权安装"）
+  由 agent 理解后落成 `install_consent="approved"`，不在代码里做中文匹配（避免歧义）。
+- 仍未（也**刻意不**）实现「代码自动安装」：安装动作始终由 agent 在授权后执行，代码只检测 + 上报。
+
+---
+
+### 第五轮：README 示例逐条实测校对（2026-09-10）
+
+**要求原文**：「实际跑一下技能 readme 中给出的示例，按照实际上的返回信息做 readme 内容的修改。」
+
+**方法**：把 README 第 1 节的 8 个示例**原样实跑**（`orchestrate.py --payload-inline`，`difficulty/category`
+按各自场景传入；数据类示例另跑 `refine_answer.py --card-inline` 补参重跑），逐条比对 README 的
+「助手会这样回（示意）」与真实 stdout/stderr。原始输出留档在
+`<session>/examples-run/ex1..ex8.{out,err}.txt`。
+
+**实测结论（README 与真实行为不符之处，全部已改）**
+| # | README 原说法 | 实测 |
+|---|---|---|
+| 1 | 直接给出估计目标要点 | Coze 单次调用；成功时是**分节长答**（五要素 + 三节延伸 + 依据 ICH E9(R1)/E3）；`refiner.timeout=60`，本轮实测 3–70 s，**超时回落本地草稿**（stderr `[coze] FALLBACK_TO_LOCAL_DRAFT 原因=ReadTimeout`） |
+| 2 | 每条断言带「数据来源：ct-registry（<日期>）」 | 代码渲染的是分节标题 `## 补充信息（来源：ct-registry）`（**无日期**）+ 表格 + `./out
+eport.xlsx`；Coze 叙事段可能自称「知识库未收录、需专项工具」 |
+| 3 | 本地编排器**一次并行**调 ct-registry + ct-safety + ct-literature 并缝合战略简报 | 首轮返回 `<<<CT_TOOL_DELEGATE>>>`（`need_tool=ct-registry`、`need_tools=[ct-registry, ct-literature]`——**Coze 未列 ct-safety**、`missing_params=[cond]`）；**一张执行卡只跑一个技能**，多源需多轮 |
+| 4 | Coze 拆解出完整方案 + 代码把 n 缝合回方案 | 返回委托块（`missing_params=[test, 效应量参数…]`）→ **先追问**；补参后追加的是 **JSON** `{"n_per_group":162,"total":324,"power":0.8,"solve_for":"n"}`，不是叙事改写 |
+| 5 | 手写的「两个问题 + 六项菜单」 | `clarify_loop.py` 实测返回 2 个 `questions`（人群 / 终点）JSON；`menu.py` 分 3 条流程（methodology / data_intel / clarify），顶层能力选择 **4 项**；**若把 vague 直交编排器，仍会走 Coze**（实测 45 s） |
+| 6 | 「Sure, I'll reply in English from now on.」 | 实测返回的是英文能力清单（7 类）+ 依据行「Language switching is a basic interaction function…」（约 42 s） |
+| 7 | 直接给出带 DOI/PMID 的证据库 | 委托块缺 `topic` → 先追问；补参后答案正文是**检索日志 + 引文验证统计**（`{"total":20,"verified":19,"bot_blocked":1,…}`），证据清单落在 `out/lit_report.xlsx|html`、`out/evidence_log.json|md`；中文检索词提示改英文、无 Semantic Scholar key 跳过该源 |
+| 8 | 两个转交并行完成 | 委托块 `need_tools=[ct-samplesize, ct-registry, ct-literature]` + 缺参 → **先追问**；补参后分轮执行 |
+
+**改动**
+1. `README_zh-CN.md` / `README.md` —— 8 个示例的「助手会这样回（示意）」全部换成「**实际返回（实测）**」
+   （含真实数值、委托块字段、产物路径、追问参数）；📌 说明段同步改写（日期标签、一次一技能、
+   need_params 先行、超时回退、样本量 JSON、文献产物、requests 运行前提）；示例 3 标题与第 2 节
+   索引条目由「三源缝合」改为「多技能 · 逐轮」；版本号 v0.9.110 → **v0.9.111**（对齐 SKILL.md）。
+   新增 FAQ 段：Coze 调用需要 `requests`，**不会自动安装**（缺失时打印 `python -m pip install
+   "requests==2.32.3"` 并退出）；用缺库解释器运行时 `orchestrate.py` 返回 `⚠️ Coze 返回为空`。
+2. `references/ADVANCED.md` —— 「Sibling skills」行由「GitHub clone 安装」改为 **SkillHub +
+   `install_sibling.py`（建议安装 / 授权后执行）**；「Cloud analysis (Coze)」行的
+   `requests`「auto-installed if missing」改为**不自动安装**（附实测两种降级表现）。
+3. `knowledge/system_prompt.md` —— 宽口径需求由「一次调三源并缝合」改为「**先路由主技能、其余技能
+   分轮执行**（runner 一张卡只跑一个技能）」；来源标签由 `"Data source: ct-xxx on <date>"`（代码并不
+   渲染日期）改为与代码一致的 `## 补充信息（来源：ct-xxx）` 且**不得编造日期**。
+
+**验证**
+- 8 个示例全部真实跑通（`rc=0`；其中 2 次 Coze 60 s 超时按设计回落本地草稿，日志一致）。
+- 补参重跑实测：ct-registry（20 项试验）、ct-samplesize（`n_per_group=162 / total=324`）、
+  ct-literature（4 源并行、20 条引文、19 verified、产物落 `out/`）。
+- 两份 README 行数一致（296 行 CRLF）、代码围栏配对（各 10 个）、**纯 CRLF 无混行**；
+  `README.md` 与 `README_zh-CN.md` 的 8 处示例标题与 📌 段一一对应。
+
+**遗留**
+- README 第 2 节场景表里的「试试这样说」均为可直接照抄的问句，本轮**未逐条实跑**（只跑了第 1 节的 8 个示例）。
+- 词表类差异（如 Coze 侧把 ct-safety 漏出候选）属上游 Coze 行为，本轮只如实记录，未改代码。
+
+---
+
+### 第六轮：串行回退消息的超时值改为真实有效超时（2026-09-10）
+
+**要求原文**：「串行回退消息里把超时硬编码成 timeout=60，这个改一下。」
+
+**问题**：`scripts/refine_answer.py` 串行（前台）路径在 Coze 调用失败/超时回退时，stderr 的
+`FALLBACK_TO_LOCAL_DRAFT` 消息把超时**硬编码为 `timeout=60`**。但该路径的实际等待时长是**条件化**的
+——长任务（`complex` 难度 / 模板类 category / 带对话历史的追问）走 `refiner.long_timeout=300s`，
+其余走 `refiner.timeout=60s`。于是长任务超时也会误报「超时=60s」，与真实等待时长不符
+（`adapters/refiner.py` 的 `_refine_serial` 内 `_log_fallback` 本就用真实值，只有串行回退消息这一处不一致）。
+
+**改动**
+1. `adapters/refiner.py` —— 新增公开方法 `CozeRefiner.resolve_timeout(req, timeout=None)`，作为
+   `_resolve_timeout()` 的对外入口，供调用方复用同一套条件化判定（避免跨模块调用私有方法 / 二次实现）。
+2. `scripts/refine_answer.py` —— 串行路径先 `build_refiner()` 拿到实例，再用 `refiner.resolve_timeout(req)`
+   预解析本次有效超时（取不到则退回 `refiner.timeout`，再退回 60），回退消息改为
+   `t("error.fallback_local", ..., timeout=eff_timeout)`；模块 docstring 同步写明「60s 默认 / 长任务 300s」口径。
+
+**验证（端到端实测）**：用一版临时配置（`timeout=3 / long_timeout=7`，端点指向未监听的
+`127.0.0.1:59999` 以强制快速失败）实跑串行回退：
+- `difficulty=simple` 且**无对话历史** → stderr `… 超时=3.0s`（取 `timeout`）✅
+- `difficulty=complex` → stderr `… 超时=7.0s`（取 `long_timeout`）✅
+
+（改动前两者都会打印 `超时=60s`。）另 `refiner.resolve_timeout()` 单元验证：simple/middle → 60.0；
+complex / 模板类 category / `is_followup` / 有对话历史 → 300.0；显式传入覆盖生效。`py_compile` 两文件通过。
+
+**遗留**：其余调用路径（`orchestrate.py`、竞速 `--collect`、`--fire-only`）本就不打印该硬编码消息，
+无需连带改动；`adapters/refiner.py` 自 2026-08-16 起已用真实值，仅串行回退消息此前不一致。
+
+---
+
+### 第七轮：默认 Coze 超时 60s → 90s（2026-09-10）
+
+**要求原文**：「timeout=60，增加到 90。」
+
+**改动**：`config.json` 的 `refiner.timeout` 由 `60` 提到 `90`（`long_timeout=300`、`race_window=30` 不变）。
+连带同步所有把「60」当默认超时的地方（跨模块默认值、条件化判定注释、回退消息兜底、文档）：
+
+| 位置 | 改动 |
+|---|---|
+| `config.json` | `refiner.timeout`: 60 → **90** |
+| `adapters/__init__.py` | `rc.get("timeout", 60.0)` → **90.0** |
+| `adapters/refiner.py` | `Refiner.refine` / `CozeRefiner.__init__` 形参默认 60.0 → **90.0**；类 docstring、`_resolve_timeout` / `_is_long_running` 及 fire-only 注释中的「默认 60s」→「90s」（共 13 处） |
+| `scripts/refine_answer.py` | 串行回退兜底 `eff_timeout = 60` → **90**、`getattr(refiner,"timeout",60)` → **90**；模块 docstring |
+| `README.md` / `README_zh-CN.md` | `refiner.timeout = 60` → **90**；回退示例 `超时=60.0s` → **90.0s** |
+| `SKILL.md` / `references/ops.md` / `references/steps.md` | 表格/流程里「60s timeout」「60 s = 1 minute」「returns within 60s」→ **90s** |
+
+**未改动（有意保留）**：`scripts/install_sibling.py` 的下载 `TIMEOUT=60`（安装器下载，与 Coze 无关）；
+`scripts/tool_mapping.json` 中 ct-samplesize 的本地执行 `timeout: 60`（本地纯计算，非 Coze 调用）；
+`adapters/coze/src/utils/file/file.py` 的 `requests.get(..., timeout=60)`（Coze 平台 vendored 代码）；
+`adapters/refiner.py` 内的百分比示例 `40%~60%` 与「60 分钟缓存 TTL」（非超时语义）；
+`adapters/coze/**` 的 refiner 契约快照（平台侧副本，不随发布副本）。
+
+**验证**
+- `config.json` 解析：`refiner = {timeout: 90, long_timeout: 300, race_window: 30}`。
+- `build_refiner()` 实取 `timeout=90.0`；`resolve_timeout()`：simple/middle → **90.0**，complex / 追问 → **300.0**。
+- `py_compile` 三个改动文件通过；`orchestrate.py --self-test` / 契约测试 / 门控门测无回归。
+
+**版本**：v0.9.111 → **v0.9.112**（`SKILL.md` + 两份 README 同步）。
+
+---
+
+### 第八轮：README 案例改为「用户可见」表述（2026-09-10）
+
+**要求原文**：「现在 readme 中案例的结果输出不对，非常的 IT 化，需要按照用户所见即所得的内容，给出对于用户而言能够理解的回答内容。」
+
+**问题**：第 1 节 8 个示例的「助手实际返回」直接铺陈**内部协议**——`need_tool` / `need_tools` / `missing_params` 委托块、
+`<<<CT_TOOL_DELEGATE>>>`、样本量 JSON `{"n_per_group":162,…}`、ct-literature 的 `[OK] source …` 检索日志与引文统计 JSON、
+`./out/…` 产物路径、stderr 回退日志——这些是**编排层协议、用户在对话框里看不到**，读起来非常 IT 化。
+
+**改动**（两份 README 同步，结构逐条对齐）
+1. 每个示例的「助手实际返回」改为**用户可见的自然语言回答**（要点 / 表格化表述），保留真实实测数值
+   （示例 2 的 50 项 / 分期·地域·申办方分布；示例 4 的每组 162 / 合计 324；示例 7 的 20 篇 / 19 篇核验通过）。
+2. 末尾统一加**一行**内部机制注（📌 / 📌 Under the hood），替代原先冗长的技术说明段；
+   删除示例内所有 fenced code block（委托块 / JSON / 检索日志），两份 README 代码围栏归零。
+3. 多轮案例（示例 3 / 4 / 7 / 8）改为**两段**：「第 1 轮 · 追问」（用户收到的自然语言提问）+
+   「补参后 · 最终答案」（可读结果），覆盖「先追问缺参再执行」的真实行为。
+4. 第 1 节导语由「节选自真实运行输出」改为「展示你在对话框里实际看到的内容」。
+5. 标题微调：示例 1「转发，不弹菜单」→「直接作答，不弹菜单」；示例 4「转发，由 Coze 拆解」→「先追问，再计算」。
+
+**未改动**：示例 3 的候选技能来源（`need_tools` 含 ct-registry / ct-literature）、示例 1 / 4 / 7 的实测耗时等
+仍与内部行为一致，只是不再以协议字段形式裸露；示例 3 / 8 补参后的最终答案为**结构示意**（该多轮路径未逐条实测到最终文本），
+以概括性描述呈现、未编造具体数值。
+
+**验证**
+- 两份 README：各 **8 个示例**、结构一一对应；**纯 CRLF（319 行 / 0 bare-LF）**；代码围栏 **0**（无残留半截围栏）。
+- 全库扫描：`示意` / `measured, excerpted` / 委托块字段 / 检索日志等旧表述仅剩 **CHANGELOG 历史条目**（保留为史实）。
+
+**版本**：v0.9.112 → **v0.9.113**（`SKILL.md` + 两份 README 同步）。
+
+---
+
+### 第九轮：示例 1 换题 + 兄弟技能调用后提示「直接用该技能」（2026-09-10）
+
+**要求原文（三条）**：
+1. 「中文 readme 开头做了修改。」（用户已手改中文版开头 → 英文版需同步为同一口径）
+2. 「示例 1 似乎空泛了一些，考虑换一个？」
+3. 「调用其他技能的时候，需要确认真实的输出应该建议用户直接使用相关技能得到更详细的输出。」
+
+**改动**
+1. **示例 1 换题**：原题「优效设计、两平行组，主要估计目标该怎么设？」的答案是一份通用 E9(R1) 五要素清单，偏空泛。
+   换为具体场景「III 期肿瘤试验，主要终点 OS，试验组进展后允许交叉使用对照药 —— 主要估计目标该怎么设？」，
+   并按**实测**（`examples-run/run_examples.py ex1_methodology`，70.3s）改写答案：治疗政策策略 vs 假设策略（RPSFTM / IPCW）、
+   ITT/FAS 与 PPS、样本量按交叉率放大、进展后治疗史采集、PFS/ORR 次要终点。
+   ⚠️ 注：Coze 两次运行**侧重不同**（一次以治疗政策为「首选」、一次称假设策略为「主流」），故正文改为**中性并列**——
+   「取哪一种取决于你要回答的临床问题」，不采信单次运行给出的主次排序。
+2. **💡 建议行（代码改动）**：`refine_answer.py` 的 `_merge_answer()` 在缝合 `## 补充信息（来源：ct-xxx）` 时，
+   追加一行「以上为该技能结果的可读摘要；如需核实或获取更详细的原始输出，建议直接使用 `ct-xxx` 技能。」
+   （zh/en 随提问语言由 `_detect_lang` 切换）。实测 ex2（ct-registry，35.2s）已在 `<<<CT_ANSWER_END>>>` 前出现该行。
+   两份 README 的示例 2 / 3 / 4 / 7 / 8 同步显示该行；§2 场景索引注 + §3 FAQ（来源标注条）补充说明；`SKILL.md` 增补该行为说明。
+3. **英文开头同步**：删除与实测不符的「prefetch … **in parallel** with the Coze cloud workflow」表述，
+   改为与中文一致的口径（本地编排器 / 需要时本地运行兄弟技能、代码内缝合）。
+4. **中文版格式修复**（用户编辑器把该文件存成了 LF）：恢复 **CRLF**；清除 5 处 `\r>` 残字（示例 4 / 7 的追问行、`<div>` 图标块、FAQ 标题）
+   与 3 处 HTML 实体（`&#x542B;`→含、`&#x4E0E;`→与、`&#x7684;`→的）。
+
+**验证**
+- `_merge_answer()` 单元验证：zh / en 两路均在来源小节后正确追加 💡 行。
+- 两份 README：CRLF=374 / 335，**bare-LF=0、bare-CR=0**，HTML 实体 **0**，代码围栏 **0**；💡 各 7 处（5 个示例 + §2 索引注 + FAQ）。
+- 端到端复测：ex1（70.3s）、ex2（35.2s）rc=0；`orchestrate.py --self-test` 与契约测试见下。
+
+**版本**：v0.9.113 → **v0.9.114**（`SKILL.md` + 两份 README 同步）。
+
+---
+
+### 第十轮：答案长度失控——云端「作答契约」（2026-09-10）
+
+**触发（彤）**：示例 1 的答案「讲得很细，反而最终没有回答这个问题。请全面评估应该如何修整技能。」
+
+**诊断（端到端追查）**：`route.py` → Coze `validity_check` → 两个出答案节点 → 节点提示词原文 → 部署包。根因不在示例 1，而在**云端提示词**：
+
+| # | 根因 | 证据 |
+|---|---|---|
+| 1 | 两个出答案节点都取消了字数上限 | `full_analysis_cfg.json` 的 sp：「本节点**不设置任何字数上限**」；`review_cfg.json` 的 up 同样写「不设置字数上限」，且两者都允许 `###` |
+| 2 | 档位字数上限成死条文 | v1.5 的 simple ≤150 / middle ≤400 / complex ≤600 字只写在 `coze_system_prompt_v1.4.md`，该文件**全库零代码引用**；真正生效的是 `config/*.json` |
+| 3 | 激励反向 | sp 明写「质量优先于标签……**绝不为迎合难度标签而压缩覆盖**」 |
+| 4 | 「紧扣问题」被降级 | 埋在「废话约束」里，且只管润色措辞，管不住「多写整节未被问到的议题」 |
+| 5 | 拆分放大 | `generate_organized_problems` 对 complex 拆 ≤7 条子问题 → 每条一小节 |
+| 6 | 难度判偏 | `judge_difficulty` 把单点方法学问句判 complex，与本地 `steps.md`「纯方法学问句永远 simple/middle」冲突 |
+| 7 | 对「该怎么设」不给推荐 | 无「决策型问题必须给一个推荐项」规则 → 并列两案并把选择推回用户 |
+| 8 | 文档替缺陷背书 | 第九轮把实测输出「中性化」写进 README，等于把缺陷固化成文档 |
+
+**实测证据（本轮新建，存 `examples-run/`）**
+- `ex1_prefix_sprawl_alpha.out.txt`：问「III 期确证性试验计划做一次期中分析，怎么把总 I 类错误率控制在 0.05？」→ **5 节 / 4522 B**，含 **DSMB 角色与决策流程、信息时间选取、边界分配规则**等未被问到的整节（79s 返回，未超时）；
+- `ex1_prefix_sprawl_crossover.out.txt`：交叉用药估计目标题 → 多节，且**被 `max_completion_tokens` 截断在「### 四」**；另一轮在治疗政策 / 假设策略间摇摆、不给推荐。
+
+**修复（作答契约，写入 4 个真正生效的节点配置）**
+- **C1 先答后展**：第一段必须独立完整回答字面问题；决策 / 构造型问题**必须先给一个明确的推荐答案**（要素填满），再 ≤3 句理由；禁止把答案拆散到多节、禁止把选择推回用户。
+- **C2 边界锁定**：只答 original_question 问到的内容；未被问到的相邻议题**不得单独成节**，需要时折叠为末尾**一行**「如需，我可以进一步展开：①…②…③…」。
+- **C3 难度即字数硬上限**：simple ≤150 / middle ≤400 / complex ≤600 字，禁用 `###`；明写「不得以完整覆盖为由超限或新增未问议题」。
+- **C4 单一推荐**：并列方案最多一行。
+- **落点**：`config/full_analysis_cfg.json`（sp+up）、`config/review_cfg.json`（sp+up）顶部 + 尾段 + 自检；`config/generate_organized_problems_cfg.json`（拆分只按问到的维度 + 自检一条）；`config/judge_difficulty_cfg.json`（收紧 complex）；`knowledge/methodology-core.md`（镜像）。
+- **同步本地 brain**：`knowledge/system_prompt.md`、`knowledge/methodology_core.md`（同一 Answer contract + 反模式两条）；`SKILL.md`（硬门控清单加「作答契约」条，并明确 agent 是管道、**不得本地改写**长答案）；`references/steps.md`（Step 0 注明难度已驱动硬预算）。
+- `coze_system_prompt_v1.4.md` 顶部加**「无代码引用、改动无效」横幅**，防同类失效重演。
+- 示例 1 换成**单点有唯一正解**的题（期中分析 α 控制），并标注「修复后目标形态，待重部署后以实测替换」。
+
+**交付**：Coze 部署包 **`ct-advisor_coze_v1.11_20260910.zip`**（99 文件，沿用「不含 refiner_contract*.md」红线）；`README_部署说明.md` 更新为 v1.11（含部署后探活验证点）；`coze_modification_guide.md` 新增「〇、作答契约」节。
+
+**未完成 / 待办**
+- **需重部署**：契约写在云端 `config/*.json`，**必须上传 zip + 重建镜像**才生效 —— 本地无法验证效果。
+- README 示例 1 的答案目前是**目标形态**而非实测；重部署后应重跑一次并以实测文本替换。
+
+**版本**：v0.9.114 → **v0.9.115**。
+
+### 第十一轮：C3 由「字硬上限」校准为「预期量级 + 硬天花板」（2026-09-10）
+
+**触发（彤）**：「C3 难度即字数硬上限，不过原先的上限是否过严，导致有时候太精简？以前的做法是参考而不是硬上限。」
+
+**诊断**：第十轮把答案从「多节长报告」拉回正轨，但 C3 本身有两个反向缺陷：
+
+| # | 问题 | 证据 |
+|---|---|---|
+| 1 | 只给上限、不给下限 | C3 表只有「≤150 / ≤400 / ≤600 字」。天花板是缩短的**许可**，不是说全的**义务** → 模型达标的唯一路径是删要素 |
+| 2 | 明文压过完整性 | C3 写「不得以『完整覆盖 / 质量优先』为由突破字数上限」，即 **C3 战胜 C1**；而 C1 要求「把要素填满」。冲突时按 C3 执行 → 删要素 |
+| 3 | 中英单位不一致（真 bug） | `config/*.json` 写 `字`，而 `knowledge/methodology_core.md` / `knowledge/system_prompt.md` / `references/steps.md` 写 **words**；400 words ≈ 600–700 中文字，两层预算差约 **1.6 倍**。且 `adapters/coze/src/kb/__init__.py` 确有 `get_knowledge("methodology-core")` → 该「words」版本**真的会喂给云端模型** |
+| 4 | middle 是重灾区 | `judge_difficulty_cfg.json` 把单点方法学问句（「该怎么设估计目标」「怎么控 α」「A 与 B 哪个更合适」）**一律判 middle**，故最常见题型拿最紧预算；complex（600）反而不常触发 |
+
+**历史反向证据**：`refiner_contract.md` 记载 CTDB (3).xlsx 41 条中 simple 题 ≤150 字达标率仅 **38%**（目标 80%）——说明 150 对模型自然输出偏紧、需主动压缩；但 simple 题压缩无信息损失，故痛点集中在 middle / complex。
+
+**修复**
+- **C3 改为「预期量级 + 硬天花板」**：simple ~100 / ≤200 · middle 300–500 / ≤700 · complex 500–800 / ≤1000（**中文字符**）。
+- **新增最高优先条款：要素完整（C1）优先于字数（C3）**——字数只约束**冗余**，不约束**回答原问题所必需的要素**。
+- **明确删除顺序**：天花板仅在超出预期量级且确有冗余时触发；触发后按 **① 跑题内容（C2）→ ② 重复 / 稀释 → ③ 表述压缩** 删减。
+- **明写禁止**：不得为压字数删要素 / 依据 / `⚠️ 待核实` 标注；宁可靠近天花板也不得删要素；若填满要素仍逼近天花板，说明该题**被低估档位**。
+- **单位统一为「字」**：英文知识层改为 `~100 chars` / `300–500 chars` / `≤200` / `≤700` / `≤1000 chars`，并加注与节点配置一致，从根上消除两层互相矛盾的预算。
+- **落点**：`config/full_analysis_cfg.json`（sp+up+自检 20）、`config/review_cfg.json`（sp+up）、`config/judge_difficulty_cfg.json`（sp）；`knowledge/methodology_core.md` + 云端镜像 `adapters/coze/knowledge/methodology-core.md`（保持逐字节一致）、`knowledge/system_prompt.md`、`references/steps.md`、`SKILL.md`。
+
+**交付**：Coze 部署包重出为 **`ct-advisor_coze_v1.12_20260910.zip`**（**累积包**：v1.10 + v1.11 作答契约 + v1.12 C3 校准，**取代尚未部署的 v1.11**）；`README_部署说明.md` 与 `coze_modification_guide.md` 增补本节。
+
+**未完成 / 待办**
+- **仍需重部署**（上传 zip + 重建镜像）后才生效；README 示例 1 的答案仍是**目标形态**、非实测，重部署后应重跑替换。
+- 新数值（200 / 700 / 1000）为**设计取值**，非实测校准值；重部署后建议用 `examples-run/run_examples.py` 复跑 8 个示例，按真机长度回校。
+
+**版本**：v0.9.115 → **v0.9.116**。
+
+### 第十二轮：重部署后复跑 8 例 + 修复暴露出的「路由裸子串」缺陷（2026-09-10）
+
+**触发（彤）**：「已更新，重跑一下。」——v1.12 已上传 zip 并重建镜像，复跑 README 8 例回校长度，并把示例 1 的占位答案换成实测文本。
+
+**复跑结果（8 例，Coze 已重部署）**
+
+| 示例 | 返回形态 | 结果 |
+|---|---|---|
+| 1（中文·方法学控 α） | 直接作答 | ✅ **373 字 / 262 汉字**（修复前 **1657 字 / 5 分节**且始终未回答「怎么控 α」）；3 次复跑 548 字，稳定直答 |
+| 2（注册试验检索） | ct-registry 缝合 | ✅ 直答 + 50 项注册试验三张分布表 + `report.xlsx` + 兄弟技能提示 |
+| 3（竞品情报） | 委托 | ✅ `need_tools=[ct-registry, ct-literature]` |
+| 4（II 期设计 + 样本量） | 委托 | ✅ `ct-samplesize`，缺 `test` + 效应量参数，按预期追问 |
+| 5（模糊需求） | 本地澄清 | ✅ 198 B 澄清话术 |
+| 6（切英文） | 直接作答 | ✅ 496 B 英文确认 |
+| 7（已发表安全证据） | 委托 | ✅ `need_tools=[ct-safety, ct-literature]` |
+| 8（文献 + 样本量） | 委托 | ✅ `need_tools=[ct-samplesize, ct-registry, ct-literature]` |
+
+**复跑暴露的问题**：英文版示例 1 未正常作答，而是委托 `ct-registry`。逐层定位后确认是**两层互不相关**的缺陷：
+
+| # | 层 | 缺陷 | 证据 |
+|---|---|---|---|
+| 1 | **本地** `scripts/route_tool.py` | registry 触发词含**裸词** `\btrials?\b`：任何含英文 "trial" 的问句都判为检索注册试验；而 METHOD/DEF 兜底词**只有中文**，英文方法学问句直接穿透 | `predict()`：同问句 EN → `ct-registry`（缺 cond）；ZH → `None` |
+| 2 | **云端** `src/graphs/nodes/tool_router_node.py` | 词表用**裸子串** `in` 匹配：`ror` 命中 `error`、`sign` 命中 `design` / `signals` | A/B 实测：同问句仅把 `error` 换成 `alpha` → 由 `need_tool=ct-safety` 变为正常作答 |
+
+**修复（已自测 / 对照验证）**
+- **本地**：registry 英文裸词改为「介词 / 逗号 / 句末」**锚定** —— `(?:clinical\s+|oncology\s+)?trials?\b(?=\s*(?:[,;]|\b(?:for|in|of|on|among|with|from)\b|$))`。`trials for/in/of`、`trials,` 等真实检索句式仍命中；`trial plans / trial design` 等方法学用法不再命中。新增 2 条 self-test 回归用例。
+- **云端**：新增 `_kb_hit()` —— 纯 ASCII 词条改用**词边界**匹配（`(?<![a-z0-9])…(?![a-z0-9])`），中文词条仍按包含匹配；`TOOL_RULES` 与 `GUIDELINE_TERMS` / `GUIDELINE_SEARCH_INTENT` 均接入。新旧对照：`type I error rate` → `[ct-safety]` ⇒ `[]`；含 `design` / `safety signals` 的英文示例 3/4 由被 `GUIDELINE` 误拦恢复为正确多源命中。
+
+**已知残留（未改，待决策）**
+- 云端**没有**「咨询意图」护栏（本地有 `METHOD` / `DEF` / `DOC`），故裸词 `clinical trial` 仍会把**设计咨询题**判成检索。实测：`…structure for a clinical trial in an ultra-rare…` → `need_tool=ct-registry`；把 `clinical trial` 换成 `study` → 正常作答（3480 B）。
+- 云端语义缓存（≥95% 相似即命中）会让**英文提问命中中文缓存**：英文示例 1 复跑时多次直接返回中文答案，且同一 payload 两次结果不同（一次作答、一次委托）——这解释了修复前的「时好时坏」。
+
+**交付**
+- **本轮不重出部署包**：云端修复**暂存于 `src/`**，等「残留项」定了方向再一次性出包，避免为一个未完成的修复让用户重复部署。
+- 本地修复**即时生效**（无需重部署）。
+- README 示例 1 答案由「目标形态」替换为 **2026-09-10 重部署后的实测输出**（中英双版同步；英文版为等义译文并如实标注）。
+
+**验证**：`route_tool --self-test` 24/24 + 参数 6/6、`route.py --self-test` 29/29、`orchestrate --self-test` 8/8、`test_modeB` 10/10、`test_sibling_contract` 契约 4/4 + 门控 32/32 + 安装器 7/7、`test_seven_flows` 7/7；云端节点文件可加载执行。
+
+**版本**：v0.9.116（未升版 —— 部署包未重出）。
+
+### 第十三轮：README 示例改版（实操题上位）+ 修「在研」误命中与云端词表主循环补漏（2026-09-10）
+
+**触发（彤）**：「建议前面的案例换成下面这种实操性的问题会更有代表性。」——给出两条角色实操题：
+① 研究者／受试者补偿（SAE 提前退出是否该付全额 5000 元交通补贴，GCP 有何要求）；
+② 药物警戒／预期性判断（IB 列「少见」但实测 15%，是否需更新 IB 与标签）。
+
+**示例区改版（用户选「只换示例 1」，中英双语同步）**
+
+| 新编号 | 主题 | 分类 | 来源 |
+|---|---|---|---|
+| 示例 1 | 受试者补偿怎么给（GCP 判断） | `methodology:D`（GCP & quality） | 本轮新增（用户提供） |
+| 示例 2 | 预期性判断：要不要更新 IB 和标签 | `methodology:F`（Safety & DSUR） | 本轮新增（用户提供） |
+| 示例 3 | 单一维度数据需求（ct-registry） | — | 原示例 2 |
+| 示例 4 | 宽口径竞品情报（多技能 ⭐） | — | 原示例 3 |
+| 示例 5 | 多部分设计任务（先追问再计算） | — | 原示例 4 |
+| 示例 6 | 不确定要什么（模糊 → 本地澄清） | — | 原示例 5 |
+| 示例 7 | 切换输出语言 | — | 原示例 6 |
+| 示例 8 | 已发表安全性证据核查（ct-literature） | — | 原示例 7 |
+| 示例 9 | 方案证据基础 + 样本量协同 | — | 原示例 8 |
+
+- 原示例 1（方法学控 α）**移出示例区**；其「修复前 1657 字 / 5 分节 → 修复后 373 字」的对照证据保留在第十二轮小节。
+- 多轮案例编号同步更正：示例 3 / 4 / 7 / 8 → **示例 4 / 5 / 8 / 9**；「下面 8 个示例」→「**9 个示例**」。
+- 两条新答案均为 **2026-09-10 实测输出**（非目标形态）：
+  - 示例 1 —— **383 字 / 313 汉字**：首句给结论（应付全额、不得扣减），随后两条执行要求，依据《药物临床试验质量管理规范》2020 年版。
+  - 示例 2 —— **465 字 / 362 汉字**：首句给结论（默认需更新 IB），再分三步（数据校准 → 因果关联评估 → 更新动作落地），依据 ICH E2F + CDE RSI 指引。
+
+**改版过程中暴露并修复的缺陷（同一类「裸词/裸子串过匹配」，第三次复发）**
+
+| # | 层 | 缺陷 | 证据 / 影响 | 修复 |
+|---|---|---|---|---|
+| 1 | **本地** `scripts/route_tool.py` | registry 触发词含裸词 `在研`，命中「在研**究者**手册」 | 示例 2 实测被委托 `ct-registry` 且追问缺失参数 `cond`（`route_tool.predict` → `ct-registry`, confidence=high） | 改为 `在研(?!究)`：「在研究者」「在研究中」不再命中；「在研药物／在研项目／在研试验」仍命中。`REG_INTENT` 同步 |
+| 2 | **云端** `src/graphs/nodes/tool_router_node.py` | 第十二轮新增的 `_kb_hit()` **只接上了 `GUIDELINE_TERMS` / `GUIDELINE_SEARCH_INTENT`**，`TOOL_RULES` 主循环仍是裸子串 `if any(kw in q for kw in keywords)` —— 即 `ror` ⊂ `error`、`sign` ⊂ `design` 的修复**从未真正生效** | 上一轮「已修」的记录与实际代码不符（本轮 grep 发现） | 主循环改用 `_kb_hit`；`DOC_WORDS` / `LIT_FIRST_WORDS` / `REG_INTENT_WORDS` 三处判定一并接入 |
+| 3 | **云端** 同文件 | 边界写法 `(?!s?[a-z])` 会被正则回溯绕过（`s?` 可取空 → `[a-z]` 命中复数尾字母）→ **误伤全部复数形式召回** | 实测 `adverse events` / `sample sizes` / `systematic reviews` / `landscapes` 4 条全挂 | 改为 `(?<![a-z])<kw>s?(?![a-z])`：保留复数与「紧跟数字」（`NCT04512345`）召回，同时仍拦住 `sign` ⊂ `signals` |
+
+**新增回归测试**：`scripts/test_tool_router.py` —— 云端词表命中语义 + 端到端主判，**39/39**。
+用 stub 顶掉 langchain / langgraph / coze 运行时依赖后**直接加载真实节点文件**，不依赖 Coze 环境；
+模块加载失败判为**失败**而非跳过（防「静默不测」）。词表的 `~<regex>` 转义约定亦由该测试锁定。
+
+**已知残留（未改，仍待用户决策）**
+- 云端**没有**「咨询意图」护栏（本地有 `METHOD` / `DEF` / `DOC`），故裸词 `clinical trial` 仍会把**设计咨询题**判成检索。
+  实测：`…structure for a clinical trial in an ultra-rare…` → `ct-registry`；换成 `study` → 正常作答 3480 B。
+- 云端 registry 词表缺 `竞品` / `适应症`（本地有），故纯中文竞品情报句在**云端**判 `ct-safety`；
+  实际链路由**本地预判优先**兜住（判 `ct-registry`），端到端无影响。
+- 代码注释中大量历史「README 示例 N」标注随本次改版**整体 +1**（原示例 1 已移除），本轮未逐条回改，已在 CHANGELOG 记录映射。
+
+**交付**
+- 部署包重出为 **`adapters/coze/ct-advisor_coze_v1.13_20260910.zip`**（累积包，取代 v1.12；v1.12 移入 `_archive/`）。**仍需上传 zip + 重建镜像**才生效。
+- 本地修复（`route_tool.py`）**即时生效、无需重部署** —— 故 README 两条新示例在**当前部署**下即可正确作答。
+
+**验证**：`route_tool --self-test` **27/27** + 参数 6/6、`route.py --self-test` 29/29、`orchestrate --self-test` 8/8、
+`test_tool_router` **39/39**、`test_modeB` 10/10、`test_sibling_contract` 契约 4/4 + 门控 32/32 + 安装器 7/7、`test_seven_flows` 7/7。
+
+**版本**：v0.9.116 → **v0.9.117**。
+
+### 第十四轮：云端补英文咨询意图护栏 + 回答姿态改为「先自身作答、末尾建议」+ 调用门槛收紧（2026-09-10）
+
+**触发（彤）**：「云端补英文咨询意图护栏，镜像本地的 METHOD/DEF/DOC 逻辑。因为有关键词误报的问题，技能的回答逻辑需要调整：需要调用 ct-系列技能的时候，advisor 首先基于自身能力回答，最后再建议是否安装兄弟技能。同时缩窄调用其他技能的关键词命中范围。只有需求关联非常明确的时候才进行调用。」
+
+**口径确认（AskUserQuestion）**
+- 已安装技能 + 需求「非常明确」→ **仍自动调用**取真实数据（保留 ct-advisor 取数核心价值）；
+- 「非常明确」的阈值 = **仅强专有词 / 句式**（泛词不再单独触发）。
+
+#### ① 云端补齐英文咨询意图护栏（镜像本地）
+- **缺陷**：云端 `tool_router_node` **只有词表、没有任何咨询意图护栏**，且本地 `route_tool` 的 `METHOD` / `DEF` / `DOC` **只有中文**。
+  于是英文方法学问句直接穿透：实测「A confirmatory Phase III trial plans one interim analysis — **how do I keep the overall type I error rate at 0.05?**」
+  因含裸词 `trial` 被判 **ct-registry**（并弹 `cond` 追问）。
+- **修复**：新增 `_CONSULT_DEF` / `_CONSULT_METHOD` / `_CONSULT_DOC`（中英并列）与 `_RETRIEVAL_INTENT` 例外，
+  `_consultation_intent()` 在 `_match_tool` **最前置**调用：命中护栏且**无明确取数动作** → 原生作答、不委托。
+  本地 `route_tool` 同步补齐英文等价词（两处同义、需同步改）。
+- **踩坑**：护栏判断**必须用小写文本**——英文护栏词区分大小写，句首 `How do I…` 否则不命中（已加注释与回归）。
+
+#### ② 调用门槛收紧：强触发词 vs 弱触发词
+- **强触发词（`TOOL_TRIGGERS` / `TOOL_RULES`，自动调用）**：① 具名数据源（NCT / ClinicalTrials.gov / FAERS / PubMed / OpenAlex…）；
+  ② 具名统计量或高特异性方法（PRR / ROR / EBGM / 去激发再激发 / 因果关系判定 / 具体 irAE / 病例报告 / meta 分析…）；
+  ③「检索动词＋明确对象」完整句式（`检索…注册试验`、`Pull the registered trials for…`、`找…文献`）。
+- **弱触发词（`WEAK_TRIGGERS`，只建议不调用）**：`信号` / `文献` / `试验` / `安全性` / `设计` / 裸 `注册` / `在研` 等——一律不再自动调用。
+- 保留 `LIT_FIRST` / `REG_INTENT` 协同规则与「文献强意图上位」逻辑。
+
+#### ③ 回答姿态：先自身作答 + 末尾建议
+- **新增** `route_tool.suggest_footer(tools, lang)`：产出答案**末尾**的软建议（中英随提问语言），
+  文案明确「以上已按本技能自身能力作答；如需真实数据或更深入分析，可安装 / 调用后再补充」。
+- **接线**：`orchestrate.build_output` 新增 `suggest_tools` 形参与 `_wrapf()` 局部包装（9 处 `_wrap(` 改走 `_wrapf`）；
+  `refine_answer --ship` 在 `_emit_wrapped` 前、且 `need_tool` 为空时追加软建议。
+- **`install_required` 改为非阻断**：由「`<<<CT_TOOL_DELEGATE>>>` 委托补参 / 安装」改为
+  「**答案在前、安装建议在后**」的包裹答案（复用 `_merge_answer` 的 install 渲染，安全姿态不变：只建议、不执行）。
+- `predict()` 返回结构新增 `suggest_tools`；`need_tool` 仍为兼容字段。
+
+#### 验证（全绿）
+- `route_tool --self-test` **34/34** + 软建议 **6/6** + 参数 6/6（新增「泛词不触发」「软建议」断言）
+- `test_tool_router`（云端，新增咨询护栏 + 软建议两组断言）**58/58**
+- `route.py --self-test` 29/29、`orchestrate --self-test` **9/9**（新增软建议断言）、
+  `test_seven_flows` **8/8**（F7 题干换为强触发词，新增 F8「弱命中 → 包裹 + 末尾软建议」）、`test_modeB` 10/10、
+  `test_sibling_contract` 契约 4/4 + 门控 32/32 + 安装器 7/7。
+
+**交付**
+- 部署包重出为 **`adapters/coze/ct-advisor_coze_v1.14_20260910.zip`**（累积包，取代 v1.13；v1.13 移入 `_archive/`）。
+  **仍需上传 zip + 重建镜像**才生效；本地改动（本地路由 / 编排 / 缝合）**即时生效**。
+
+**版本**：v0.9.117 → **v0.9.118**。
+
+### 第十五轮：交接口径更正（以代码为准）+ 修复「软建议溢出」（2026-09-10）
+
+**触发（彤）**：接手第十四轮交接文件后复核，发现两处不一致 → 裁定「① 按代码文件改；② 修改」。
+
+#### ① 交接口径更正（仅文档，无代码改动）
+- 交接文件 §4.2-2 原把「查 XX 药的文献」列为「**无强触发**」的弱命中抽验句，**与代码 / 测试矛盾**：
+  `route_tool.py` SELF_TEST 断言该句 → `ct-literature`（高置信）；`test_tool_router.py` 亦断言
+  「帮我找 XX 药治疗肺癌的最新文献」→ `ct-literature`，并把该句列入护栏让位用例。按强触发规则③
+  「检索动词＋明确对象」，**该句本就是强命中**。
+- **以代码为准（用户裁定）**：更正 `docs/HANDOVER_20260910_round14.md` §4 抽验口径——弱命中抽验句改用
+  「查 XX 药的安全性信号有哪些」；同一文件头部（版本 / 部署包 / 技能目录路径）与 §0 状态一并更正。
+
+#### ② 修复「软建议溢出」（本地 + 云端同步）
+- **缺陷**：第十四轮把误报从「阻断式自动调用」降级为「非阻断式末尾建议」，但**建议侧词表未同步收紧**——
+  咨询意图护栏命中时仍回落到弱词表，于是裸弱词 `trials?`（ct-registry 词表项）会给**纯定义 / 方法论题**
+  附一条题不对路的建议。即已消灭的误报换个位置继续出现。
+  实测三句此前均建议 `ct-registry`：「…how do I keep the overall type I error rate at 0.05?」、
+  「What is the difference between ITT and mITT in a confirmatory trial?」、「How do I design a Phase III clinical trial?」。
+- **修复**：护栏命中时**只保留强命中的建议**（具名数据源 / 具名统计量 / 高特异性方法 / 完整检索句式）。
+  - `scripts/route_tool.py`：护栏分支 `_none(strong + weak)` → **`_none(strong)`**。
+  - `adapters/coze/src/graphs/nodes/tool_router_node.py`：`_suggest_tools(question, strong_only=False)`
+    新增形参，`strong_only=True` 时跳过 `WEAK_TRIGGERS`；调用点传
+    `strong_only=_consultation_intent(state.original_question)`。
+- **设计边界**：护栏只压**弱词溢出**；问题中若确有**具名数据源 / 统计量**（如「什么是 FAERS 信号」），
+  建议照留——那本就是真命中。
+
+#### 验证（全绿）
+- `route_tool --self-test`：工具命中 **34/34** + 软建议 **10/10**（新增 4 例）+ 参数 6/6。
+- `test_tool_router`（云端）**63/63**（新增 5 例）；测试改按**生产调用形态**取值
+  （`strong_only=_consultation_intent(q)`），避免默认参数掩盖回归。
+- 其余 5 套：`route.py` 29/29、`orchestrate` 9/9、`test_seven_flows` 8/8、`test_modeB` 10/10、
+  `test_sibling_contract` 契约 4/4 + 门控 32/32 + 安装器 7/7。
+
+**交付**：部署包重出为 **`adapters/coze/ct-advisor_coze_v1.15_20260910.zip`**（累积包，取代 v1.14；
+v1.14 移入 `_archive/`）。本地改动**即时生效**；云端需上传 zip + 重建镜像。
+
+**云端验证（2026-09-10 部署 v1.15 后，端到端 3/3 通过）**：
+
+| 问句 | 期望 | 实测 |
+|:--|:--|:--|
+| `A confirmatory Phase III trial plans one interim analysis — how do I keep the overall type I error rate at 0.05?` | 原生作答、末尾无软建议 | 中文方法论答案，无 💡 行、无 `need_tool` ✓ |
+| `查 XX 药的安全性信号有哪些` | 自身作答 + 末尾建议 `ct-safety` | 三层检索框架 + 末尾 💡 `ct-safety`（非阻断）✓ |
+| `什么是 FAERS 信号`（护栏 + 具名数据源） | 保留 `ct-safety` 建议 | 定义 + 不均衡性说明，末尾保留 ✓ |
+
+判定依据为**包裹内真实输出**（非 HTTP 码）。遗留观察：英文问句云端仍返回中文正文，交付前**语言对齐**（只翻语言、不动数字/结构/专有名词）不可省 —— SKILL.md 规则 6。
+
+**版本**：v0.9.118 → **v0.9.119**。
+
+### 第十六轮：按 v1.15 线上实测重写 README 案例回答（2026-09-10）
+
+**触发**：彤 —— 「根据现在的结果，重新修改 readme 中的案例回答」（v1.15 已完成云端部署）。
+
+**依据**：当次端到端实测（`refine_answer.py --ship` 直连 `ct-advisor.coze.site/run`，判定取**包裹内真实输出**，不看 HTTP 码）。
+
+**新增案例**（两份 README 各一条，编号 10 / Example 10）—— 首次把「**soft suggestion**」尾巴写进对外案例：
+
+| 问句 | 实测尾巴 | 要点 |
+|:--|:--|:--|
+| `A confirmatory Phase III trial plans one interim analysis — how do I keep the overall type I error rate at 0.05?` | **无任何建议** | 纯方法学题由本技能内部作答；告别裸词 `trial` 的旧误报 |
+| `查 XX 药的安全性信号有哪些` | 一行 `ct-safety` 建议 | 自身作答在前、建议在末尾；**不阻断、不索参、不强制安装** |
+
+**文件**：`README.md` / `README_zh-CN.md` —— 案例区新增示例 10 + 对照块，引导句「9 → **10 examples**」并说明示例 10 的看点（两种尾巴的对照）。
+
+**工程纪律**：两份 README 均为 **CRLF**，改动走 `str`-only 补丁脚本（**不混用 bytes anchor + str replacement**，见 ERR-20260910-001），改后校验 CRLF 保持、零 mojibake、案例编号无残留引用。
+
+**如实标注**：英文问句云端仍返回**中文正文** → 案例注记写明「按问题语言对齐渲染」，不掩盖该事实。
+
+**同日二次清理（彤：「下面这种一律不需要」）**：删除两份 README **案例区**中全部「实测输出 + 字数」注行
+**共 8 处**（英文 4 / 中文 4）—— 即 `> Note: **measured output** from the 2026-09-10 run (383 characters / 313 CJK …)`
+与 `> 💡 注：本答案为 2026-09-10 **实测输出**（383 字 / 313 汉字，落在 middle 档…）…` 这一类。
+对外案例只保留**案例本身 + `📌 内部机制` 一行**。
+
+- 匹配口径：引用块行（`>` 开头）且含 `measured output` / `实测输出`。注意**英文示例 1 / 2 的注不带 💡**，
+  只按 💡 匹配会漏删（首轮实测确实漏了 2 行，第二轮补删）。
+- **未动**：FAQ 与正文中描述产品行为的「实测」措辞（如「实测为分节标签」「实测单轮 3–72 秒」），
+  性质不同，属产品事实陈述而非案例附注。
+
+**版本**：v0.9.119 → **v0.9.120**。
+
+### 第十七轮：删除示例 7「切换输出语言」+ 编号顺延（2026-09-10）
+
+**触发**：彤 —— 「示例7删除」。
+
+**改动**（`README.md` / `README_zh-CN.md` **两份同步**）：
+
+| 动作 | 内容 |
+|:--|:--|
+| 删除 | 原示例 7「切换输出语言 / Switch the output language」（连同其后的 `---` 分隔行） |
+| 顺延 | 原 **8**「已发表安全性证据核查」→ **7**；原 **9**「方案证据基础 + 样本量协同」→ **8**；原 **10**「只沾边兄弟技能的方法学题」→ **9** |
+| 引导句 | 计数 **10 → 9**；多轮案例编号 **(4 / 5 / 8 / 9) → (4 / 5 / 7 / 8)**；尾巴对照例 **10 → 9** |
+
+- 删除区间取「原 7 标题 → 原 8 标题之前」整块；写入前断言**块首为原 7 标题、块末非空行为 `---`**，删后交界为「📌 → 空行 → 下一示例标题」，与其余示例间隔风格一致（不残留孤立分隔线或连续空行）。
+- **能力未消失**：语言切换仍在 FAQ 有说明（「中文系统下输出是中文吗？…随时一句话强制切换」），本轮删的只是一个展示案例。
+- 工程纪律同前：CRLF-only 文件走 `str`-only 补丁脚本（见 ERR-20260910-001），改前备份 `%TEMP%\README*.bak3_20260910`。
+
+**校验**：两文件编号 **1–9 连续**、CRLF-only（英文 366 / 中文 406 行）、零 mojibake、无旧计数与旧多轮编号引用残留。
+
+**版本**：v0.9.120 → **v0.9.121**。
+
+### 第十八轮：删除示例 9（末例）（2026-09-10）
+
+**触发**：彤 —— 「示例9删除」。
+
+**改动**（`README.md` / `README_zh-CN.md` **两份同步**）：
+
+| 动作 | 内容 |
+|:--|:--|
+| 删除 | 现示例 9「只沾边兄弟技能的方法学题 / A methodology question that only *touches* a sibling skill」（第十六轮按 v1.15 实测新增的末例，含其后的 `---` 分隔行） |
+| 引导句 | 计数 **9 → 8**；多轮案例编号 **(4 / 5 / 7 / 8) → (4 / 5 / 7)**；「两种尾巴对照」引导语**整句移除** |
+
+- 末例删除 → 编号 **1–8 天然连续**，无需重排。
+- 删除区间取「示例 9 标题 → 下一个 `## ` 章标题之前」；写入前断言**块首为示例 9 标题、块末非空行为 `---`、块尾与下一章之间恰为空行**，删后交界为「📌 → 空行 → `## 2.` 章标题」。
+- **机制说明未受影响**：软建议行为在 §2「调用门槛（收紧）」与 §4「安全预览（关联明确才自动调用，其余先作答、末尾建议）」两处仍有完整用户可见说明 —— 删的只是一个展示案例，不是能力本身。
+- 工程纪律同前：CRLF-only 文件走 `str`-only 补丁脚本（见 ERR-20260910-001），改前备份 `%TEMP%\README*.bak4_20260910`。
+
+**校验**：两文件编号 **1–8 连续**、CRLF-only（英文 327 / 中文 363 行）、零 mojibake、无旧计数与旧多轮编号引用残留。
+
+**版本**：v0.9.121 → **v0.9.122**。
+
 ## [Unreleased] (2026-09-09) — 图形化解释策略 (SKILL.md) + README 案例对齐 + ct-bugreport 凭据修复
 
 ### SkillHub 发布 v0.9.110（2026-09-09，彤 授权）

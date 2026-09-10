@@ -98,7 +98,7 @@ def build_refiner(config_path: str = "config.json") -> Refiner:
     return CozeRefiner(
         endpoint=rc.get("endpoint", ""),
         token_env=rc.get("token_env", "CT_ADVISOR_COZE_TOKEN"),
-        timeout=float(rc.get("timeout", 60.0)),
+        timeout=float(rc.get("timeout", 90.0)),
         long_timeout=float(rc.get("long_timeout", 300.0)),
         race_window=float(rc.get("race_window", 2.0)),
         answer_mode=answer_mode,

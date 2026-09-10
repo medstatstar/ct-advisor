@@ -6,7 +6,7 @@
 - 不再有「local 精校模式」：答案精校经唯一的 `fast` 模式控制，按难度自动分流——
   simple/middle 走 **race 竞速（早发 / 速度优先）**：agent 在 **step 2** 后台调用
   `--fire-only`（agent 仅发 original_question，difficulty/category/accuracy 未提供时由脚本补空串，draft 留空），
-  Coze 用**完整 60s** HTTP 超时独立分析；成功后写入 race 缓存。
+  Coze 用**完整 90s** HTTP 超时独立分析；成功后写入 race 缓存。
   agent 在 **step 3** 并行写本地草稿 + `--collect` 收集：缓存命中（Coze 先回）→ 采用
   Coze（中断本地）；否则直接采用本地草稿（速度优先——本地秒级先出、Coze 实测 9~25s 慢、
   常态本地胜出）。complex/vague 走 **串行**（前台等 Coze 完整返回、含 draft_answer 一并发送），
@@ -443,7 +443,7 @@ class RefineRequest:
         }
 class Refiner(ABC):
     @abstractmethod
-    def refine(self, req: RefineRequest, timeout: float = 60.0) -> str:
+    def refine(self, req: RefineRequest, timeout: float = 90.0) -> str:
         """返回最终答案（服务器精校结果，或兜底回退的 draft_answer）。"""
         ...
 
@@ -451,40 +451,40 @@ class Refiner(ABC):
 class CozeRefiner(Refiner):
     """扣子服务器精校（唯一精校后端）：外发 3 变量，≤timeout 秒回收 final_answer；异常兜底草稿。
 
-    超时策略（2026-08-16）：默认 timeout=60s；complex / 模板类 / 追问类问题放宽到 long_timeout
+    超时策略（2026-08-16）：默认 timeout=90s；complex / 模板类 / 追问类问题放宽到 long_timeout
     （默认 300s）——服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成）或结合多轮
     上下文的追问类问题耗时长，
-    60s 会被提前截断。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
+    90s 会被提前截断。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
     由 build_refiner() 始终实例化。
     """
 
     def __init__(self, endpoint: str, token_env: str = "CT_ADVISOR_COZE_TOKEN",
-                 timeout: float = 60.0, long_timeout: float = 300.0,
+                 timeout: float = 90.0, long_timeout: float = 300.0,
                  answer_mode: str = "fast", race_window: float = 2.0):
         self.endpoint = endpoint
         self.token_env = token_env
         self.timeout = timeout
-        # long_timeout：complex / 模板类 / 追问类问题的等待上限（默认 300s）；其余问题用 timeout（60s）。
+        # long_timeout：complex / 模板类 / 追问类问题的等待上限（默认 300s）；其余问题用 timeout（90s）。
         # 详见 _resolve_timeout() / _is_long_running()。
         self.long_timeout = long_timeout
         # answer_mode 已固定为 fast（2026-08-05 删除 precise）；按难度分流：
         #   simple/middle = race 竞速（早发 / 速度优先，详见 refine_fire_only + collect_race）：
         #     agent 在 step 2 后台调用 --fire-only（draft_answer 留空、difficulty/category/accuracy 未提供→补空串），
-        #     Coze 用**完整** HTTP 超时独立分析 original_question（默认 60s；complex/模板类走 long_timeout=300s），
+        #     Coze 用**完整** HTTP 超时独立分析 original_question（默认 90s；complex/模板类走 long_timeout=300s），
         #     成功后写入 race 缓存文件；agent 在 step 3 并行写本地草稿 + 调用 --collect
         #     [--wait race_window] 收集：缓存命中（Coze 在 step 3→step 4 间已返回）→ 采用 Coze
         #     （中断本地、Coze 胜出）；否则直接采用本地草稿（速度优先——本地秒级先出、Coze 实测
         #     9~25s 慢，常态本地胜出）。
-        #   complex/vague = 串行：前台等待 Coze 完整返回（单次调用 refine()；复杂/模板类 timeout=long_timeout 默认300s，其余 60s），
+        #   complex/vague = 串行：前台等待 Coze 完整返回（单次调用 refine()；复杂/模板类 timeout=long_timeout 默认300s，其余 90s），
         #     且必须把本地已生成的 draft_answer 一并发送（作为 Coze 参考）。
         self.answer_mode = "fast"  # 2026-08-05 删除 precise，仅保留 fast 单一模式
         self.race_window = race_window  # race 竞速：step 4 收集 Coze 后台结果的等待上限（秒）；超时即放弃、用本地
 
     # ------------------------------------------------------------------ #
     # 条件化超时（2026-08-16）：complex / 模板类 / 追问类问题等待上限放宽到 long_timeout
-    # （默认 300s）；其余问题维持默认 timeout（60s）。复杂/模板类问题服务端
+    # （默认 300s）；其余问题维持默认 timeout（90s）。复杂/模板类问题服务端
     # full_analysis 走完整输出模式、追问类需结合多轮上下文，生成/检索耗时长，
-    # 60s 会被提前截断 → 放宽。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
+    # 90s 会被提前截断 → 放宽。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
     # ------------------------------------------------------------------ #
     _TEMPLATE_TOKENS = ("template", "模板", "doc", "document", "规范", "spec")
 
@@ -492,7 +492,7 @@ class CozeRefiner(Refiner):
         """长任务判定：complex 难度，或 category 命中模板类标记，或当前为类型 B 追问。
 
         长任务走服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成），或需结合多轮
-        上下文，生成/检索耗时长，需用 long_timeout（默认 300s）而非默认 60s。
+        上下文，生成/检索耗时长，需用 long_timeout（默认 300s）而非默认 90s。
         - is_followup == True：类型 B 追问（refine_answer.py 已基于本地 context_stitch 标记），
           多轮上下文导致 Coze 处理更久，直接等同长任务。
         - conversation_history 非空：当前问题处于多轮对话中（refine_answer.py 在有效期内
@@ -522,13 +522,21 @@ class CozeRefiner(Refiner):
 
         - 调用方显式传入 timeout → 优先采用（保留可覆盖旧行为）；
         - 否则长任务（complex / 模板类 / 追问类）→ long_timeout（默认 300s）；
-        - 其余 → 默认 timeout（60s）。
+        - 其余 → 默认 timeout（90s）。
         """
         if timeout is not None:
             return float(timeout)
         if self._is_long_running(req):
             return self.long_timeout
         return self.timeout
+
+    def resolve_timeout(self, req: "RefineRequest", timeout: Optional[float] = None) -> float:
+        """公开入口：出站前预知本次 Coze 调用的有效超时（秒）。
+
+        供调用方（如 refine_answer.py 的回退消息 / 诊断日志）复用同一套条件化判定，
+        避免在别处重复实现或硬编码超时值，导致与真实等待时长不符。
+        """
+        return self._resolve_timeout(req, timeout)
 
     def refine(self, req: RefineRequest, timeout: float = None) -> RefineResult:
         # 依赖保障：在出站 try 之外执行。缺失且自动安装失败 → 向上抛 MissingDependencyError，
@@ -545,7 +553,7 @@ class CozeRefiner(Refiner):
         与 ``refine()``（单发、draft 作兜底）不同，此方法：
           - 仅基于 ``original_question`` 独立分析 Coze
             （``draft_answer`` 留空不发送——调用方此时草稿尚未写出）；
-          - HTTP 超时用 **完整** 时长（默认 60s；complex/模板类走 long_timeout=300s，不给 Coze 强加短帽，
+          - HTTP 超时用 **完整** 时长（默认 90s；complex/模板类走 long_timeout=300s，不给 Coze 强加短帽，
             恢复 ops.md 文档意图）；
           - 成功后把 Coze 结果写入 race 缓存文件（供 step 4 ``--collect`` 读取）；
             超时 / 网络 / 解析异常返回**空串**且不写缓存——

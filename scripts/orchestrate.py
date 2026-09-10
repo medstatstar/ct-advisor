@@ -56,8 +56,10 @@ from refine_answer import (  # noqa: E402
     ANSWER_START, ANSWER_END, NEED_PARAMS_MARKER,
 )
 # 复用入口预判（模式 B 前端高置信预取）
-from route_tool import predict as predict_tool  # noqa: E402
+from route_tool import predict as predict_tool, suggest_footer  # noqa: E402
 from adapters import build_refiner, RefineRequest, RefineResult  # noqa: E402
+# 复用 A/B 档登记（单一数据源，避免编排层另立一份档位判定）
+from handle_need_tool import _load_mapping, _resolve_tier, _skill_installed  # noqa: E402
 
 # 编码统一（与 refine_answer.py 一致）：三流强制 UTF-8，避免 CJK/℃ 在 Windows cp936 下乱码
 for _s in (sys.stdin, sys.stdout, sys.stderr):
@@ -104,11 +106,15 @@ def _render_delegate(orig_q: str, tool: str, params: dict,
                      draft_answer: str, missing: list | None = None,
                      prefetch_satisfied: dict | None = None,
                      note: str | None = None,
-                     need_tools: list | None = None) -> str:
+                     need_tools: list | None = None,
+                     extra: dict | None = None) -> str:
     """构造 <<<CT_TOOL_DELEGATE>>> 结构化块（供本地大模型执行 ct 技能）。
 
     大模型读取后：补全/追问参数 → 调 `refine_answer.py --card-inline '<执行卡>'`
     由代码执行技能 + 缝合 + 包裹。大模型不重写 Coze 文本。
+
+    extra（2026-09-10）：附加字段并入块顶（如 install_required 的 github / install_hint），
+    让大模型在征询安装时无需另查映射表。
     """
     if missing is None:
         missing = []
@@ -131,9 +137,59 @@ def _render_delegate(orig_q: str, tool: str, params: dict,
             "由代码执行技能并确定性缝合 + 包裹最终答案（本地大模型只做透传，不重写 Coze 文本）。"
         ),
     }
+    if extra:
+        for k, v in extra.items():
+            block.setdefault(k, v)
     return (f"{TOOL_DELEGATE_START}\n"
             f"{json.dumps(block, ensure_ascii=False, indent=2)}\n"
             f"{TOOL_DELEGATE_END}\n")
+
+
+def _unreleased_payload(tool: str) -> dict:
+    """构造 B 档 / 未登记技能的 unreleased_b 产物（与 handle_need_tool 同语义，本地无 subprocess）。"""
+    tier_info = _resolve_tier(_load_mapping(), tool)
+    if tier_info["registered"]:
+        reason = f"{tool} 属 B 档技能（输入含涉密信息：受试者数据 / 方案 / CRF）"
+    else:
+        reason = f"{tool} 未在 ct-advisor 的技能登记表中（按 B 档保守处理）"
+    return {
+        "tool": tool,
+        "status": "unreleased_b",
+        "result": {
+            "message": reason + "。该技能**不对外发布**（未在 SkillHub 上架、GitHub 亦无公开仓库），无法通过安装获取。",
+            "tier": "B",
+            "registered": tier_info["registered"],
+            "purpose": tier_info["purpose"],
+            "purpose_note": (
+                "该技能的处理能力（如方案深度审阅 / 统计审阅 / 数据质控）需在其本地运行环境中"
+                "用真实数据执行；ct-advisor 不冒充其能力。"
+            ),
+            "hint": "用自身能力（Coze 草稿 + 本地知识库）尽量完成分析，并明确标注「深度分析未实际执行」。",
+        },
+        "elapsed_sec": 0,
+    }
+
+
+def _unpublished_payload(tool: str) -> dict:
+    """构造 A 档但尚未发布（如 ct-pipeline）的 unpublished_a 产物（与 handle_need_tool 同语义）。"""
+    tier_info = _resolve_tier(_load_mapping(), tool)
+    return {
+        "tool": tool,
+        "status": "unpublished_a",
+        "result": {
+            "message": (f"{tool} 属 A 档技能（输入非涉密），但**尚未公开发布**"
+                        f"（未在 SkillHub 上架），当前无法通过安装获取。"),
+            "tier": "A",
+            "published": False,
+            "registered": tier_info["registered"],
+            "purpose": tier_info["purpose"],
+            "hint": "不向用户提供安装地址（避免给出装完仍不可用的空仓库 / 未上架技能）；"
+                    "以自身能力 + 已装兄弟技能尽量完成分析，并标注「数据未取数」。",
+            "next_step": ("可先分别调用已上架的兄弟技能（ct-registry / ct-safety / ct-literature）"
+                          "取数，再由 ct-advisor 就地缝合；待该技能正式发布后再由它统一编排。"),
+        },
+        "elapsed_sec": 0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +216,8 @@ def _fire_prefetch(card: dict) -> dict:
 def build_output(orig_q: str, coze_result: RefineResult,
                  prefetch_out: dict | None, prefetch_tool: str | None,
                  prefetch_params: dict | None,
-                 need_tools: list | None = None) -> str:
+                 need_tools: list | None = None,
+                 suggest_tools: list | None = None) -> str:
     """返回最终应输出字符串（包裹答案 或 委托块）。
 
     decision（代码决定，非 LLM）：
@@ -178,6 +235,14 @@ def build_output(orig_q: str, coze_result: RefineResult,
     # 避免「Coze 需不同工具」分支(2c)委托时只带 Coze 默认值、再弹一轮 need_params。
     coze_params = _enrich_coze_params(orig_q, coze_tool, coze_result.params or {})
 
+    # 2026-09-10（第十四轮，用户要求）：**先自身作答、末尾再建议**兄弟技能。
+    # 未自动调用任何兄弟技能、但问题与某技能沾边（弱命中 / 咨询意图）时，
+    # 在最终答案**末尾**追加一行软建议；不改写答案本身、不阻断取数决策。
+    sugg = suggest_footer(suggest_tools or [], lang=_detect_lang(orig_q))
+
+    def _wrapf(text: str) -> str:
+        return _wrap(text + sugg)
+
     # ---- 有预判执行结果 ----
     if prefetch_out is not None:
         status = prefetch_out.get("status")
@@ -187,7 +252,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
                 # 信息足够：Coze 答案 + 预判技能结果（多源问题附提示其余工具）
                 lang = _detect_lang(orig_q)  # 2026-08-21：缝合文案/标签随提问语言
                 merged = _merge_answer(coze_answer, prefetch_out, lang=lang)
-                return _wrap(merged + _multi_tool_hint(need_tools or [], tool, lang=lang))
+                return _wrapf(merged + _multi_tool_hint(need_tools or [], tool, lang=lang))
             # Coze 要求不同工具：预判结果并入草稿，委托 Coze 工具
             base = _merge_answer(coze_answer, prefetch_out) if coze_answer.strip() else \
                 f"## 补充信息（来源：{tool}）\n\n" + _render_skill_text(prefetch_out)
@@ -205,6 +270,24 @@ def build_output(orig_q: str, coze_result: RefineResult,
                 note="预判技能参数不完整（%s），委托本地大模型向用户追问后执行。" % "; ".join(missing),
                 need_tools=need_tools,
             )
+        # ---- 2026-09-10 A/B 档门控（四新状态，均非「执行失败」，不得落到 error 兜底）----
+        if status in ("unreleased_b", "local_fallback", "unpublished_a"):
+            # B 档不对外发布 / 用户拒绝安装 / A 档尚未发布 → 无可执行技能，
+            # 代码直接缝合包裹（无需 agent 介入，也无需征询同意）
+            lang = _detect_lang(orig_q)
+            if coze_answer.strip():
+                return _wrapf(_merge_answer(coze_answer, prefetch_out, lang=lang))
+            return _wrapf(_render_skill_text(prefetch_out))
+        if status == "install_required":
+            # 2026-09-10（第十四轮，用户要求）：由「委托补参 / 安装」改为
+            # 「**先自身作答，末尾再建议安装**」——不再用安装动作阻断答案。
+            # 安全姿态不变（只建议、不执行：安装会写入本地技能目录、可能触发本机
+            # 安全提示；用户明确授权后才代办）：复用 refine_answer._merge_answer 的
+            # install 渲染（答案在前、安装建议在后），再叠加通用软建议。
+            # 用户授权 → 在卡片加 "install_consent": "approved" 重跑；拒绝 → 加
+            # "install_consent": "declined" 重跑，由代码产出「未取数」兜底答案。
+            lang = _detect_lang(orig_q)
+            return _wrapf(_merge_answer(coze_answer, prefetch_out, lang=lang))
         # error：预判执行失败
         if coze_tool:
             return _render_delegate(
@@ -214,15 +297,26 @@ def build_output(orig_q: str, coze_result: RefineResult,
             )
         # 预判失败且无 Coze 工具 → 仅 Coze 答案（若有）或兜底警告
         if coze_answer.strip():
-            return _wrap(coze_answer)
-        return _wrap("⚠️ 预判技能执行出错且 Coze 未返回有效答案，请基于本地知识库兜底作答并告知用户。")
+            return _wrapf(coze_answer)
+        return _wrapf("⚠️ 预判技能执行出错且 Coze 未返回有效答案，请基于本地知识库兜底作答并告知用户。")
 
     # ---- 无预判 ----
     if coze_tool:
+        # 2026-09-10 A/B 档门控：B 档 / 未登记 → 直接说明「不对外发布」+ 自身能力作答，
+        # 免去一次无谓的委托往返（B 档无从安装，委托也只是让 agent 再问一遍）。
+        # A 档但尚未发布（ct-pipeline）同理短路：不可安装，无需征询同意。
+        tier_info = _resolve_tier(_load_mapping(), coze_tool)
+        if tier_info["tier"] != "A" or not tier_info["published"]:
+            lang = _detect_lang(orig_q)
+            payload = (_unreleased_payload(coze_tool) if tier_info["tier"] != "A"
+                       else _unpublished_payload(coze_tool))
+            if coze_answer.strip():
+                return _wrapf(_merge_answer(coze_answer, payload, lang=lang))
+            return _wrapf(_render_skill_text(payload))
         return _render_delegate(orig_q, coze_tool, coze_params, coze_answer)
     if coze_answer.strip():
-        return _wrap(coze_answer)
-    return _wrap("⚠️ Coze 返回为空，请基于本地知识库作答并告知用户。")
+        return _wrapf(coze_answer)
+    return _wrapf("⚠️ Coze 返回为空，请基于本地知识库作答并告知用户。")
 
 
 def _render_skill_text(tool_out: dict) -> str:
@@ -342,7 +436,8 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
         t.join()
 
     return build_output(orig_q, coze_result[0], prefetch_out[0], prefetch_tool,
-                        prefetch_params, need_tools=need_tools)
+                        prefetch_params, need_tools=need_tools,
+                        suggest_tools=(pred.get("suggest_tools") or []))
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +507,15 @@ def run_self_test() -> int:
         else:
             valid = TOOL_DELEGATE_START in out and TOOL_DELEGATE_END in out
         print(f"  {mark} [{('OK' if valid else 'BADFMT'):<6}] {desc}")
-    total = len(SELF_TEST)
+    # 2026-09-10（第十四轮，用户要求）：软建议页脚——不调用兄弟技能，
+    # 先自身作答，再在答案**末尾**建议可安装 / 调用（弱命中 / 咨询意图路径）。
+    prog = build_output("样本量计算要注意什么", _mk_coze("样本量取决于效应量与把握度。")
+                        , None, None, {}, suggest_tools=["ct-samplesize"])
+    sug_ok = (ANSWER_START in prog) and ("兄弟技能" in prog) and ("ct-samplesize" in prog)
+    print(f"  {'✓' if sug_ok else '✗'} [{'OK' if sug_ok else 'BADFMT'}] 软建议：先作答 + 末尾建议 ct-samplesize")
+    ok += 1 if sug_ok else 0
+
+    total = len(SELF_TEST) + 1
     print("-" * 60)
     print(f"  准确率: {ok}/{total} = {ok / total * 100:.1f}%")
     return 0 if ok == total else 1

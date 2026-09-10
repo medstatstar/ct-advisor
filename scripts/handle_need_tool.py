@@ -26,10 +26,26 @@
     }
 
 status 语义：
-    ok          技能执行成功，result 为结构化结果
-    error       技能执行失败（rc/超时/脚本缺失），回退 Coze 草稿
-    need_params 执行卡参数不完整（如缺效应量），result.missing 列出缺失项，
-                由本地大模型向用户追问（不编造），补齐后重发执行卡
+    ok             技能执行成功，result 为结构化结果
+    install_required  A 档技能（已上架）未安装 → 结构化上报**安装建议**
+                    （github / install_hint / install_command / missing）。默认
+                    `install_mode="suggest"`：**只建议、不执行** —— 把用途与命令交给用户，
+                    由用户自行执行，或用户**明确授权**后在卡片带 install_consent="approved"
+                    重跑（→ `install_mode="authorized"`，方可将命令交给 agent 代为执行）。
+                    用户拒绝 → 卡片带 install_consent="declined" 重跑，走 local_fallback。
+                    🔴 安装动作（下载 + 写入技能目录）可能触发本机安全提示，故一律以
+                    「建议安装」为默认姿态，绝不自动安装（ct-base §5 禁止静默安装 +
+                    2026-09-10 用户要求：安装可能触发安全警告，改为建议 / 明确授权后再装）
+    local_fallback  用户拒绝安装（或明确不取数）→ 以自身能力作答，缝合层标注「未取数」
+    unpublished_a   A 档技能（输入非涉密）但**尚未公开发布**（未在 SkillHub 上架，
+                    如 ct-pipeline）→ 当前无法安装，提示后以自身能力作答并标注「未取数」；
+                    与 local_fallback 区分开：不是用户拒绝，而是上游尚未公开，无需征询安装授权
+    unreleased_b    B 档技能（输入涉密）不对外发布，或技能未登记（按 B 档保守处理）→
+                    提示后以自身能力作答，不尝试安装、不硬错
+    referral        referral-only 技能（如 meta-analysis）→ 引导用户显式 @skill 调用
+    error           技能执行失败（rc/超时/脚本缺失），回退 Coze 草稿
+    need_params     执行卡参数不完整（如缺效应量），result.missing 列出缺失项，
+                    由本地大模型向用户追问（不编造），补齐后重发执行卡
 """
 import argparse
 import json
@@ -61,6 +77,178 @@ MAX_RESULT_CHARS = 4000
 def _load_mapping() -> dict:
     with open(MAPPING_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+# ---------------------------------------------------------------------------
+# A/B 档门控（2026-09-10）
+#
+# 权威口径 = ct-base §11（唯一分类轴 input_sensitivity）+ §13.1（保密声明）：
+#   A 档 = 输入非涉密 → 可检测安装、**建议安装**（用户自行执行或明确授权后代办），
+#                          安装完成后执行（前提：已发布）
+#   B 档 = 输入涉密   → 只提示「需调 B 档技能但不对外发布」，本地作答
+#
+# 发布状态（tiers.registry[*].published）的权威判据 = **SkillHub 上架**，不是 GitHub
+# ——GitHub 空占位仓库同样返回 HTTP 200（ct-pipeline 事故），复核用
+# `python scripts/probe_publication.py`。故 A 档需再分两支：
+#   已发布   → install_required（**建议安装**：默认 install_mode=suggest 只建议不代办；
+#              用户明确授权（install_consent=approved）后才转 authorized 由 agent 代办）
+#   未发布   → unpublished_a（不可安装，不给地址，直接本地作答 + 未取数标注）
+#
+# 🔴 本模块只做「检测 + 上报」，**绝不执行安装**：ct-base §5「禁止静默安装」红线要求
+# 安装动作必须由 agent 在拿到用户**明确授权**后执行，非交互模式直接报错退出、不得阻塞。
+# 2026-09-10 追加口径（用户要求）：安装需下载并写入本地技能目录，**可能触发本机安全警告**，
+# 故默认姿态是「**建议安装**」——把用途与命令交给用户自行执行；仅当用户在卡片给出
+# 明确授权词（install_consent ∈ _APPROVE_WORDS）时，install_mode 才转为 "authorized"。
+# 因此 install_required 只是一个结构化请求，安装由调用方（agent）在授权后完成。
+# ---------------------------------------------------------------------------
+
+
+def _resolve_tier(mapping: dict, tool: str) -> dict:
+    """解析技能的 A/B 档与发布状态；未登记技能按 default_tier（B）保守处理。
+
+    返回 {tier, published, github, purpose, registered}。
+    未登记 → tier 取 tiers.default_tier（默认 B）：不尝试安装未知技能，也不硬错卡死应答。
+    """
+    tiers = mapping.get("tiers") or {}
+    entry = (tiers.get("registry") or {}).get(tool)
+    if isinstance(entry, dict):
+        return {
+            "tier": entry.get("tier", "B"),
+            "published": bool(entry.get("published")),
+            "github": entry.get("github") or f"https://github.com/medstatstar/{tool}",
+            "purpose": entry.get("purpose", ""),
+            "registered": True,
+        }
+    return {
+        "tier": tiers.get("default_tier", "B"),
+        "published": False,
+        "github": f"https://github.com/medstatstar/{tool}",
+        "purpose": "",
+        "registered": False,
+    }
+
+
+def _skill_installed(tool_cfg: dict) -> bool:
+    """探测技能主脚本是否已落盘（{SKILLS_DIR} 展开后判定，不执行、不联网）。
+
+    这是 install_required 分支的唯一判据：脚本在 → 直接执行；脚本不在 → 上报待安装。
+    比「跑一次再看 rc」更早、更便宜，也不会把「未安装」伪装成「执行失败」。
+    """
+    for arg in (tool_cfg.get("args") or []):
+        cand = arg.replace("{SKILLS_DIR}", SKILLS_DIR)
+        if cand.endswith(".py"):
+            return Path(cand).is_file()
+    # 无 .py 入口（异常配置）：回退到整条 args 的末项存在性
+    args = tool_cfg.get("args") or []
+    if not args:
+        return False
+    return Path(args[-1].replace("{SKILLS_DIR}", SKILLS_DIR)).is_file()
+
+
+# 用户拒绝安装的确认词（卡片 install_consent 字段，大小写不敏感）
+_DECLINE_WORDS = {"declined", "decline", "refused", "refuse", "rejected", "reject", "no", "false"}
+# 用户**明确授权**安装的确认词（2026-09-10）：只有显式命中这里，install_mode 才转为
+# "authorized"（可由 agent 代为执行安装）。缺省 / 含糊表态一律按 "suggest"（只建议）。
+_APPROVE_WORDS = {"approved", "approve", "authorized", "authorised", "authorize", "authorise",
+                  "consent", "granted", "yes", "ok", "agree", "agreed", "true"}
+
+
+def _skillhub_cli(mapping: dict) -> Path | None:
+    """定位可用的 SkillHub CLI 脚本。
+
+    顺序：环境变量 SKILLHUB_CLI → tiers.install.cli_candidates 中**优先含
+    `--skip-self-upgrade` 的完整版**，无则退回首个存在者。返回 None 表示本机
+    无可用 CLI —— 此时不编造安装命令，只给人工说明。
+
+    为何要挑版本（2026-09-10 实测）：本机并存两份不同构建。
+      · 完整版 v2026.8.5（226KB）：`--skip-self-upgrade` 存在，走公网
+        api.skillhub.cn，安装成功；
+      · 精简版 v2026.3.6（44KB）：无该 flag，其索引/下载端点指向内网 LB
+        （http://lb-*.clb.gz-tencentclb.com），实测下载得到非 zip →
+        "Downloaded file is not a valid zip archive"，**装不了**。
+    故按 flag 探测挑完整版，避免把命令生成到装不了的 CLI 上。
+    """
+    env = os.environ.get("SKILLHUB_CLI")
+    if env:
+        p = Path(env)
+        return p if p.is_file() else None
+    cands = ((mapping.get("tiers") or {}).get("install") or {}).get("cli_candidates") or []
+    existing = [p for p in (Path(os.path.expanduser(c)) for c in cands) if p.is_file()]
+    for p in existing:
+        if _cli_has_flag(p, "--skip-self-upgrade"):
+            return p
+    return existing[0] if existing else None
+
+
+def _cli_has_flag(cli: Path, flag: str) -> bool:
+    """离线探测 CLI 是否支持某 flag（读源码字符串，不执行子进程）。"""
+    try:
+        return flag in cli.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+
+
+def _helper_path() -> Path | None:
+    r"""定位 install_sibling.py，**刻意避开 UNC 形态的路径**。
+
+    坑（2026-09-10 实测两次踩到）：本机技能目录是软链到网络盘的，Windows 上
+    `os.getcwd()` 返回的已是解析后的真实路径，因此 `os.path.abspath(__file__)`
+    仍会得到 UNC 形态。而该形态写进命令串经 bash 传递会被二次拼接（盘符段重复），
+    Python 报 "can't open file"。
+
+    故按「用户态规范路径 → 解析路径」顺序探测，取首个存在者；绝不主动构造 UNC。
+    """
+    cands = [
+        Path.home() / ".workbuddy" / "skills" / "ct-advisor" / "scripts" / "install_sibling.py",
+        Path(os.path.abspath(__file__)).parent / "install_sibling.py",
+    ]
+    for p in cands:
+        try:
+            if p.is_file():
+                return p
+        except OSError:
+            continue
+    return None
+
+
+def _install_command(mapping: dict, tool: str) -> str:
+    """生成**实测可用**的安装命令（2026-09-10）。
+
+    首选本技能自带的 install_sibling.py：它先核验 SkillHub 上架状态、再下载解压，
+    以纯参数方式落盘，从而规避三条已实测的坑（见 install_sibling.py 模块 docstring）：
+      · PATH 中无 `skillhub` 命令（裸命令必失败）；
+      · 本机 ~/.skillhub 的 CLI 是精简版 v2026.3.6，下载端点指内网 LB 返回非 zip；
+      · 完整版 CLI 在网络盘，其 UNC 形态路径经 bash 传递会被二次拼接而打不开。
+
+    路径一律输出**正斜杠**形式（`as_posix()`）：Windows 上 Python 接受正斜杠，
+    而 bash/Git-Bash 不会对其做盘符或 UNC 改写。
+
+    找不到 install_sibling.py 时退回 SkillHub CLI（仍显式带 --dir；--skip-self-upgrade
+    仅在所挑 CLI 支持时添加）。两者都不可用则返回空串（不编造命令）。
+    """
+    helper = _helper_path()
+    # --dir 同样输出正斜杠：默认 SKILLS_DIR 在 Windows 上是 `C:\Users\...` 形态，
+    # 反斜杠嵌进 shell 命令串会被当成转义符吃掉（bash 下 `\U`/`\A` 等直接消失）。
+    dir_arg = Path(SKILLS_DIR).as_posix()
+    if helper is not None:
+        hp = helper.as_posix()
+        if not hp.startswith("//"):  # UNC 形态一律不出厂
+            return f'"{sys.executable}" "{hp}" {tool} --dir "{dir_arg}"'
+    cli = _skillhub_cli(mapping)
+    if cli is None:
+        return ""
+    cp = cli.as_posix()
+    if cp.startswith("//"):
+        return ""
+    skip = " --skip-self-upgrade" if _cli_has_flag(cli, "--skip-self-upgrade") else ""
+    return (f'"{sys.executable}" "{cp}"{skip} --dir "{dir_arg}" '
+            f'install {tool}')
+
+
+def _skillhub_id(mapping: dict, tool: str) -> str:
+    """SkillHub 的 canonicalName（@handle/<slug>），供用户按名搜索。核不到 handle 则返回 slug。"""
+    handle = ((mapping.get("tiers") or {}).get("install") or {}).get("namespace")
+    return f"@{handle}/{tool}" if handle else tool
 
 
 # 调用方语言透传（F3, 2026-09-03）：ct-base language_policy.md §"user_language 备用入参"
@@ -305,6 +493,7 @@ def execute_card(card: dict) -> dict:
         call_env["CT_QUERY_ORIGIN"] = str(card["query_origin"])
     mapping = _load_mapping()
     tool_cfg = mapping["skills"].get(tool)
+    tier_info = _resolve_tier(mapping, tool)
     # 多命中场景：其余技能延后，附「请先准备数据」提示（需求 2026-08-23）
     deferred = _build_deferred(mapping, tool, card.get("need_tools"))
     deferred_note = ""
@@ -314,6 +503,67 @@ def execute_card(card: dict) -> dict:
             f"本轮只执行最关键的 {tool}。还识别到 {len(deferred)} 个可选数据源需要你先准备信息：{items}。"
             "确认参数后我再逐个调用。"
         )
+
+    # ---- 档位门 ①（2026-09-10）：B 档 / 未登记 → 提示「不对外发布」，不尝试安装、不硬错 ----
+    # 需求：B 类技能「直接提示需要调用 B 类技能，但该技能不对外发布，然后用自己能力范围内的
+    # 功能完成相应的分析任务」。故此处返回结构化 unreleased_b，由缝合层把 Coze 草稿原样透出
+    # 并附说明；不进入 subprocess，也就不存在 FileNotFoundError / 未映射两种硬错。
+    if tier_info["tier"] != "A":
+        unregistered = not tier_info["registered"]
+        reason = (
+            f"{tool} 未在 ct-advisor 的技能登记表中（按 B 档保守处理）"
+            if unregistered else
+            f"{tool} 属 B 档技能（输入含涉密信息：受试者数据 / 方案 / CRF）"
+        )
+        return {
+            "tool": tool,
+            "status": "unreleased_b",
+            "result": {
+                "message": reason + "。该技能**不对外发布**（未在 SkillHub 上架、GitHub 亦无公开仓库），无法通过安装获取。",
+                "tier": "B",
+                "registered": tier_info["registered"],
+                "purpose": tier_info["purpose"],
+                "purpose_note": (
+                    "该技能的处理能力（如方案深度审阅 / 统计审阅 / 数据质控）需在其本地运行环境中"
+                    "用真实数据执行；ct-advisor 不冒充其能力。"
+                ),
+                "hint": "用自身能力（Coze 草稿 + 本地知识库）尽量完成分析，并明确标注「深度分析未实际执行」。",
+            },
+            "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
+            "elapsed_sec": 0,
+        }
+
+    # ---- 档位门 ②（2026-09-10）：A 档但尚未发布 → 不可安装，本地作答，无需征询授权 ----
+    # ⚠️ 本门必须排在 `if not tool_cfg` 之前：未发布的 A 档技能（如 ct-pipeline）只登记在
+    # tiers 里、**不在 skills 自动执行表**，若晚于该分支就会落进「未在 tool_mapping 中找到
+    # 技能映射」硬错——那正是本改造要消灭的行为（2026-09-10 实测踩到）。
+    # 「已安装 + 未发布」的组合经 need_tool 不可达（此类技能不在自动执行表），故无需为它让路。
+    if not tier_info["published"]:
+        return {
+            "tool": tool,
+            "status": "unpublished_a",
+            "result": {
+                "message": (f"{tool} 属 A 档技能（输入非涉密），但**尚未公开发布**"
+                            f"（未在 SkillHub 上架），当前无法通过安装获取。"),
+                "tier": "A",
+                "published": False,
+                "registered": tier_info["registered"],
+                "purpose": tier_info["purpose"],
+                "hint": "不向用户提供安装地址（避免给出装完仍不可用的空仓库 / 未上架技能）；"
+                        "将该技能承担的用途纳入「需本地具备该能力」的说明，"
+                        "以自身能力（Coze 草稿 + 本地知识库 + 已装兄弟技能）尽量完成分析，"
+                        "并明确标注「数据未取数 / 深度分析未实际执行」。",
+                "next_step": ("可先分别调用已上架的兄弟技能（ct-registry / ct-safety / ct-literature）"
+                              "取数，再由 ct-advisor 就地缝合；待该技能正式发布后再由它统一编排。"),
+            },
+            "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
+            "elapsed_sec": 0,
+        }
+
     if not tool_cfg:
         # 优雅降级（F1, 2026-09-03）：referral-only 技能（如 meta-analysis）不在
         # tool_mapping 自动执行——它需数据抽取 + 重型 R 管线，不经 need_tool 机械调用，
@@ -337,6 +587,89 @@ def execute_card(card: dict) -> dict:
             "tool": tool,
             "status": "error",
             "result": f"未在 tool_mapping.json 中找到技能映射: {tool}",
+            "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
+            "elapsed_sec": 0,
+        }
+
+    # ---- 档位门 ③（2026-09-10）：A 档 → 先查是否安装；未安装则**建议安装**（默认不代办） ----
+    # 需求：A 类技能「首先检查是否安装，没有安装则提示用户安装。当用户拒绝时，给出在自己能力
+    # 范围内的分析结果，如果用户同意则进行安装，安装以后调用相应的技能完成相应的分析」。
+    # 🔴 本处只检测 + 上报，**绝不执行安装**；且默认姿态为「建议安装」（2026-09-10 用户要求：
+    # 安装可能触发本机安全警告），仅在用户**明确授权**后才由 agent 代办（ct-base §5 禁止静默安装）。
+    if not _skill_installed(tool_cfg):
+        consent = str(card.get("install_consent") or "").strip().lower()
+        # 安装授权门（2026-09-10 用户要求）：默认姿态是**建议安装**——安装动作会下载并写入
+        # 本地技能目录，可能触发本机安全提示，故不得自动安装；只有用户给出**明确授权**词
+        # 才转为「可代办执行」。含糊 / 缺省 → suggest（只建议，agent 不得代为执行）。
+        authorized = consent in _APPROVE_WORDS
+        # 其中参数缺失一并算好，让 agent 可以在同一轮里同时问「装不装」和「补哪些参数」
+        _p, _missing = _infer_missing_params(tool_cfg, params, question)
+        if consent in _DECLINE_WORDS:
+            # 用户拒绝安装 → 用自身能力作答（Coze 草稿兜底），明确标注未取数
+            return {
+                "tool": tool,
+                "status": "local_fallback",
+                "result": {
+                    "message": f"用户未安装 {tool}，本轮以自身能力作答（未调用该技能取数）。",
+                    "tier": "A",
+                    "github": tier_info["github"],
+                    "purpose": tier_info["purpose"],
+                    "hint": "仅可说方法论 / 框架 / 需准备的数据项；凡试验登记号、安全信号数值、"
+                            "文献条目等需取数的内容，一律不得编造，须明确标注「数据未取数」。",
+                },
+                "draft_answer": draft,
+                "deferred_tools": deferred,
+                "deferred_note": deferred_note,
+                "elapsed_sec": 0,
+            }
+        return {
+            "tool": tool,
+            "status": "install_required",
+            "result": {
+                "message": (
+                    f"{tool} 尚未安装（A 档技能，已在 SkillHub 上架）。"
+                    "**建议安装**：你可自行执行安装命令，或明确授权后由 ct-advisor 代为安装。"
+                    if not authorized else
+                    f"{tool} 尚未安装；用户已明确授权安装，可执行安装命令。"
+                ),
+                "tier": "A",
+                "published": tier_info["published"],
+                "github": tier_info["github"],
+                "skillhub": _skillhub_id(mapping, tool),
+                "purpose": tier_info["purpose"],
+                # ---- 安装授权门（2026-09-10）----
+                # 默认 suggest：**只向用户建议安装，agent 不得代为执行**（安装会下载并写入
+                # 本地技能目录，可能触发本机安全提示）。仅当用户在卡片里给出 install_consent
+                # 的**明确授权词**（_APPROVE_WORDS）时才转 authorized。
+                "install_mode": "authorized" if authorized else "suggest",
+                "install_authorized": authorized,
+                "install_note": ("安装会从 SkillHub 下载技能包并写入本地技能目录，可能触发本机"
+                                 "安全提示；在用户明确授权前，ct-advisor 不执行任何安装动作。"),
+                # 安装通道 = SkillHub（平台自带市场未收录 ct-*，实测 total=0）。
+                # install_command 由 _install_command() 生成，含 --dir 与完整解释器路径，
+                # 是**实测可执行**的命令；不得退回裸 `skillhub install`（PATH 无此命令）。
+                "install_command": _install_command(mapping, tool),
+                "install_hint": (f"安装通道：SkillHub（{_skillhub_id(mapping, tool)}）"
+                                 if _skillhub_cli(mapping) else
+                                 "本机未找到 SkillHub CLI（~/.skillhub/skills_store_cli.py）；"
+                                 "请使用上方的 install_command（自带安装器），"
+                                 "或按 GitHub 仓库手动放入技能目录。"),
+                "missing": _missing,
+                "hint": (
+                    "用户已明确授权安装 → 执行 install_command，安装成功后带**原执行卡**重跑 "
+                    "`--card-inline`（代码会自动调用该技能并缝合）；安装失败则告知用户并改用"
+                    "自身能力作答、标注「数据未取数」。"
+                    if authorized else
+                    "🔴 **只建议、不执行**：向用户说明该技能的用途，把 install_command 原样"
+                    "给出（用户可自行执行），并说明「安装会写入本地技能目录、可能触发本机安全"
+                    "提示」。**除非用户明确授权**（回复授权安装 → 在卡片加 "
+                    "\"install_consent\": \"approved\" 重跑），否则**不得代为执行安装**。"
+                    "用户拒绝 → 在卡片加 \"install_consent\": \"declined\" 重跑，"
+                    "由代码产出「未取数」兜底答案。"
+                ),
+            },
             "draft_answer": draft,
             "deferred_tools": deferred,
             "deferred_note": deferred_note,

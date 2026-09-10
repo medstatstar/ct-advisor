@@ -6,9 +6,9 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-advisor logo"/>
 </div>
 
-> **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor. Every **non-vague** question is first passed through a deterministic, LLM-free local orchestrator (`scripts/orchestrate.py`): it may prefetch the needed sibling data skill (ct-registry / ct-safety / ct-literature / ct-samplesize) **in parallel** with the Coze cloud workflow, then merge and stitch the result **in code** — the agent only relays the final answer verbatim. A `vague` question is first clarified locally via the Local Clarify Loop (`scripts/clarify_loop.py`), then re-routed. When Coze (or the prefetch) needs a sibling data skill, the call runs **locally** and the result is stitched in by code; local `knowledge/` serves only as the Coze-failure fallback.**
+> **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor that also routes real-data / competitive-intel needs to the sibling data skills through a local, code-only orchestrator (`orchestrate.py`) and stitches their results back in code.**
 >
-> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor passes it to the local orchestrator, which forwards to the Coze cloud workflow for methodology / design / statistics / GCP / safety / regulatory / QC / tone answers, and for real-data or competitive-intel needs runs the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) **locally** and stitches the result in **code**. It **re-implements no** retrieval or computation logic. A-tier.
+> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor passes every **non-vague** question to the local orchestrator (`orchestrate.py`), which calls the Coze cloud workflow for methodology / design / statistics / GCP / safety / regulatory / QC / tone answers, and when needed runs the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) **locally** and stitches the result **in code**. It **re-implements no** retrieval or computation logic.
 
 ---
 
@@ -26,97 +26,152 @@ The `ct-*` clinical-trial skill family is built to address needs across the enti
 
 ct-advisor is a **conversational skill**: you simply tell the assistant what you're working on — no commands, no parameter names to remember. Once installed as a WorkBuddy skill, you invoke it in a chat via the Skill tool; there is no extra setup, but it activates only when you call it — not automatically in the background.
 
-Below are 8 real conversational examples ordered from simple to advanced. Each shows **"You say"** and a sketch of **"The assistant replies"**, plus how to get the actual data / computation.
+Below are 8 examples showing **what you actually see in the chat**: each has a **"You say"** and the **reply you see** (the user-facing answer), with a one-line note on the machinery underneath. Multi-round cases (examples 4 / 5 / 7) ask you for the missing parameter first, then give the final answer.
 
-### Example 1 · A simple methodology question (forwarded, no menu) 
-**You say:** 
-Superiority design, two parallel groups — how should I set the primary estimand?
+### Example 1 · Subject compensation after early withdrawal (GCP, answered directly)
 
-**Assistant replies (sketch):** 
-Per the ICH E9(R1) estimand framework, a two-arm superiority trial defines: ① **treatment effect** (difference in the chosen endpoint), ② **population** (default "unless an intercurrent event is clinically critical, use the 'while on treatment' strategy"), ③ **variable** (e.g. change from baseline), ④ **summary** (difference + 95% CI). Give me the endpoint and I can draft the full estimand statement.
+**You say:**
+> The protocol says subjects who complete all visits get a CNY 5,000 travel allowance. One subject withdrew early because of an SAE — must the investigator pay the full amount? What does GCP require?
 
-**📌 No data needed** — this is forwarded to Coze in a single call; you get the answer directly, no menu.
-
-### Example 2 · A narrow data ask (one data skill) 
-**You say:** 
-Pull the registered trials for semaglutide in type-2 diabetes, 2021–2026.
-
-**Assistant replies (sketch):** 
-Routing you to **ct-registry** (CT.gov + WHO ICTRP + CDE + EU-CTR + ChiCTR + ISRCTN + DRKS). Here is the normalized landscape — N trials, phase mix, region mix, top sponsors — with each row labeled "Data source: ct-registry on <date>".
-
-**📌 Get the real data:** By default the advisor dispatches to **ct-registry** and the sibling skills, returning the live landscape directly (data_intel dispatched directly, no extra confirmation needed); every row labeled "Data source: ct-registry on <date>".
-
-### Example 3 · A broad competitive-intel ask (three sources stitched in-house ⭐) 
-**You say:** 
-Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature.
-
-**Assistant replies (sketch):** 
-This is a broad ask, so the **local code orchestrator** (`orchestrate.py`) will dispatch **ct-registry + ct-safety + ct-literature** as needed and **stitch the Strategic Brief in code** — I just relay the result (no separate manual step). Plan: (1) registry landscape, (2) FAERS safety signals, (3) published evidence — then a merged brief with a "Data source: ct-xxx on <date>" label on every claim.
-
-**📌 Get the real brief:** By default the advisor's **local code orchestrator dispatches ct-registry + ct-safety + ct-literature as needed and stitches the Strategic Brief in code** (data_intel dispatched directly, no extra confirmation needed; the agent only relays). (This replaces the old one-stop `ct-pipeline` route — the local orchestrator now does the dispatch + stitching automatically.)
-
-### Example 4 · A multi-part design task (forwarded, Coze decomposes) 
-**You say:** 
-I'm planning a Phase II oncology trial and also need the sample size — help me decide the design.
-
-**Assistant replies (sketch):** 
-This is a multi-part ask, so the local orchestrator (`orchestrate.py`) runs the needed data skill (e.g. **ct-samplesize**) **in parallel with** the Coze cloud workflow (single Coze call). Coze returns a structured plan — it lays out the key Phase II oncology design decisions (endpoint, control arm, randomization, sample-size basis) and, since you also need the sample size, the computed n is stitched in by code. I'll show you the plan and the result, then we can drill into any piece.
-
-**📌 Note:** Multi-part and data-intel requests are handled by the **local code orchestrator** — there is no local popup routing menu anymore. The orchestrator forwards to Coze and runs any needed sibling skill locally, then stitches in code; the agent just relays.
-
-### Example 5 · Not sure what you need (vague → Local Clarify Loop) 
-**You say:** 
-I'm not sure what I actually need — I have a half-written protocol and some questions.
-
-**Assistant replies (sketch):** 
-> No problem — a "half-written protocol with loose ends" state is common. Before I analyse anything formally, let me help you scope it. Two questions plus a "what I can help with" menu below; answer whichever you like, no need to cover all.
+**The reply you see:**
+> Where a subject withdraws early because of an SAE (serious adverse event), the investigator **should pay the full CNY 5,000 travel allowance** — it must not be withheld or prorated. China's current GCP requires compensation arrangements to be fair and reasonable and bars deduction clauses that undermine subjects' rights; a withdrawal the subject did not choose must not cost them the compensation they are due.
 >
-> **First, two things that most affect direction:**
-> 1. Who is the **target population** (disease, stage, line of therapy, age)? — this decides whether conclusions apply to your protocol.
-> 2. Which **endpoint** do you care about most (OS, PFS, ORR, AE rate, quality of life…)? *(If you mention "compared to what", I'll also ask the comparator.)*
+> 1. **The scope is clear**: this travel allowance reimburses costs the subject actually incurs travelling for the trial; it is not an incentive bonus reserved for those who complete every visit. Protocol wording such as "full allowance only on completion of all visits" governs voluntary, unexplained withdrawal. An SAE is a trial-related, non-voluntary exit; deducting the allowance directly harms the subject's rights and would not meet ethics-review expectations.
+> 2. **Compliance steps**: after paying in full, record the payment in the SAE follow-up file; if the ethics committee asks how subject rights were handled in the SAE, submit an explanation as required.
 >
-> **What kind of help do you want** (reply with a number or in your own words):
-> 1. Protocol review — point-by-point check of the draft: what's missing, where the design has gaps / compliance risks. (Note: the Coze side only does a **basic** point-by-point review + severity grading + revision suggestions; for a **deep multi-role review / revision-risk scoring**, explicitly call `@skill:ct-protocol`, which runs locally and offline, not via the cloud.)
-> 2. Design consulting — one module is unclear: randomisation / blinding / eligibility / statistical assumptions.
-> 3. Sample size — give me population / endpoint / expected effect, I'll route to ct-samplesize for numbers + figures.
-> 4. Endpoints & statistical plan — how to choose primary/secondary endpoints, how to sequence hypothesis tests, how to define FAS/PPS/SS.
-> 5. Specific Q&A — just throw your scattered questions at me, I'll answer them one by one.
-> 6. Full read-through — paste or upload the half-written protocol (docx/pdf/ppt); after reading I'll tell you exactly where it's stuck and what to add next. (The generated protocol / spec is delivered as formal text — no graphical decoration.)
+> Basis: *Good Clinical Practice for Drug Clinical Trials* (2020 edition).
+
+> Under the hood: a single cloud call — no database lookup, no menu.
+
+### Example 2 · Expectedness: do the IB and the label need updating? (pharmacovigilance, answered directly)
+
+**You say:**
+> An adverse reaction is listed as "uncommon" in the Investigator's Brochure (IB), but the observed rate in the trial has reached 15%. How should PV assess whether the IB and the label need updating?
+
+**The reply you see:**
+> This warrants an assessment straight away; by default the incidence section of the IB needs updating, and if the causal link to the drug is clear and the risk is serious, the risk-information section and the label should be updated too.
 >
-> The easiest step is still #6: paste the half-written protocol and I stop guessing.
+> **Calibrate the data first**: agree one definition and coding standard for the reaction, and confirm that the 15% denominator is the drug-exposed population and that the event criteria match those behind the IB's original "uncommon" entry — ruling out miscoding or a mixed event pool inflating the rate. "Uncommon" normally means 0.1%–1%; 15% is far above that expectation.
+> **Assess the causal link**: weigh temporal sequence, dose–response, dechallenge/rechallenge and biological plausibility to judge causality for this drug, and check whether severity has escalated (e.g. severe or fatal cases).
+> **Land the update**: if only the rate rose, with no change in causality or severity, update the incidence section of the IB alone; if causality is clear and the risk is materially higher, also update the IB's risk information and the product label (or the pre-approval risk-management plan), and submit the revised IB to the regulator, the ethics committees and all investigator sites as required.
+>
+> Basis: ICH E2F (Development Safety Update Report); CDE guidance on Safety Reference Information (RSI) in the Investigator's Brochure.
 
-### Example 6 · Switch the output language
-**You say:** 
-switch to English.  /  > Always reply in English.
+> Under the hood: a single cloud call — no database lookup, no menu.
 
-**Assistant replies (sketch):** 
-Sure, I'll answer in English from now on. (Output language auto-follows your OS by default — Chinese OS → Chinese, otherwise English — but you can switch with one sentence.)
+### Example 3 · A narrow data ask (one data skill)
 
-**📌 Note:** Language is one-sentence switchable:
-- **This conversation only** — say "switch to English" / "用中文回复".
-- **Permanently (all future sessions)** — say "always reply in English" / "永久用中文" (the choice is remembered).
+**You say:**
+> Pull the registered trials for semaglutide in type-2 diabetes, 2021–2026.
 
----
+**The reply you see:**
+> For semaglutide in type-2 diabetes, **50 registered trials** were found:
+>
+> - **Phase**: Phase 3 — 14, Phase 2 — 10, Phase 1 — 5, Phase 4 — 4, and 14 not stated.
+> - **Region**: United States 21, Canada 7, Denmark 6, Germany 6, China 5 (the rest in other countries).
+> - **Top sponsors**: Novo Nordisk 20, Eli Lilly 2, Brigham and Women's Hospital 2.
+> - **Details**: each trial's name, phase, region and sponsor were compiled into a spreadsheet you can open or download.
+>
+> 💡 *The above is a readable summary of this skill's result; to verify it or get the full detailed output, run the `ct-registry` skill directly.*
 
-### Example 7 · A published-safety evidence check (ct-literature --safety)
-**You say:** 
-One of our PD-1 products has case reports of interstitial lung disease; QA suspects a new safety signal. Search the **published literature** (case reports, pharmacovigilance studies, reviews) for how much support this signal has, and give me a citable evidence summary for the signal-evaluation meeting.
+> 📌 **Under the hood:** code calls the trial-registry skill (ct-registry) and appends the measured results at the end of the answer.
 
-**Assistant replies (sketch):** 
-This needs *published* evidence, so I'll route to **ct-literature --safety** (OpenAlex + Europe PMC/MeSH, 2021–2026, CSM bias focused on case reports / PV studies / reviews) and hand you a de-duplicated, citation-verified evidence base — layered by evidence strength (systematic reviews / cohort / case series / case reports), each entry with a verifiable DOI/PMID.
+### Example 4 · A broad competitive-intel ask (multi-source, one skill per round ⭐)
 
-**📌 Note:** **ct-safety** gives structured FAERS numbers (PRR/ROR/IC); **ct-literature** surfaces **qualitative published evidence** — they complement each other: a signal is strongest when the spontaneous-report statistics *and* the published case literature point the same way. Citation verification + a provenance log make every reference clickable (anti-hallucination).
+**You say:**
+> Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature.
+
+**The reply you see (round 1 · follow-up):**
+> Sure — I'll put together the competitive landscape for GLP-1 RAs in obesity. To retrieve accurately, please confirm the **specific indication or target** (e.g. obesity / overweight, or a particular target).
+
+**The reply you see (after you supply it · final):**
+> **GLP-1 RA in obesity — competitive-intel summary**
+>
+> - **Registered trials**: the trials in this indication are compiled — count, phase mix and top sponsors.
+> - **Published evidence**: relevant RCTs and systematic reviews retrieved, with verifiable DOIs/PMIDs.
+> - **Safety signals**: FAERS signals with quantitative measures (PRR / ROR / IC).
+> - **Takeaway**: competition concentrates in a few leading players, with a phase-3-heavy registration and evidence footprint.
+>
+> Each source is labelled in the "supplementary data" section at the end of the answer, noting which skill produced it.
+>
+> 💡 *The above is a readable summary of the multi-skill result; to verify it or get the full detail, run `ct-registry` / `ct-safety` / `ct-literature` directly.*
+
+> 📌 **Under the hood:** one card runs one skill; "trials + safety + literature" takes **several rounds** of supply-param → run → stitch — not one parallel pass.
+
+### Example 5 · A multi-part design task (follow-up first, then compute)
+
+**You say:**
+> I'm planning a Phase II oncology trial and also need the sample size — help me decide the design.
+
+**The reply you see (round 1 · follow-up):**
+> Sure — I'll help you settle the Phase II oncology design and compute the sample size. Please confirm two things first:
+> - **Test type**: two-proportion / two-mean / survival?
+> - **Effect-size assumptions**: e.g. the two event rates p1 and p2, or a mean difference / SD / margin (pick one).
+>
+> (Defaults: two-sided α=0.05, power 80% — tell me if you'd like them changed.)
+
+**The reply you see (after you supply it · final):**
+> With a **two-proportion test** (p1=0.30, p2=0.45), two-sided α=0.05 and 80% power: **162 patients per group, 324 in total.**
+> The design narrative (endpoints, enrolment, statistical methods) comes from the cloud side.
+>
+> 💡 *The above is a readable summary of this skill's result; to verify it or get the full detailed output, run the `ct-samplesize` skill directly.*
+
+> 📌 **Under the hood:** the sample size is computed by the local sample-size skill (ct-samplesize) and appended; missing parameters trigger the follow-up first.
+
+### Example 6 · Not sure what you need (vague → local clarify)
+
+**You say:**
+> I'm not sure what I actually need — I have a half-written protocol and some questions.
+
+**The reply you see:**
+> No problem — let's untangle it first. Please add two things:
+> 1. **Target population / subjects**: e.g. disease, stage, line of therapy, age band — this affects how far the conclusions apply.
+> 2. **Endpoint / outcome of interest**: e.g. OS, PFS, ORR, or adverse-event rates.
+>
+> Once that's clear I'll route you to the right workflow (methodology design / data retrieval & intel / protocol explanation & review).
+
+> 📌 **Under the hood:** a vague question is handled by the **local** clarify flow first (no network, no data skill), then re-routed.
+
+### Example 7 · A published-safety evidence check (ct-literature)
+
+**You say:**
+> One of our PD-1 products has case reports of interstitial lung disease; QA suspects a new safety signal. Search the **published literature** (case reports, pharmacovigilance studies, reviews) for how much support this signal has, and give me a citable evidence summary for the signal-evaluation meeting.
+
+**The reply you see (round 1 · follow-up):**
+> Sure — I'll check how well "PD-1–related interstitial lung disease" is supported in the published literature and prepare a citable evidence summary. Please give me the **search topic / target** (e.g. "PD-1", or a specific drug name).
+> Tip: **English** keywords retrieve better (e.g. "interstitial lung disease" / "pneumonitis").
+
+**The reply you see (after you supply it · final):**
+> **Published-evidence summary · PD-1–related interstitial lung disease**
+>
+> - **Retrieval**: **20** relevant works found (OpenAlex 10 + Europe PMC 10).
+> - **Citation check**: **19 of 20** DOIs/PMIDs verified automatically; 1 could not be verified (source-site anti-bot block).
+> - **Citable list**: titles, journals, years and DOIs/PMIDs compiled into a spreadsheet (Excel / HTML) you can check item by item.
+> - **Notes**: without a Semantic Scholar key that source is skipped; Chinese search terms trigger a "use English terms for better recall" notice.
+>
+> 💡 *The above is a readable summary of this skill's result; to verify it or get the full detailed output, run the `ct-literature` skill directly.*
+
+> 📌 **Under the hood:** code calls the literature skill (ct-literature) for multi-source retrieval + citation verification; the evidence list lands in artifact files, and the answer body is its readable form.
 
 ### Example 8 · Protocol background evidence + sample-size handoff (ct-literature + ct-samplesize)
-**You say:** 
-We're drafting a phase-3 protocol in this indication. Give me the published RCT + systematic-review evidence from the last 5 years for the introduction, then compute the sample size for a superiority design using the key assumptions I'll provide.
 
-**Assistant replies (sketch):** 
-Two handoffs: (1) **ct-literature** for the evidence base (RCTs + systematic reviews, 2021–2026, de-duplicated, citation-linked) for the introduction; (2) **ct-samplesize** for the n computation once you confirm assumptions (α, power, effect size, dropout). The advisor carries the evidence-derived parameter framework (e.g. expected event rates) straight into the computation.
+**You say:**
+> We're drafting a phase-3 protocol in this indication. Give me the published RCT + systematic-review evidence from the last 5 years for the introduction, then compute the sample size for a superiority design using the key assumptions I'll provide.
 
-**📌 Note:** Cross-skill collaboration — literature evidence (A-tier retrieval) feeds the protocol background, and the same evidence-based assumptions flow into the sample-size calculation (A-tier compute). Every claim is labeled with its data source and date. (Note: the Coze-side "protocol writing / basic review" is an auxiliary output; for a **deep protocol review** call `@skill:ct-protocol`.)
+**The reply you see (round 1 · follow-up):**
+> Sure — two steps: first retrieve the last 5 years' published RCTs and systematic reviews as the introduction evidence base, then compute the superiority-design sample size from your assumptions. Please confirm:
+> - **Test type**?
+> - **Effect-size parameters**: p1 / p2, or effect / sd / margin (pick one)?
+> - **Literature search terms** (optional): if omitted I'll use indication defaults.
 
----
+**The reply you see (after you supply it · final):**
+> - **① Introduction evidence base**: last-5-year RCTs + systematic reviews retrieved for this indication, with journals, years and DOIs/PMIDs compiled into a citable list (attached).
+> - **② Superiority-design sample size**: computed from your test type and effect-size assumptions — **patients per group and total** (the numbers vary with the assumptions).
+> - Both sources are labelled in the "supplementary data" section at the end of the answer.
+>
+> 💡 *The above is a readable summary of the multi-skill result; to verify it or get the full detail, run `ct-literature` / `ct-samplesize` directly.*
+
+> 📌 **Under the hood:** cross-skill collaboration is a **serial, multi-step** handoff (a literature round, then a sample-size round) — not one parallel pass.
 
 ## 2. What Can It Do — Scenarios
 
@@ -134,12 +189,13 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 | Reply tone / rewrite | "Rewrite this patient letter in a warmer tone" (one-off request; cross-session tone memory is not yet enabled) |
 
 ### ② Real data & competitive intel (routed to sibling skills)
+> **The bar was tightened (2026-09-10):** a sibling skill is auto-invoked only for a **uniquely-directed** ask — a named data source (NCT / ClinicalTrials.gov / FAERS / PubMed), a named statistic or high-specificity method (PRR / ROR / EBGM / dechallenge-rechallenge / a specific irAE / meta-analysis), or an explicit "retrieval verb + clear object" phrasing (the table below shows these). **Generic words** (signal / literature / trial / safety / design) no longer trigger on their own: the advisor **answers from its own capability first**, then appends an install / invoke **suggestion at the end**.
 | Situation | Try saying in chat |
 |:---|:---|
 | Trial-registry landscape | "Pull registered trials for semaglutide in T2D, 2021–2026" |
 | Safety signals (FAERS) | "Any FAERS disproportionality signals for drug X?" |
 | Published literature | "Find systematic reviews on GLP-1 RA in obesity" |
-| **Full competitive-intel brief (three sources stitched ⭐)** | "Full competitive-intel picture for GLP-1 RA in obesity" |
+| **Full competitive intel (multi-source, round by round ⭐)** | "Full competitive-intel picture for GLP-1 RA in obesity" |
 
 ### ③ Compute handoff (to ct-samplesize)
 | Situation | Try saying in chat |
@@ -151,7 +207,7 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 |:---|:---|
 | Not sure what you need | "I'm not sure what I need — help me figure it out" |
 
-> The underlying sibling skills are described in their own READMEs; ordinary users only need to say what they want in plain language — the advisor routes and stitches.
+> The underlying sibling skills are described in their own READMEs; ordinary users only need to say what they want in plain language — the advisor routes and stitches. **Whenever the advisor calls a sibling skill, the answer ends with a 💡 line suggesting you run that skill directly if you want to verify it or get the full detailed output.**
 
 ---
 
@@ -159,15 +215,19 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 **Q: I only gave a partial description — will it still help?** A: Yes. For methodology it answers from the knowledge pack with whatever you provide, and flags anything it can't verify as `⚠️ needs official verification`. Data asks are routed to the relevant sibling skill by default; if you want to limit the scope, just say so in your question.
 
-**Q: How are data sources labeled in the answer?** A: Every data-grounded claim carries a "Data source: ct-xxx on <date>" label, so you can trace each number back to the sibling skill that produced it.
+**Q: How are data sources labeled in the answer?** A: Measured behaviour is a **section label**: code appends the sibling skill's measured output under `## 补充信息（来源：ct-xxx）` (**measured: no date**; the English form is `## Supplementary data (Source: ct-xxx)`), and the full list / evidence is exported to `./out/` (`report.xlsx`, `lit_report.xlsx|html`, `evidence_log.json|md`). That is how you trace each number back to the sibling skill that produced it; the answer also ends with a 💡 suggestion to run that sibling skill directly for the fuller original output.
+
+**Q: It says a sibling skill isn't installed — do I have to install it?** A: **No — the decision is yours, and nothing is ever installed without your say-so.** Sibling skills come in two tiers, and the tier is separate from whether a skill is published. **Tier A** (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` etc. — non-confidential input) that is **listed on SkillHub**: if missing locally, the advisor explains what it does and **suggests installing it** — it hands you the install command (`scripts/install_sibling.py <slug> --dir <skills-dir>`, which verifies the SkillHub listing before downloading) but **does not install anything by itself**, because installing writes a package into your local skills directory and **may trigger a security prompt**. You choose: run the command yourself, or **explicitly authorise** the advisor to do it — then it installs, calls the skill and returns live results. **Decline** → it answers from its own capability (cloud answer + local knowledge pack) and clearly labels the reply **"data not retrieved"**. If a Tier-A skill is **not yet listed** (e.g. `ct-pipeline`), the advisor says it has not been publicly released and **cannot be installed right now** — it will not hand you an address that installs an empty package — then answers from its own capability plus the installed siblings, labelled "data not retrieved". **Tier B** (e.g. `ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` — confidential protocols / subject data / CRFs): these are **not publicly released and cannot be installed**, so the advisor states plainly that a Tier-B skill is needed but is not publicly available, then completes the analysis from its own capability and notes that the in-depth analysis was not actually executed. Nothing is ever installed without your authorisation (by default installation is only *suggested*), and unavailable data is never fabricated.
 
 **It calls the sibling skills for real data by default.** `data_intel` asks are dispatched to the relevant sibling skill (ct-registry / ct-safety / ct-literature / ct-samplesize) by default to complete the analysis and return live results — no need to say "please fetch the data now". If you only want the plan and not the data yet, say "just show the plan".
 
 **Q: On a Chinese system, is the output in Chinese?** A: Yes. Output language follows your OS setting by default (Chinese on a Chinese-OS, English otherwise), and you can force-switch anytime with one sentence (e.g. "switch to English").
 
-**Q: How is the full competitive-intel brief generated now?** A: The advisor calls **ct-registry + ct-safety + ct-literature** once each and **stitches the Strategic Brief itself** — no separate `ct-pipeline` orchestrator. This keeps the same three-source coverage while removing the extra dependency.
+**Q: How is the full competitive-intel brief generated now?** A: Measured behaviour is **round by round**: the first run usually returns a delegate block (`need_tool` + a `need_tools` candidate list + `missing_params`), the advisor **asks you for the missing parameter** (measured: `cond`), and after you supply it **one skill runs per round**, its output stitched into the answer — covering three sources takes several rounds. `need_tools` is only Coze's candidate list; it is **not** auto-iterated, and no single "strategic brief" document is produced automatically. This replaces the separate `ct-pipeline` orchestrator.
 
 **Q: Does pure methodology need the network?** A: Yes — every **non-vague** question is sent to the Coze endpoint (`https://ct-advisor.coze.site/run`) for analysis in a **single call**; a `vague` question is clarified locally via the Local Clarify Loop first, then forwarded. The local `knowledge/` pack is the **fault fallback only**: if Coze is unreachable you still get an offline answer, marked as not cloud-refined.
+
+**Runtime prerequisite (measured):** calling Coze needs Python `requests`. It is **not** auto-installed — when missing the skill prints `python -m pip install "requests==2.32.3"` and exits (no silent install). Measured: run it with an interpreter that lacks the library and `orchestrate.py` returns the `⚠️ Coze 返回为空` fallback wrapper, while `refine_answer.py --forward/--ship` exits 1 with `精校依赖缺失`.
 
 **Q: What if I found an error in the result — how do I report it?**
 A: This skill follows the ct-base §20.3 bug-report workflow. If you suspect the result is wrong (or the engine errored), just say **"report a bug" / "上报问题" / "提交错误报告"**. The skill also **proactively asks** whether to report when it detects a likely defect (e.g. the engine errors or retries still fail) — at most **once per session**, and you can always decline. Either way, the assistant will:
@@ -192,9 +252,11 @@ You stay in full control: the report is shown to you **before** anything is sent
 
 ## 4. Execution Model & Safe Preview
 
-### Safe Preview (sibling skills dispatched by default)
-- **Dispatched by default:** For `data_intel` asks (competitive landscape / safety signals / literature / sample size), the advisor **dispatches directly to the relevant sibling skill** (ct-registry / ct-safety / ct-literature / ct-samplesize) by default to complete the analysis and return live results — no need to say "please fetch the data now". If you only want the plan and not the data yet, say "just show the plan".
-- **Traceable, not fabricated:** Every factual / normative claim carries a source citation or an `⚠️ needs official verification` marker; it never fills factual gaps with fluent prose.
+### Safe Preview (auto-invoke only for a uniquely-directed ask; otherwise answer first, suggest last)
+- **Auto-invoke only for a uniquely-directed ask:** a sibling skill is dispatched directly (ct-registry / ct-safety / ct-literature / ct-samplesize) only for a **strong trigger** — a named data source (NCT / FAERS / PubMed…), a named statistic / high-specificity method (PRR / ROR / EBGM / meta-analysis…), or an explicit "retrieval verb + clear object" phrasing — no need to say "please fetch the data now". Measured: **one card runs one skill**, and if a routing parameter is missing the advisor asks for it first.
+- **Generic words and consultation questions → answer first, suggest last:** for a bare generic word (signal / literature / trial / safety / design) or a "what is / how do I / give me a template" methodology, definition or document question, the advisor **answers fully from its own capability** (cloud answer + local knowledge pack) first; only when the question **does name** a data source / statistic (FAERS, PRR, PubMed…) does it append an install / invoke **suggestion at the end** — a purely generic or definition question no longer trails any suggestion, and it never interrupts the answer or pops a parameter follow-up because of a keyword false positive.
+- **Plan only:** if you only want the plan and not the data yet, say "just show the plan".
+- **Traceable, not fabricated:** Every factual / normative claim carries a source citation (code-appended measured results read `## 补充信息（来源：ct-xxx）`) or an `⚠️ needs official verification` marker; it never fills factual gaps with fluent prose.
 - Outputs are for reference only; validate against official sources before regulatory submissions.
 
 ### Graphical-rendering note
@@ -204,7 +266,7 @@ You stay in full control: the report is shown to you **before** anything is sent
 - **Pipeline safety:** graphics appear only *outside* the answer `<<<CT_ANSWER_START/END>>>` delimiters and never rewrite the answer body.
 
 ### Latency note
-Every **non-vague** question is handled by the local orchestrator (`scripts/orchestrate.py`), which forwards to the Coze endpoint in a **single call** (usually returns in **~20s**; data-intel questions also run the needed sibling skill locally in parallel). A `vague` question is clarified locally first (a few seconds via the Local Clarify Loop), then re-routed. Because the orchestrator, prefetch, merge, and stitching are all **code** (not the LLM), dependence on the local model's performance is low — but reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to over-think locally. **If a single reply routinely takes longer than 3 minutes, switch to a simpler / flash model to speed things up.**
+Every **non-vague** question is handled by the local orchestrator (`scripts/orchestrate.py`), which forwards to the Coze endpoint in a **single call** (`refiner.timeout = 90` s in `config.json`; **measured 3-72 s per round**, mostly 30-70 s; data-intel questions also run the needed sibling skill locally). **A timeout is not a hard error**: the answer falls back to the local draft (not cloud-polished) with `[coze] FALLBACK_TO_LOCAL_DRAFT` on stderr. A `vague` question is clarified locally first (a few seconds via the Local Clarify Loop), then re-routed. Because the orchestrator, prefetch, merge, and stitching are all **code** (not the LLM), dependence on the local model's performance is low — but reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to over-think locally. **If a single reply routinely takes longer than 3 minutes, switch to a simpler / flash model to speed things up.**
 
 ---
 
@@ -234,7 +296,7 @@ To be transparent about the full behavior the skill can perform:
 
 ct-advisor is the entry point that routes to sibling skills and forwards questions to the Coze refiner; it does not invent facts. Four guardrails apply:
 
-1. **Every factual claim is source-traceable.** Data-grounded claims from sibling skills carry a "Data source: ct-xxx on <date>" label; methodology / regulatory answers cite the authority (ICH / NMPA / FDA / EMA guidance) and link to it where available.
+1. **Every factual claim is source-traceable.** Data-grounded claims from sibling skills are appended by code as `## 补充信息（来源：ct-xxx）` (measured: the label carries no date; artifacts land in `./out/`); methodology / regulatory answers cite the authority (ICH / NMPA / FDA / EMA guidance) and link to it where available.
 2. **Identifier consistency check.** When a cited identifier (trial registration number, DOI / PMID) is resolved to a live record, the resolved title / author / year are compared against the original assertion; a mismatch is flagged `mismatch` and never treated as verified.
 3. **Unverifiable ⇒ `⚠️ needs official verification`.** Anything that cannot be traced to a public source is marked for official verification and never stated as a confirmed conclusion.
 4. **No fabrication.** Trial registration numbers, approval dates, subject counts, and company M&A / pipeline moves are never invented; if a public source does not disclose them, the output says "not disclosed in public sources".
@@ -247,7 +309,7 @@ CLI helpers, runtime requirements, the architecture tree, and scanner false-posi
 
 ---
 
-**Version**: v0.9.110 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v0.9.115 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang).
 

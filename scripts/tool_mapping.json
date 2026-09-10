@@ -1,6 +1,6 @@
 {
-  "version": "2026-09-03",
-  "description": "need_tool 执行卡 → 本地技能执行映射表。params 键对齐各技能 CLI 的 argparse 参数；布尔参数 true 才加 flag。2026-08-23 四技能联调新增字段：result_files（stdout 无结构化数值时回读产物文件，支持沙箱 _unsaved/ 回退）、prep_hint（多技能命中时只执行主判，其余技能用此文案提示用户先准备数据）。",
+  "version": "2026-09-10",
+  "description": "need_tool 执行卡 → 本地技能执行映射表。params 键对齐各技能 CLI 的 argparse 参数；布尔参数 true 才加 flag。2026-08-23 四技能联调新增字段：result_files（stdout 无结构化数值时回读产物文件，支持沙箱 _unsaved/ 回退）、prep_hint（多技能命中时只执行主判，其余技能用此文案提示用户先准备数据）。2026-09-10 新增顶层 tiers：ct 系列 A/B 档登记，驱动「检查安装 / 提示安装 / 提示不对外发布」门控。",
   "skills": {
     "ct-registry": {
       "skill": "ct-registry",
@@ -104,6 +104,53 @@
       },
       "prep_hint": "样本量/效能计算：需确认检验类型（率比较 / 均值比较 / 生存等）与效应量假设（p1+p2 / effect+sd / HR），以及 α、power、单双侧",
       "note": "样本量/效能计算；引擎=coze 远程 R 服务（v5 唯一后端，无本地回退）。SAFE PREVIEW 按 ct-base §5 双语义：coze 引擎无 --yes 闸门，请求信封由执行卡触发直接发送，故 extra_args 不携 --yes（§5 规定 coze 引擎 --yes 不适用）；本地引擎技能（ct-registry/ct-safety/ct-literature）才用 --run/--auto-confirm 跳过交互确认门。locale 由 ct-advisor 经 CTSS_LOCALE 环境变量透传（内容级检测用户语言），对齐 coze 端 user_language。2026-08-23 联调：stdout 含 __FIGURE__ / __SVG_WIDGET__ 内联图（单次可达数万字符），由 handle_need_tool._sanitize_result 剥离后再交缝合层，避免上下文爆炸。"
+    }
+  },
+  "tiers": {
+    "version": "2026-09-10",
+    "authority": "tier 分类：ct-base docs/05-version-build.md §11（唯一分类轴 input_sensitivity）+ docs/06-readme-brand.md §13.1（保密声明）。A 档 = 输入非涉密；B 档 = 输入涉密 · 不对外发布。published 判据：**SkillHub（skillhub.cn）上架状态**——见下方 note。",
+    "note": "tier 由 ct-base §11 的 input_sensitivity 决定（A = 输入非涉密 / B = 输入涉密），published 是与之正交的「可得性」事实。**published 的权威判据 = SkillHub 上架**（search api.skillhub.cn 按 publicSlug 精确命中），**不是 GitHub**——GitHub 上「已建但从未推送」的空占位仓库同样返回 HTTP 200，会得出「已发布」的假结论（2026-09-10 ct-pipeline 事故即由此而来）。复核命令：`python scripts/probe_publication.py`（SkillHub 为判据、GitHub 仅作诊断；`--fix` 可回写本表）。handle_need_tool 依据本表决定四分支：B 档 / 未登记 → unreleased_b（提示不对外发布后本地作答）；A 档且未安装且未发布 → unpublished_a（尚不可安装，本地作答 + 未取数标注）；A 档未安装且已发布 → install_required（**给安装建议**：默认 install_mode=suggest，只把命令交给用户、不代为执行；仅当用户明确授权（install_consent=approved）才转 authorized 由 agent 代办——安装会写入本地技能目录，可能触发本机安全提示，故绝不自动安装）；A 档已安装 → 正常执行。本表是档位与安装地址的单一事实来源，check_deps.py 亦从此读取，禁止各处另立一份。",
+    "default_tier": "B",
+    "default_rationale": "未登记技能一律保守按 B 档处理：不尝试安装未知技能、不硬错卡死整条应答，改为提示后本地作答。",
+    "install": {
+      "authority": "SkillHub（skillhub.cn）。2026-09-10 实测：WorkBuddy 自带推荐市场（BuiltinMarket）搜索 ct-* 返回 total=0，即平台市场未收录本系列 —— SkillHub 是 A 档兄弟技能**唯一可用**的安装通道。",
+      "namespace": "user_ff7413f5",
+      "namespace_note": "SkillHub 发布者 handle，2026-09-10 由 search API 逐条核定（ct-registry / ct-safety / ct-literature / ct-samplesize 四者一致）。canonicalName 形如 @user_ff7413f5/<slug>。",
+      "cli_candidates": [
+        "//filesrv/c$/Users/WintoneFileSrv/.skillhub/skills_store_cli.py",
+        "~/.skillhub/skills_store_cli.py"
+      ],
+      "cli_env": "SKILLHUB_CLI",
+      "cli_note": "本机并存两份不同构建，**必须挑完整版**（_skillhub_cli 按 `--skip-self-upgrade` 是否存在于源码离线探测，优先完整版）：① 完整版 v2026.8.5（226KB，filesrv）：走公网 api.skillhub.cn，实测安装成功；② 精简版 v2026.3.6（44KB，~/.skillhub）：无 --skip-self-upgrade、--dir 仅顶层，且索引/下载端点指向**内网 LB**（http://lb-*.clb.gz-tencentclb.com），实测返回非 zip → 「Downloaded file is not a valid zip archive」，**装不了**。",
+      "command_template": "<python> <cli> [--skip-self-upgrade] --dir <skills_dir> install <slug>",
+      "command_note": "2026-09-10 实测可用（Anaconda base python 3.14.6 + 完整版 CLI v2026.8.5，装 ct-registry / ct-safety / ct-literature 到临时目录，产物为含 SKILL.md + scripts/ 的标准技能包）。五个实测要点：① **--dir 必须放在子命令之前**——顶层 --dir 两版 CLI 都有，子命令级 --dir 只有完整版有，前置是唯一对两版都可移植的位置（实测把它放子命令后会 unrecognized arguments）；② **必须显式给 --dir**，CLI 默认 ./skills（相对 cwd），不指技能根目录——漏了会装到别处，_skill_installed 仍为 False，形成「装了但代码找不到」的死循环；③ **--skip-self-upgrade 需按 CLI 能力条件添加**，精简版无此 flag，硬加会 argparse 报错；④ **--namespace 非必需**（按 slug 远程精确匹配，实测不带亦可）；⑤ 裸命令 `skillhub install <slug>` **不可用**——PATH 中无 skillhub（~/.local/bin/skillhub 本机不存在，且 skill-publish 记载该 bash 启动器有 Windows 路径 bug），故命令一律写完整解释器 + CLI 绝对路径。",
+      "verify_url": "https://api.skillhub.cn/api/v1/search?q=<slug>&limit=20",
+      "verify_note": "复核上架状态：results[*] 的 slug 或 namespace.publicSlug 精确等于 <slug> 即已上架。注意 GitHub 与 SkillHub 的网页详情页均为 SPA（任意路径含不存在的 slug 都返回 HTTP 200、字节数几乎相同），**不可用 HTTP 状态码判定页面或仓库是否存在**。"
+    },
+    "registry": {
+      "ct-registry": {"tier": "A", "published": true, "github": "https://github.com/medstatstar/ct-registry", "purpose": "试验格局检索（CT.gov / CDE / WHO ICTRP 等）"},
+      "ct-safety": {"tier": "A", "published": true, "github": "https://github.com/medstatstar/ct-safety", "purpose": "FAERS 安全信号（PRR / ROR / IC）"},
+      "ct-literature": {"tier": "A", "published": true, "github": "https://github.com/medstatstar/ct-literature", "purpose": "公开文献检索（OpenAlex / Europe PMC / Semantic Scholar）"},
+      "ct-samplesize": {"tier": "A", "published": true, "github": "https://github.com/medstatstar/ct-samplesize", "purpose": "样本量 / 检验效能计算"},
+      "ct-pipeline": {"tier": "A", "published": false, "github": "https://github.com/medstatstar/ct-pipeline", "purpose": "公开情报编排（intel / surveillance）", "note": "尚未发布：**SkillHub 上未上架**（2026-09-10 api.skillhub.cn 按 publicSlug 搜索无结果），GitHub 上的 medstatstar/ct-pipeline 只是空占位仓库（API size=0、contents 返回「This repository is empty」、created_at=pushed_at=2026-08-07）。tier 仍为 A（输入=公开情报 / 竞品监测，非涉密），但因未上架而不可安装——`git clone` 只会得到空目录，故路由命中时走 unpublished_a，不向用户提供安装地址。"},
+      "ct-synthdata": {"tier": "A", "published": false, "github": "https://github.com/medstatstar/ct-synthdata", "purpose": "合成 CDISC 测试数据生成（库内夹具，非用户侧入口）"},
+      "meta-analysis": {"tier": "A", "published": true, "github": "https://github.com/medstatstar/meta-analysis", "purpose": "医学 Meta 分析（referral-only）"},
+      "statsoft-cli": {"tier": "A", "published": true, "github": "https://github.com/medstatstar/statsoft-cli", "purpose": "统计软件 CLI 接入"},
+      "statdata-transfer": {"tier": "A", "published": true, "github": "https://github.com/medstatstar/statdata-transfer", "purpose": "统计数据格式转换"},
+      "ct-protocol": {"tier": "B", "published": false, "purpose": "方案深度审阅（多角色评审 / 修订风险评估）"},
+      "ct-ecrf": {"tier": "B", "published": false, "purpose": "本地 CRF 设计（方案 → CRF 字段 + 编辑检查）"},
+      "ct-datacheck": {"tier": "B", "published": false, "purpose": "本地数据质控（DC 规则）"},
+      "ct-statrev": {"tier": "B", "published": false, "purpose": "统计审阅（人群一致性 / 终点复现）"},
+      "ct-sdtm": {"tier": "B", "published": false, "purpose": "本地 SDTM 转换"},
+      "ct-adam": {"tier": "B", "published": false, "purpose": "本地 ADaM 转换"},
+      "ct-analysis": {"tier": "B", "published": false, "purpose": "试验内统计分析"},
+      "ct-tlf": {"tier": "B", "published": false, "purpose": "本地三线表 / 图"},
+      "ct-csr": {"tier": "B", "published": false, "purpose": "本地 CSR 报告（ICH E3 / NMPA）"},
+      "ct-submission": {"tier": "B", "published": false, "purpose": "CTD / eCTD 申报资料组装"},
+      "ct-eligibility": {"tier": "B", "published": false, "purpose": "受试者↔方案入组匹配"},
+      "ct-congress": {"tier": "B", "published": false, "purpose": "会议疗效情报（由 ct-pipeline 调度）"},
+      "ct-base": {"tier": "meta", "published": false, "purpose": "技能库统一底座（元层，永不发布）"},
+      "ct-update": {"tier": "meta", "published": false, "purpose": "对标升级工具（元层，不对外发布）"}
     }
   },
   "referrals": {

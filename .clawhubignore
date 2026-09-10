@@ -33,6 +33,7 @@ run_tests_v2.py
 run_tests_v3.py
 test_seven_flows.py
 scripts/test_modeB.py
+scripts/test_tool_router.py
 ct_bug_report_*.md
 
 # 运行态输出（§16.8：out_*/out/out_live 绝不进发布包，避免运行产物泄漏）
@@ -77,6 +78,10 @@ config/context_cache.json
 
 # ── 开发者笔记，不进发布包 ──
 learnings.md
+
+# ── 一次性补丁脚本 / 交接文件（临时件，不进版本库与发布包）──
+scripts/_patch*.py
+docs/HANDOVER_*.md
 
 # ── ct-base 统一基线（ClawHub 不读 .gitignore，须自列全量）──
 .env

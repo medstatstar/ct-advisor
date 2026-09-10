@@ -29,6 +29,8 @@ purpose: ct-advisor Answer Workflow step definitions — the SKILL.md step summa
 
 All non-`vague` questions go to Coze **verbatim** (forward-only). The forwarded `difficulty` is a **hint only** — Coze's `generate_organized_problems_node` **ignores it and re-estimates via LLM** (simple/middle/complex), then feeds that value into `full_analysis` as the answer-depth knob.
 
+> 🔴 **Answer contract (cloud-side, 2026-09-10)** — that re-estimated difficulty is **not just a depth hint**: the Coze nodes `full_analysis` / `review` now enforce a highest-priority **Answer contract**: **C1 answer-first** (first paragraph answers the literal question; decision questions must state one explicit recommendation) · **C2 scope lock** (no sections on topics `original_question` never asked — adjacent topics collapse into one trailing offer line) · **C3 difficulty = expected magnitude + hard backstop** (simple ~100 / middle 300–500 / complex 500–800 Chinese characters; backstop 200 / 700 / 1000; `###` banned) — element completeness outranks length, so the budget bounds redundancy only · **C4 commit to one recommendation**. The local side is a **pipe**: do NOT trim / reorder / re-write a long answer locally. Prompt changes live in `adapters/coze/config/*.json` (`full_analysis_cfg.json`, `review_cfg.json`, `generate_organized_problems_cfg.json`, `judge_difficulty_cfg.json`) and **require a Coze redeploy** (upload the package zip + rebuild the image) to take effect.
+
 **🔴 Run the router (mandatory, code-only)**:
 
 ```bash
@@ -134,7 +136,7 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 
 - 🔴 **HARD GATE (post-collect zero-processing)**: the instant `--collect` returns a cache hit, output the Coze stdout **as-is** — no re-write, no re-order, no injecting `knowledge/` citations the Coze output lacked, no re-formatting, no appended "local summary". Re-synthesis after Coze returns is the #2 measured latency failure mode. Ship Coze, full stop.
 - 🔴 **Route is a window-internal side task, NEVER a blocker**: `fire-only` needs only `original_question`; the Route result is irrelevant to Coze. Do NOT read `workflows.json` / `knowledge/` *before* firing (Step 1) — and do NOT let Route retrieval delay the collect call. If local retrieval would take long, it only matters as fallback; Coze (≈20s) almost always wins, so the user never waits for the full local retrieval.
-- Coze HTTP timeout = full 60s (`refiner.timeout`); **complex / 模板类问题放宽到 300s**（`refiner.long_timeout`=300s）——由 `CozeRefiner._resolve_timeout()` 按 `difficulty==complex` 或 `category` 命中模板类标记自动判定
+- Coze HTTP timeout = full 90s (`refiner.timeout`); **complex / 模板类问题放宽到 300s**（`refiner.long_timeout`=300s）——由 `CozeRefiner._resolve_timeout()` 按 `difficulty==complex` 或 `category` 命中模板类标记自动判定
 - race_window = 30s (config.json `refiner.race_window`; caller can override with `--wait N`)
 - **⚠️ --collect MUST pass complete payload**: the cache path is derived from the hash of original_question + query_meta; without the payload the cache cannot be located. When the agent calls --collect in step 2, it MUST pass the same payload from step 1 (or at least the minimal payload containing original_question), otherwise the script fails JSON parsing → local win (but wastes one tool call)
 
@@ -160,6 +162,8 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 **Goal**: pull real data from external skills to support the answer.
 
 **Trigger**: only when step 2 marked a data route (ct-registry / ct-safety / ct-literature).
+
+> **🔴 2026-09-10 — tightened invocation bar + answer-first posture.** A sibling skill is auto-invoked **only for a uniquely-directed ask** (a named data source / a named statistic / an explicit "retrieval verb + clear object" phrasing); **generic words** (`信号` / `文献` / `试验` / `安全性` / `设计`) and definition / methodology / document questions are **not** auto-routed — `route_tool.predict` returns no `need_tool` and instead surfaces `suggest_tools`, and the stitched answer carries the sibling advice as a **trailing `suggest_footer` line after the answer**, not as a blocker. 🔴 **2026-09-10 patch:** on a consultation-guard hit `suggest_tools` is narrowed to **strong hits only** — bare generic words no longer overflow into the tail, so a pure "what is the difference between X and Y" definition question carries **no** suggestion (a data source / statistic actually named in the question still does). The bilingual consultation guard (`_consultation_intent` cloud / `DEF`·`METHOD`·`DOC` local) enforces this; a clear retrieval verb (`检索…` / "how many …") overrides the guard.
 
 **Action**:
 1. read sibling-skill output (configured in `workflows.json` as `integration.data_grounding`)
@@ -217,7 +221,7 @@ step 2 begins → main agent FIRST calls --collect --wait=race_window (main bloc
 
 ```
 step 2 local answer + step 3/4 external data → foreground serial call to refine_answer.py (with draft_answer)
-              ├─ Coze returns within 60s → adopt Coze result
+              ├─ Coze returns within 90s → adopt Coze result
               └─ Coze fails / times out  → fall back to local answer + external data
 ```
 
