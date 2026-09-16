@@ -46,6 +46,9 @@ data/
 # ClawHub 走 .clawhubignore 剔除。两份排除集须一致（§16.8）。
 adapters/coze/
 references/ops.md
+# 2026-09-15 新增：Coze 端缓存治理与响应信封契约文档——通篇描述远端节点实现、
+# 配置与内部表结构，语义属接口契约类（§16.7 ②），故一并排除、不随包发布。
+references/coze_cache_policy.md
 
 # 明文 JWT 本地辅助（§5 合规：凭据一律走 adapters/coze_token_embedded.py 混淆内嵌，不发布明文）
 config/keys.py
@@ -60,11 +63,14 @@ config/keys.py
 # 运行态会话上下文缓存（类型 B 追问自包含化用，本地生成、不入库）
 config/context_cache.json
 
-# 测试 harness（§16.8：测试内容一律不进发布包）
+# 测试 harness（§16.8：测试内容一律不进发布包；2026-09-15 追加通配以覆盖新增测试文件）
 test_seven_flows.py
-scripts/test_modeB.py
-scripts/test_tool_router.py
+scripts/test_*.py
 ct_bug_report_*.md
+
+# ── 审计留痕 / 审计比对文档（2026-09-15 新增）──
+# §16.8：审计痕迹文档不进发布包（其内容为内部审计处置记录，对安装用户无意义）
+docs/*audit_trace*.md
 
 # 运行态输出（§16.8：out_*/out/out_live 绝不进发布包，避免运行产物泄漏）
 out/
@@ -103,9 +109,10 @@ adapters/coze_project/
 **/ops.md
 scripts/tests/
 
-# ── 工作台 HTML 整体排除（2026-09-06 新增，§16.7 ③）──
-# 本地 Web 操作界面，暂不发布（内部开发资产，含端点/配置契约等实现细节）
-workbench/*.html
+# ── 工作台整目录排除（2026-09-06 新增；2026-09-15 由 workbench/*.html 扩为整目录，§16.12）──
+# §16.12 要求「目录级整体排除、零遗漏」，故改为整目录；逐文件列举曾漏掉
+# llm_loader.py / *.css / *.js / workbench.config.json 等 4 个文件。
+workbench/
 
 # ── 补齐双份 ignore 差异项（2026-08-29）──
 *.py[cod]

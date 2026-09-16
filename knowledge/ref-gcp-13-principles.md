@@ -1,3 +1,10 @@
+---
+file: ref-gcp-13-principles.md
+version: 2026-08-06
+topics: GCP 13原则逐项映射, 合规检查表, 伦理原则, 风险受益比, 受试者保护
+serves_workflows: [D]
+---
+
 # GCP 13 原则逐项映射检查表
 
 > 来源：ICH E6(R2) GCP 13 原则 + NMPA GCP (2020 年第 57 号) + 中国《药物临床试验质量管理规范》2020 年版

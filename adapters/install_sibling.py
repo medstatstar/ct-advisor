@@ -28,7 +28,7 @@ A/B 档门控里「用户同意 → 安装 → 再执行」这一步，此前给
 
 用法
 ----
-  python install_sibling.py <slug> [--dir <技能根目录>] [--force] [--dry-run] [--json]
+  python adapters/install_sibling.py <slug> [--dir <技能根目录>] [--force] [--dry-run] [--json]
 
 环境变量：CT_SKILLS_DIR 覆盖默认技能根目录；SKILLHUB_SEARCH_URL /
 SKILLHUB_DOWNLOAD_URL 覆盖接口地址（本地联调 / 内网镜像用）。

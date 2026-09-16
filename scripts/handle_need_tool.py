@@ -89,7 +89,7 @@ def _load_mapping() -> dict:
 #
 # 发布状态（tiers.registry[*].published）的权威判据 = **SkillHub 上架**，不是 GitHub
 # ——GitHub 空占位仓库同样返回 HTTP 200（ct-pipeline 事故），复核用
-# `python scripts/probe_publication.py`。故 A 档需再分两支：
+# `python adapters/probe_publication.py`。故 A 档需再分两支：
 #   已发布   → install_required（**建议安装**：默认 install_mode=suggest 只建议不代办；
 #              用户明确授权（install_consent=approved）后才转 authorized 由 agent 代办）
 #   未发布   → unpublished_a（不可安装，不给地址，直接本地作答 + 未取数标注）
@@ -199,8 +199,8 @@ def _helper_path() -> Path | None:
     故按「用户态规范路径 → 解析路径」顺序探测，取首个存在者；绝不主动构造 UNC。
     """
     cands = [
-        Path.home() / ".workbuddy" / "skills" / "ct-advisor" / "scripts" / "install_sibling.py",
-        Path(os.path.abspath(__file__)).parent / "install_sibling.py",
+        Path.home() / ".workbuddy" / "skills" / "ct-advisor" / "adapters" / "install_sibling.py",
+        Path(os.path.abspath(__file__)).parent.parent / "adapters" / "install_sibling.py",
     ]
     for p in cands:
         try:
@@ -412,6 +412,42 @@ def _build_cmd(tool_cfg: dict, params: dict) -> list:
             continue
         cmd.extend(rule.get("args", []))
     return cmd
+
+
+# ---------------------------------------------------------------------------
+# 可执行体边界校验（2026-09-15，回应 ClawHub 审计项：「resolved executable path
+# 未做白名单校验 / tool_mapping.json 无信任边界」）
+#
+# cmd[0] 与 args 全部源自 `tool_mapping.json`；该文件若被篡改，即可借执行卡指向
+# 任意解释器或任意本地脚本。故在 subprocess 调用前强制两道断言：
+#   ① 解释器 basename 必须命中白名单（python / py / Rscript 系）；
+#   ② 所有 `.py` 脚本类参数解析后必须落在 SKILLS_DIR（兄弟技能根）之内。
+# 本校验只做「放行 / 拦截」判定，不改变正常映射表的行为。
+# ---------------------------------------------------------------------------
+_ALLOWED_INTERPRETERS = {
+    "python", "python3", "py", "python.exe", "py.exe",
+    "rscript", "rscript.exe",
+}
+
+
+def _execution_boundary_violation(cmd: list) -> str:
+    """返回越界原因（空串 = 通过）。规则见上方节注。"""
+    if not cmd:
+        return "空命令"
+    if os.path.basename(str(cmd[0])).lower() not in _ALLOWED_INTERPRETERS:
+        return "解释器不在白名单: %s" % cmd[0]
+    root = Path(SKILLS_DIR).resolve()
+    for arg in cmd[1:]:
+        if not isinstance(arg, str) or not arg.endswith(".py"):
+            continue
+        p = Path(arg)
+        try:
+            resolved = (p if p.is_absolute() else root / p).resolve()
+        except OSError:
+            return "脚本路径无法解析: %s" % arg
+        if not resolved.is_relative_to(root):
+            return "脚本路径越出技能根目录: %s" % arg
+    return ""
 
 
 def _extract_json(stdout: str):
@@ -699,6 +735,19 @@ def execute_card(card: dict) -> dict:
     engine = tool_cfg.get("engine", "local")
     cmd = _build_cmd(tool_cfg, params)
     timeout = tool_cfg.get("timeout", 120)
+    # 🔴 可执行体边界校验（2026-09-15）：解释器须命中白名单，脚本路径不得越出技能根。
+    #    与下方 workdir 校验共同构成 subprocess 前的双闸门。
+    _violation = _execution_boundary_violation(cmd)
+    if _violation:
+        return {
+            "tool": tool,
+            "status": "error",
+            "result": f"执行被安全边界拦截：{_violation}",
+            "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
+            "elapsed_sec": 0,
+        }
     # 路径白名单防御（审计 §16 要求）：tool 已确认为 tool_mapping 已知键；
     # 再确保解析后 workdir 落在 CARDS_ROOT 之内，杜绝 ../ 逃逸。
     workdir = (CARDS_ROOT / tool).resolve()

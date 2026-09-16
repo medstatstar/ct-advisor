@@ -1,6 +1,6 @@
 # Clinical Trial Chief Advisor (ct-advisor)
 
-- **English guide** → [README.md](https://github.com/medstatstar/ct-advisor/blob/main/README.md) · **中文指南** → [README_zh-CN.md](https://github.com/medstatstar/ct-advisor/blob/main/README_zh-CN.md)
+- **English guide** → [README.md](https://github.com/medstatstar/ct-advisor/blob/main/README.md) · **中文指南** → [README\_zh-CN.md](https://github.com/medstatstar/ct-advisor/blob/main/README_zh-CN.md)
 
 <div align="center">
 <img src="assets/icon.svg" width="240" height="240" alt="ct-advisor logo"/>
@@ -13,6 +13,8 @@
 ---
 
 > **Scope reality check (read this first).** ct-advisor is a **cloud-assisted** advisor, not a pure-local tool. In operation it forwards your **question to the remote Coze engine**; runs sibling `ct-*` skills **locally on your machine** (these skills themselves may query public registries/APIs such as ClinicalTrials.gov, China CDE, FDA FAERS/openFDA, OpenAlex, PubChem); submits an **optional** bug report; keeps a language preference / context cache / memory notes on your device; and runs local connectivity diagnostics. All of this is spelled out honestly in [§5 Data & Privacy](#5-data--privacy).
+
+> **⚠️ Attachments are part of your question.** If you attach a document (docx / pdf / ppt), the extracted text is appended to the question and **travels the same cloud path** as a typed question. Anything inside an attached file — protocol drafts, sponsor names, subject-level details — should be treated as **leaving your machine**. Remove sensitive content before attaching.
 
 ## Who This Is For
 
@@ -41,7 +43,7 @@ Below are 8 examples showing **what you actually see in the chat**: each has a *
 >
 > Basis: *Good Clinical Practice for Drug Clinical Trials* (2020 edition).
 
-> Under the hood: a single cloud call — no database lookup, no menu.
+> Under the hood: a single cloud call — no menu.
 
 ### Example 2 · Expectedness: do the IB and the label need updating? (pharmacovigilance, answered directly)
 
@@ -57,7 +59,7 @@ Below are 8 examples showing **what you actually see in the chat**: each has a *
 >
 > Basis: ICH E2F (Development Safety Update Report); CDE guidance on Safety Reference Information (RSI) in the Investigator's Brochure.
 
-> Under the hood: a single cloud call — no database lookup, no menu.
+> Under the hood: a single cloud call — no menu.
 
 ### Example 3 · A narrow data ask (one data skill)
 
@@ -178,33 +180,33 @@ Below are 8 examples showing **what you actually see in the chat**: each has a *
 The advisor covers the entire clinical-trial lifecycle through ten in-house workflows (A–J) plus routing to four sibling skills. Each row gives the typical **situation** and a line you can **copy verbatim** under "Try saying".
 
 ### ① Methodology & regulatory advice (answered in-house, A–J)
-| Situation | Try saying in chat |
-|:---|:---|
-| Define a term / find the regulatory basis | "What does ICH E6(R3) say about risk-proportionate monitoring?" |
-| Trial design review | "Review my Phase III oncology design for feasibility" |
-| Statistics / estimand / sample size framework | "Help me set the primary estimand for a superiority trial" |
-| GCP / deviation / audit readiness | "What makes a site audit-ready under GCP?" |
-| Safety & operations (SUSAR / DSUR / signal) | "How do I handle a SUSAR in a multinational trial?" |
-| Documents & QC (CSR / protocol / SAP) | "Redline my CSR discussion section" (basic review / rewrite; for deep multi-role review use `@skill:ct-protocol`) |
-| Reply tone / rewrite | "Rewrite this patient letter in a warmer tone" (one-off request; cross-session tone memory is not yet enabled) |
+| Situation                                     | Try saying in chat                                                                                                |
+| :-------------------------------------------- | :---------------------------------------------------------------------------------------------------------------- |
+| Define a term / find the regulatory basis     | "What does ICH E6(R3) say about risk-proportionate monitoring?"                                                   |
+| Trial design review                           | "Review my Phase III oncology design for feasibility"                                                             |
+| Statistics / estimand / sample size framework | "Help me set the primary estimand for a superiority trial"                                                        |
+| GCP / deviation / audit readiness             | "What makes a site audit-ready under GCP?"                                                                        |
+| Safety & operations (SUSAR / DSUR / signal)   | "How do I handle a SUSAR in a multinational trial?"                                                               |
+| Documents & QC (CSR / protocol / SAP)         | "Redline my CSR discussion section" (basic review / rewrite; for deep multi-role review use `@skill:ct-protocol`) |
+| Reply tone / rewrite                          | "Rewrite this patient letter in a warmer tone" (one-off request; cross-session tone memory is not yet enabled)    |
 
 ### ② Real data & competitive intel (routed to sibling skills)
 > **The bar was tightened (2026-09-10):** a sibling skill is auto-invoked only for a **uniquely-directed** ask — a named data source (NCT / ClinicalTrials.gov / FAERS / PubMed), a named statistic or high-specificity method (PRR / ROR / EBGM / dechallenge-rechallenge / a specific irAE / meta-analysis), or an explicit "retrieval verb + clear object" phrasing (the table below shows these). **Generic words** (signal / literature / trial / safety / design) no longer trigger on their own: the advisor **answers from its own capability first**, then appends an install / invoke **suggestion at the end**.
-| Situation | Try saying in chat |
-|:---|:---|
-| Trial-registry landscape | "Pull registered trials for semaglutide in T2D, 2021–2026" |
-| Safety signals (FAERS) | "Any FAERS disproportionality signals for drug X?" |
-| Published literature | "Find systematic reviews on GLP-1 RA in obesity" |
-| **Full competitive intel (multi-source, round by round ⭐)** | "Full competitive-intel picture for GLP-1 RA in obesity" |
+> | Situation | Try saying in chat |
+> |:---|:---|
+> | Trial-registry landscape | "Pull registered trials for semaglutide in T2D, 2021–2026" |
+> | Safety signals (FAERS) | "Any FAERS disproportionality signals for drug X?" |
+> | Published literature | "Find systematic reviews on GLP-1 RA in obesity" |
+> | **Full competitive intel (multi-source, round by round ⭐)** | "Full competitive-intel picture for GLP-1 RA in obesity" |
 
 ### ③ Compute handoff (to ct-samplesize)
-| Situation | Try saying in chat |
-|:---|:---|
+| Situation        | Try saying in chat                                           |
+| :--------------- | :----------------------------------------------------------- |
 | Actual n / power | "Sample size: two means, d=0.5, power 80%, α=0.05 two-sided" |
 
 ### ④ Clarify mode (Local Clarify Loop, no sibling skill, no network)
-| Situation | Try saying in chat |
-|:---|:---|
+| Situation              | Try saying in chat                                 |
+| :--------------------- | :------------------------------------------------- |
 | Not sure what you need | "I'm not sure what I need — help me figure it out" |
 
 > The underlying sibling skills are described in their own READMEs; ordinary users only need to say what they want in plain language — the advisor routes and stitches. **Whenever the advisor calls a sibling skill, the answer ends with a 💡 line suggesting you run that skill directly if you want to verify it or get the full detailed output.**
@@ -217,7 +219,7 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 **Q: How are data sources labeled in the answer?** A: Measured behaviour is a **section label**: code appends the sibling skill's measured output under `## 补充信息（来源：ct-xxx）` (**measured: no date**; the English form is `## Supplementary data (Source: ct-xxx)`), and the full list / evidence is exported to `./out/` (`report.xlsx`, `lit_report.xlsx|html`, `evidence_log.json|md`). That is how you trace each number back to the sibling skill that produced it; the answer also ends with a 💡 suggestion to run that sibling skill directly for the fuller original output.
 
-**Q: It says a sibling skill isn't installed — do I have to install it?** A: **No — the decision is yours, and nothing is ever installed without your say-so.** Sibling skills come in two tiers, and the tier is separate from whether a skill is published. **Tier A** (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` etc. — non-confidential input) that is **listed on SkillHub**: if missing locally, the advisor explains what it does and **suggests installing it** — it hands you the install command (`scripts/install_sibling.py <slug> --dir <skills-dir>`, which verifies the SkillHub listing before downloading) but **does not install anything by itself**, because installing writes a package into your local skills directory and **may trigger a security prompt**. You choose: run the command yourself, or **explicitly authorise** the advisor to do it — then it installs, calls the skill and returns live results. **Decline** → it answers from its own capability (cloud answer + local knowledge pack) and clearly labels the reply **"data not retrieved"**. If a Tier-A skill is **not yet listed** (e.g. `ct-pipeline`), the advisor says it has not been publicly released and **cannot be installed right now** — it will not hand you an address that installs an empty package — then answers from its own capability plus the installed siblings, labelled "data not retrieved". **Tier B** (e.g. `ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` — confidential protocols / subject data / CRFs): these are **not publicly released and cannot be installed**, so the advisor states plainly that a Tier-B skill is needed but is not publicly available, then completes the analysis from its own capability and notes that the in-depth analysis was not actually executed. Nothing is ever installed without your authorisation (by default installation is only *suggested*), and unavailable data is never fabricated.
+**Q: It says a sibling skill isn't installed — do I have to install it?** A: **No — the decision is yours, and nothing is ever installed without your say-so.** Sibling skills come in two tiers, and the tier is separate from whether a skill is published. **Tier A** (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` etc. — non-confidential input) that is **listed on SkillHub**: if missing locally, the advisor explains what it does and **suggests installing it** — it hands you the install command (`adapters/install_sibling.py <slug> --dir <skills-dir>`, which verifies the SkillHub listing before downloading) but **does not install anything by itself**, because installing writes a package into your local skills directory and **may trigger a security prompt**. You choose: run the command yourself, or **explicitly authorise** the advisor to do it — then it installs, calls the skill and returns live results. **Decline** → it answers from its own capability (cloud answer + local knowledge pack) and clearly labels the reply **"data not retrieved"**. If a Tier-A skill is **not yet listed** (e.g. `ct-pipeline`), the advisor says it has not been publicly released and **cannot be installed right now** — it will not hand you an address that installs an empty package — then answers from its own capability plus the installed siblings, labelled "data not retrieved". **Tier B** (e.g. `ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` — confidential protocols / subject data / CRFs): these are **not publicly released and cannot be installed**, so the advisor states plainly that a Tier-B skill is needed but is not publicly available, then completes the analysis from its own capability and notes that the in-depth analysis was not actually executed. Nothing is ever installed without your authorisation (by default installation is only *suggested*), and unavailable data is never fabricated.
 
 **It calls the sibling skills for real data by default.** `data_intel` asks are dispatched to the relevant sibling skill (ct-registry / ct-safety / ct-literature / ct-samplesize) by default to complete the analysis and return live results — no need to say "please fetch the data now". If you only want the plan and not the data yet, say "just show the plan".
 
@@ -282,7 +284,7 @@ Each request also carries two anonymous metadata fields: `query_origin` (a SHA-2
 
 ### What stays on your device but is still sensitive (on-device actions)
 To be transparent about the full behavior the skill can perform:
-- **Embedded (public) token** — the skill ships with an obfuscated Coze token used to authenticate the public endpoint. It is a **shared / public credential by design** (not a personal secret); it is decoded in memory only for outbound auth and is disclosed openly here rather than hidden.
+- **Embedded (public) token** — the skill ships with an obfuscated Coze token used to authenticate the public endpoint. It is a **shared, openly-disclosed token by design** (not a personal secret); it is decoded in memory only for outbound auth and is disclosed openly here rather than hidden.
 - **Local persistence** — it may write your **language preference** to `config.json`, keep a short-lived **context cache** under `.runtime/` (gitignored), and **promote recurring interaction patterns into long-term memory files** (per the SOUL.md self-improvement rules). None of these contain your question text or trial data.
 - **Local connectivity diagnostics** — if a connection to Coze fails, with your permission it can run `scripts/check_coze.py` to probe local proxy / network / token configuration and suggest a fix.
 - **Subprocess orchestration** — the local code orchestrator (`orchestrate.py` / `refine_answer.py`) runs sibling `ct-*` skills as **subprocesses on your machine** and stitches their results in code.
@@ -299,7 +301,7 @@ ct-advisor is the entry point that routes to sibling skills and forwards questio
 1. **Every factual claim is source-traceable.** Data-grounded claims from sibling skills are appended by code as `## 补充信息（来源：ct-xxx）` (measured: the label carries no date; artifacts land in `./out/`); methodology / regulatory answers cite the authority (ICH / NMPA / FDA / EMA guidance) and link to it where available.
 2. **Identifier consistency check.** When a cited identifier (trial registration number, DOI / PMID) is resolved to a live record, the resolved title / author / year are compared against the original assertion; a mismatch is flagged `mismatch` and never treated as verified.
 3. **Unverifiable ⇒ `⚠️ needs official verification`.** Anything that cannot be traced to a public source is marked for official verification and never stated as a confirmed conclusion.
-4. **No fabrication.** Trial registration numbers, approval dates, subject counts, and company M&A / pipeline moves are never invented; if a public source does not disclose them, the output says "not disclosed in public sources".
+4. **No fabrication.** Trial registration numbers, approval dates, subject counts, and company M\&A / pipeline moves are never invented; if a public source does not disclose them, the output says "not disclosed in public sources".
 
 ---
 
@@ -309,9 +311,9 @@ CLI helpers, runtime requirements, the architecture tree, and scanner false-posi
 
 ---
 
-**Version**: v0.9.115 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v1.0.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
-For feature requests, bug reports, or other feedback, please contact the author directly at medstatstar@gmail.com (Wintone Zhang).
+For feature requests, bug reports, or other feedback, please contact the author directly at <medstatstar@gmail.com> (Wintone Zhang).
 
 ---
 
@@ -319,9 +321,9 @@ For feature requests, bug reports, or other feedback, please contact the author 
 
 > The CT series consists of 20+ specialized domain skills, organized into **two tiers — A, B** — by "whether the input contains confidential information" (network / egress / publish are independent orthogonal attributes; see ct-base §11), providing full coverage of the entire new-drug clinical trial (Clinical Trial) lifecycle.
 >
-> - **Tier A (non-confidential input)**: runs on ordinary data and involves no confidential information; split further by the `network` sub-attribute into three kinds — ① **fully local** (`network=off`, zero egress); ② **public-source retrieval** (`network=public-retrieval`, e.g. ct-registry / ct-safety / ct-literature — only public query terms leave the machine); ③ **controlled Coze-only egress** (`network=controlled-coze-opt-in`, e.g. **ct-advisor**: a single Coze endpoint only, explicit user opt-in, payload passed through `sanitize()` first, paired with `egress=cloud`). ⚠️ Note that ③ is **not** the same as "runs fully locally" — its Q&A is forwarded to the cloud engine by default, falling back to a local fallback answer (clearly marked as such) only when the cloud is unreachable. All Tier A skills are published openly on GitHub.
+> - **Tier A (non-confidential input)**: runs on ordinary data and involves no confidential information; split further by the `network` sub-attribute into three kinds — ① **fully local** (`network=off`, zero egress); ② **public-source retrieval** (`network=public-retrieval`, e.g. ct-registry / ct-safety / ct-literature — only public query terms leave the machine); ③ **controlled Coze-only egress** (`network=controlled-coze-opt-in`, e.g. **ct-advisor**: a single Coze endpoint only, explicit user opt-in, payload passed through `sanitize()` first, paired with `egress=cloud`). ⚠️ Note that ③ is **not** the same as "runs fully locally" — its Q\&A is forwarded to the cloud engine by default, falling back to a local fallback answer (clearly marked as such) only when the cloud is unreachable. All Tier A skills are published openly on GitHub.
 > - **Tier B (confidential input)**: accept strictly confidential clinical-trial data / protocols / CRFs from pharma sponsors (e.g., ct-analysis, ct-sdtm, ct-protocol, ct-eligibility); Tier B is processed locally and never leaves the boundary (egress=none), or additionally requires policy approval (egress=approval-req, e.g. ct-eligibility). Tier B packages contain zero confidential data but are NOT publicly published (stays fully local) — confidential input never ships with the package or leaves the machine. For custom / on-prem deployment, contact the author.
 >
-> 📧 Contact: medstatstar@gmail.com (Wintone Zhang / 张文彤)
+> 📧 Contact: <medstatstar@gmail.com> (Wintone Zhang / 张文彤)
 
 > 🌐 Other languages: [中文 README](README_zh-CN.md)

@@ -1,4 +1,4 @@
-# AGENTS.md — ct-advisor v0.9.110 (ct- series A-tier entry point)
+# AGENTS.md — ct-advisor v1.0.0 (ct- series A-tier entry point)
 
 > This document is ct-advisor's self-improvement contract. It follows ct-base AGENTS.md structure and is written in English per §4 (references·AGENTS are English-only for published ct- skills).
 

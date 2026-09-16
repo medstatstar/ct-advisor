@@ -24,7 +24,7 @@ Tier semantics (ct-base §11 + §13.1):
 
 `published` is orthogonal to the tier and is judged by **SkillHub listing**, not by
 GitHub: an empty GitHub placeholder repo still answers HTTP 200 (the ct-pipeline case).
-Re-verify with `python scripts/probe_publication.py`. So tier-A entries split in two:
+Re-verify with `python adapters/probe_publication.py`. So tier-A entries split in two:
   A + published      -> installable (hint points at SkillHub, GitHub as fallback)
   A + NOT published  -> not installable; routing yields `unpublished_a`, not a clone URL
 
@@ -77,7 +77,7 @@ def known_deps() -> list:
             # 2026-09-10 修正：安装命令统一走本技能自带的 install_sibling.py
             # （先核验 SkillHub 上架再下载解压）。此前此处给的是裸 `skillhub install`
             # 与 `git clone` —— 两者实测都不可用，见 install_sibling.py 的模块说明。
-            cmd = f"python scripts/install_sibling.py {slug} --dir {_SKILLS_DIR}"
+            cmd = f"python adapters/install_sibling.py {slug} --dir {_SKILLS_DIR}"
             hint = {
                 "en": f"Install (suggested - run by you or authorised): `{cmd}` "
                       f"(verifies the SkillHub listing before downloading)",

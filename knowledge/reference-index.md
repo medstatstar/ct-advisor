@@ -1,6 +1,6 @@
 ---
 file: reference-index.md
-version: 2026-08-08
+version: 2026-09-15
 purpose: knowledge file-level routing table + series contract content — consult this table first to locate the topic file, then use search_refs.py to locate the line/section
 auto_generated: false  # 2026-08-08: 合并 contract 文件后改为手动维护
 ---
@@ -18,7 +18,11 @@ auto_generated: false  # 2026-08-08: 合并 contract 文件后改为手动维护
 | `ref-ops-execution.md` | QTL, GCP training, contract/insurance, re-consent, SIV, recruitment/retention, site closeout, IRB composition, drug return, medical devices, compliance, recruitment ads, discontinuation/withdrawal; cross-file dependency checklist, pre-delivery quality gate, methodology QC output, minimal answer template [B, D, E, G, H] |
 | `ref-ops-gcp-site.md` | Ethics judgment order, informed consent as a continuous process, delegation does not transfer accountability, role responsibilities, WOCBP pregnancy screening; institution filing/PI change, feasibility, monitoring, SDV, protocol amendment, ICF execution, KRI/RBM, adaptive FIH ethics, single-arm external control, cell/gene LTFU, compensation, depot logistics, institution change, CRO audit [D, E] |
 | `ref-ops-safety.md` | Six-judgment, individual-case handling loop, medical monitoring, SAE clock, reproductive toxicity, pregnancy/lactation, death report, overdose handling, AESI; deviation examples/ethics reporting, fraud investigation, GCP inspection prep, CAPA effectiveness; unified fact base, decision hierarchy/RACI, risk-issue-change, CSR writing implementation [D, F, G] |
+| `ref-safety-practical.md` | **药物安全信号检测实操、ICI irAE 管理速查、SUSAR 报告时限与流程、妊娠暴露处理、RMP 要点、死亡报告、过量用药处理、安全性数据库锁库 [D, F, G]** |
+| `ref-safety-practical.md` | **药物安全信号检测实操、ICI irAE 管理速查、SUSAR 报告时限与流程、妊娠暴露处理、RMP 要点、死亡报告、过量用药处理、安全性数据库锁库 [D, F, G]** |
+| `ref-ops-compliance-practical.md` | **关中心全流程实操、HGR自查判断、归档预约与伦理结题、尾款结算前提、纸质资料销毁、关中心小结撰写、给药周期计算、MedDRA PT编码实操、研究背景撰写模板 [D, E]** |
 | `ref-icae-safety.md` | **ICI irAE 谱、VZV/HSV 再激活机制与流行病学、间质性肺炎/心肌炎/肝炎/肾炎/甲状腺炎/垂体炎 irAE 速查、PD-1/VEGF 双抗 vs PD-1 单抗安全性对比、ICI 因果关系判定要点 [B, C, D, F]** |
+| `ref-gcp-13-principles.md` | **ICH E6(R2) GCP 13 原则逐项映射、NMPA GCP 2020 版对照、合规检查表 [D]** |
 
 ### Clinical Operations 系列契约
 
@@ -73,7 +77,11 @@ auto_generated: false  # 2026-08-08: 合并 contract 文件后改为手动维护
 | 文件 | 覆盖主题（workflows） |
 |---|---|
 | `ref-interaction-style.md` | Clarification gate (gate 0), user tone writing (workflow I), local user memory (workflow J), official retrieval & conflict handling (workflow A), privacy & delivery checks |
+| `methodology_core.md` | **答案契约 (Answer contract)：结论先行、范围锁定、难度匹配——所有 full_analysis 答案生成遵循的最高优先规则** |
+| `prompts.md` | **面向用户的双语提示语（通用 + 澄清 + 菜单 + 警示框 + QC 标签 + 停止提示），与 `scripts/i18n.py` 互为镜像** |
+| `system_prompt.md` | **ct-advisor 系统提示词，定义 Agent 角色、输出风格、知识路由、引用与拒答规则——Coze full_analysis 节点的直接输入** |
+| `term_aliases.json` | **术语别名表：中英文对照 + 缩写展开 + 同义词映射，供 search_refs.py 扩展检索使用** |
 
 ---
 
-> **维护说明**：`ref-ops-contract.md` / `ref-reg-contract.md` 已于 2026-08-08 合并进本文件。编辑 contract 内容时直接编辑本文件的对应小节。`ref-interaction-style.md` 下的检索流程（§5）仍可直接编辑。
+> **维护说明（2026-09-15）**：新增 `ref-ops-compliance-practical.md` 与 `ref-safety-practical.md`——CRA 日常实操级知识（关中心、HGR自查、归档、AE编码、研究背景撰写 + 安全信号/SUSAR/irAE/RMP）。废弃的竞品调研文件已删除，`prompts.md` 中对它的悬空引用已同步移除。编辑 contract 内容时直接编辑本文件的对应小节。

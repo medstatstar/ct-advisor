@@ -193,7 +193,7 @@ def _skill_version() -> str:
                     return line.split(":", 1)[1].strip().strip('"').strip("'")
     except Exception:
         pass
-    return "0.9.104"
+    return "1.0.0"
 
 
 def compute_machine_id() -> str:

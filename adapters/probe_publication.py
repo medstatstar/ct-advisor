@@ -13,11 +13,11 @@ GitHub 仍会一并探测，但仅作**诊断**用途（说明「为什么没上
 不参与 published 判定。
 
 用法：
-    python scripts/probe_publication.py                    # 人读表格 + 漂移告警
-    python scripts/probe_publication.py --json             # 机器可读
-    python scripts/probe_publication.py --fix              # 实测结果回写注册表（仅 published 字段）
-    python scripts/probe_publication.py --only ct-pipeline ct-samplesize
-    python scripts/probe_publication.py --no-github        # 只查 SkillHub，跳过 GitHub 诊断
+    python adapters/probe_publication.py                    # 人读表格 + 漂移告警
+    python adapters/probe_publication.py --json             # 机器可读
+    python adapters/probe_publication.py --fix              # 实测结果回写注册表（仅 published 字段）
+    python adapters/probe_publication.py --only ct-pipeline ct-samplesize
+    python adapters/probe_publication.py --no-github        # 只查 SkillHub，跳过 GitHub 诊断
 
 退出码：0 = 注册表与实测一致；1 = 存在漂移（可挂 CI / 发布前闸门）；2 = 回写出错。
 零副作用：默认只读网络与本地文件；仅 --fix 会改写 tool_mapping.json。
@@ -263,7 +263,7 @@ def render(rows: list, candidates: list, skip_github: bool) -> int:
         for r in drift:
             print("     - %s: 注册表 published=%s → 实测 %s（%s）"
                   % (r["slug"], r["declared"], r["verified"], r["why"]))
-        print("     修复：python scripts/probe_publication.py --fix")
+        print("     修复：python adapters/probe_publication.py --fix")
     elif not unknown:
         print("  ✓ 注册表与 SkillHub 实际发布状态一致（共 %d 项）" % len(rows))
     elif len(unknown) < len(rows):
