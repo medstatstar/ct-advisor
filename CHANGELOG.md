@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.0.3 (2026-09-16) — SKILL.md 精简 + 正文英文化 + Pipe-Only 硬契约
+
+- **新增「Pipe-Only Hard Contract」（最高优先级，置于 SKILL.md 顶部）**：当 `refine_answer.py --ship` / `orchestrate.py` 输出 `<<<CT_ANSWER_START>>>` … `<<<CT_ANSWER_END>>>` 时，唯一允许的动作是逐字原样输出；禁止改写、增删 Markdown、补写摘要或收尾语。
+- **SKILL.md 正文由中文改为英文**（frontmatter 保持双语：`cn_name` / `summary` 为中文，`displayName` / `description` 英文在前），行数 261 → 216。
+- **A/B 档门控与边界规则下沉** 至 `references/tier_gate.md`（SKILL.md -23 行）；图形化解释策略的 SUPERSEDED 段压缩（-19 行）；Bug Report 段改为引用 `references/ADVANCED.md`（-2 行）。
+- **`description` 依 `summary` 重写**，语义与中文段对齐。
+- **结构归位**：`scripts/install_sibling.py` / `scripts/probe_publication.py` 迁入 `adapters/`；`workbench/` 转为整目录排除（§16.12）。
+- **词表扩充**：`references/drug_name_map.json`、`references/term_map.json` 字典更新。
+- **发布**：SkillHub（0.9.122 → 1.0.3）。GitHub 与 ClawHub 本次未推送。
+
 ## v1.0.2 (2026-09-16) — 部署期缺陷修复（未定义变量 + JSON BOM）
 
 > 来源：v1.16 完整包在扣子端部署执行 `test_run` 时发现，已同步回本地代码副本（`adapters/coze/`）。修复后 test_run 完整跑通、回答正确引用知识库。

@@ -46,7 +46,7 @@ tier: A
 
 ## Language
 
-- **English guide** → [README.md](https://github.com/medstatstar/ct-advisor/blob/main/README.md) · **Chinese guide** → [README_zh-CN.md](https://github.com/medstatstar/ct-advisor/blob/main/README_zh-CN.md)
+- **English guide** → [README.md](https://github.com/medstatstar/ct-advisor/blob/main/README.md) · **中文指南** → [README_zh-CN.md](https://github.com/medstatstar/ct-advisor/blob/main/README_zh-CN.md)
 - **This SKILL.md body is English-only, agent-facing.** Bilingual walkthroughs live in the two READMEs.
 - Bilingual auto-switch: the answer language follows the user's question language (English question → English answer, Chinese question → Chinese answer).
 
@@ -213,4 +213,4 @@ Do **NOT** repeat it, do **NOT** add any other process chatter.
 
 On defect detection or explicit user request, `adapters/bug_report.py` offers a sanitized 11-key report to `https://ct-bugreport.coze.site/run`. Two-stage confirmation mandatory. → `references/ADVANCED.md` for the full protocol.
 
-## Changelog — full history (0.8.0 → 0.9.30+) → **[CHANGELOG.md](CHANGELOG.md)**
+## Changelog — full history (0.8.0 → 1.0.0+) → **[CHANGELOG.md](CHANGELOG.md)**
