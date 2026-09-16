@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.0.3 (2026-09-16) — SKILL.md 精简 + 正文英文化 + Pipe-Only 硬契约
+## v1.0.4 (2026-09-16) — SKILL.md 精简 + 正文英文化 + Pipe-Only 硬契约
 
 - **新增「Pipe-Only Hard Contract」（最高优先级，置于 SKILL.md 顶部）**：当 `refine_answer.py --ship` / `orchestrate.py` 输出 `<<<CT_ANSWER_START>>>` … `<<<CT_ANSWER_END>>>` 时，唯一允许的动作是逐字原样输出；禁止改写、增删 Markdown、补写摘要或收尾语。
 - **SKILL.md 正文由中文改为英文**（frontmatter 保持双语：`cn_name` / `summary` 为中文，`displayName` / `description` 英文在前），行数 261 → 216。
@@ -8,7 +8,7 @@
 - **`description` 依 `summary` 重写**，语义与中文段对齐。
 - **结构归位**：`scripts/install_sibling.py` / `scripts/probe_publication.py` 迁入 `adapters/`；`workbench/` 转为整目录排除（§16.12）。
 - **词表扩充**：`references/drug_name_map.json`、`references/term_map.json` 字典更新。
-- **发布**：SkillHub（0.9.122 → 1.0.3）。GitHub 与 ClawHub 本次未推送。
+- **发布**：SkillHub（0.9.122 → 1.0.4）。GitHub 与 ClawHub 本次未推送。
 
 ## v1.0.2 (2026-09-16) — 部署期缺陷修复（未定义变量 + JSON BOM）
 
