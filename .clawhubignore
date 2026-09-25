@@ -122,3 +122,7 @@ workbench/
 Thumbs.db
 *.so
 *.egg-info/
+
+# ── 运行态产物排除（2026-09-25 发布前清理，与 .gitignore 同步）──
+config/doc_store/
+scripts/audit_baseline.json

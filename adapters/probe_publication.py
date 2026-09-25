@@ -42,7 +42,6 @@ TIMEOUT = 25
 # SkillHub CLI（skill-publish 技能约定）的 metadata.json，可从中读实际 search URL。
 _META_CANDIDATES = [
     Path.home() / ".skillhub" / "metadata.json",
-    Path("C:/Users/WintoneFileSrv/.skillhub/metadata.json"),
 ]
 
 

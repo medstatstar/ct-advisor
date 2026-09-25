@@ -1,5 +1,7 @@
 # 上传文档归档表 `docarchive` · 建表规格
 
+> ⚠️ **本稿方案未采用（作废标注，2026-09-25）**——实际落地的是**独立附件表 `filelog`**（`tblIyYIU5dSc7GsQ`，字段 `Source_ID`/`skillname`/`filename`/`attachedfile`，存**附件 file_token 而非正文**，以 `Source_ID`=advisorlog 自动编号 int 强关联），**不是**本页的 `docarchive`+`doc_text` 存正文方案。请勿照抄本页手工建表。统一规范见 ct-base `docs/10-coze-engine.md` §20.16；实现 = coze v1.27–v1.36（`adapters/coze/src/graphs/nodes/async_feishu_writer.py`）。本页仅保留作早期设计对照。
+
 > 面向**手工建表**：可直接照抄本页字段清单。
 > 2026-09-23 · 适用范围：全部 ct- 技能（当前实际会写入的是 4 个带 `office_to_md.py` 的技能）
 

@@ -1,13 +1,26 @@
 # Changelog
 
-## [Unreleased] — 2026-09-25 · >5MB 附件路径修正：转 md 后按 .md 附件上传（用户指正）
+## v1.2.0 (2026-09-25) — coze-only 框架整理 + file_id 上传通道 + 附件归档飞书表（服务端 coze v1.25–v1.36）
+
+### 附件归档飞书表（服务端 coze v1.27–v1.36，2026-09-24 深夜–09-25，生产闭环）
+
+- **双表模型**：主日志表 advisorlog（含「自动编号」列 `ID`）+ 附件表 filelog `tblIyYIU5dSc7GsQ`（`Source_ID` 数字列 / `skillname` / `filename` / `attachedfile`）。**只归档真文件**（`mode=file`/`file_id`），纯文本注入不归档；主日志先落库、拿到自动编号后再归档。统一规范已登记 ct-base **§20.16**。
+- **排障链（每版一个根因，v1.35 生产验证 Source_ID 落数字、强关联恢复）**：
+  - v1.31 修 langgraph 输入 schema 过滤（`attachment_payload` 须声明进消费节点输入模型）+ 飞书 `upload_all` 参数（`parent_type` 仅 `bitable_file`/`bitable_image` + `parent_node=app_token` 必填）；
+  - v1.32 写表 `NumberFieldConvFail`(1254061) 自愈——降级去掉 Source_ID 保住附件记录，绝不丢附件；
+  - v1.33 关联键改用 advisorlog「自动编号」`ID`（数字），弃用 `record_id` 字符串；
+  - v1.34 create 响应不回显自动编号 → 改 record_id **GET 单条回查**（带 `automatic_fields=true`，双形态解析）；
+  - v1.35 自动编号在响应里是**字符串**（f-string 日志与 int 无法区分）→ 写列前 int 归一化 + `%r`/type 诊断日志；
+  - v1.36 排障调试键（`doc_att_extract`/`doc_archived` 等）**清理出 final_answer 信封**，观测降级为纯日志（信封恢复干净、省一次回填 PUT）。
+
+### >5MB 附件路径修正：转 md 后按 .md 附件上传（2026-09-25 用户指正）
 
 - **原错误**：entry.py `_handle_attachment_oversized` 把 >5MB 附件转 md 后**拼进 question 文本**且不上传（"附件未上传，仅本地解析"）——文档结构、分块检索与「文档§N」引用全部失效。
 - **正确行为（用户口径）**：>5MB → 本地转 Markdown（office_to_md / 直读），**把 .md 写成临时文件后按 <5MB 同一条 doc_context 通道上传**（/upload_file → mode=file_id），并附 ℹ️ 提示"云端基于转换后的 md 作答"。
 - 实现：`_handle_attachment_oversized` 返回 `(question, doc_context)` 二元组；临时文件 `%TEMP%/ctadv_<stem>_oversized.md`；SKILL.md / AGENTS.md 管线图与附件矩阵同步修正。
 - **回归**：8.6MB txt 端到端——Coze 正确引用文档**尾部** END_MARKER 编号（7391，§4286），证明上传+分块检索真实生效；<5MB docx 路径不变；py_compile 通过。
 
-## [Unreleased] — 2026-09-25 · v1.2.0 框架整理（用户："技能内容复杂了，整理框架使流程更清楚"）
+### 2026-09-25 · v1.2.0 框架整理（用户："技能内容复杂了，整理框架使流程更清楚"）
 
 - **文档-代码对齐**：SKILL.md / AGENTS.md 此前仍写旧流程（OOXML 本地转 md 追加 question、
   4 档难度分级）。重写为 v1.1.0 修正后的**规范 5 步管线**：① 附件门（<5MB 原文件上传→
@@ -29,7 +42,7 @@
   tool_mapping.json 同扩展名样本）；entry.py 主链 import + 端到端 Coze 问答复测通过。
 - 版本 1.1.0 → **1.2.0**。
 
-## [Unreleased] — 2026-09-25 · 代理容错全覆盖 + doc_context 透传断链修复
+### 2026-09-25 · 代理容错全覆盖 + doc_context 透传断链修复
 
 - **代理容错（用户问"以后还会不会错走代理"引出）**：
   1. `adapters/refiner.py` `_call_coze`：绕过代理直连重试的条件扩为 `ProxyError/ConnectionError/ReadTimeout`（此前半死代理——能建 TCP 但不转发 HTTPS——导致的 ReadTimeout 不在重试范围）。实测死代理 `127.0.0.1:59999` 下主链路正常返回。
@@ -39,7 +52,7 @@
 - **entry.py 附件通道升级**：`_handle_attachment_normal` 显式 `allow_upload=True` 强制 file_id 上传通道（Coze 原生解析原始文件，保真度高于 base64 内联转发）；`instruction` 改用用户真实问题；内部失败自动降级老通道。
 - **回归（死代理 + 正常代理双环境）**：① 无附件简单题 → Coze 正常；② 带 36.8KB docx → Coze 按「文档§1-§5」结构化引用附件内容作答 ✓；③ 上传探测/真实上传死代理下绕过成功 ✓。
 
-## [Unreleased] — 2026-09-24 · 文档上传 Coze 终端：file_id 真实上传通道（v1.25）
+### 2026-09-24 · 文档上传 Coze 终端：file_id 真实上传通道（v1.25）
 
 - **依据**：用户 2026-09-24 08:56 需求——飞书归档暂停，优先做"文档上传到 Coze 终端"；
   ≤5MB 传原文件给 Coze 解码，>5MB 本地转 MD 后上传；新/老 Office 格式统一流程。
@@ -55,7 +68,7 @@
 - **向后兼容**：旧 `mode=file`+`file_b64` 内联路径保留（回退）；老 Coze 未读 `file_id` 字段 → 静默走旧路径。
 - **决策**（用户拍板）：① file_id 取回 = 工作流侧直接调 Coze API（当前实现为服务端自托管落盘 + 内部路径解析，一行可切真 `files.retrieve`）；② 合规 = 暂不设 TTL，未来飞书清理；③ 限流 = 与 `/run` 同源；④ mode 命名 = 新增 `file_id`。
 
-## [Unreleased] — 2026-09-23 · 作答契约 C14：交付物边界（不返回修改后的文档）
+### 2026-09-23 · 作答契约 C14：交付物边界（不返回修改后的文档）
 
 - **依据**：用户口径——用户索要「改好的 / 修改后的文档」时，**直接提示「目前不提供此功能」**，
   只能提供修改建议等文字信息。
@@ -84,7 +97,7 @@
   L4d 基线 md5 比对从未执行）。修法：L3 **自行识别同名 `.py.disabled` 并跳过**
   （名字保留作历史记录，对未来再次中性化的节点免疫）。修后审计 `PASS=10 → 23 / FAIL=0`，L4 恢复执行。
 
-## [Unreleased] — 2026-09-21 · 作答契约 C13：需求分解与 B 类能力边界
+### 2026-09-21 · 作答契约 C13：需求分解与 B 类能力边界
 
 - **依据**：用户反馈——多子需求问题（如"请给出 1/2/3/4"）被混为一谈逐点输出，且涉及 B 类技能
   （`ct-protocol` / `ct-csr` / `ct-analysis` 等）专业范围的内容被本技能"硬答"，质量不可接受。
@@ -97,7 +110,7 @@
 - **本地文档**：`SKILL.md`（C13 加入契约摘要 + Tier B 描述对齐）、`coze_modification_guide.md`
   （作答契约内容补 C11/C12/C13）、`CHANGELOG.md`（本条目）。
 
-## [Unreleased] — 2026-09-21 · 移除答案双重核查（v1.20 架构简化）
+### 2026-09-21 · 移除答案双重核查（v1.20 架构简化）
 
 - **依据**：v1.16~v1.19 的「答案双重核查」层（`review` / `review_guard` 节点 + 前置 `validity_check` 门）
   实际 0% 命中——`draft_answer` 上游恒定空，`validity_check` 永远判无效 → 全流量走 `full_analysis`，
@@ -113,7 +126,7 @@
 - **文档同步（本次随包）**：`AGENTS.md`（节点清单/流程图/分支函数/accuracy 说明）、`README_部署说明.md`（标题升 v1.20 + 当前架构段）、`UPGRADE_20260814.md`（v1.20 现状段）、`coze_modification_guide.md`（v1.20 架构变更横幅 + 旧 review 章节标注历史）、`NEED_TOOL_SCHEMA.md` / `coze_sync_guide_knowledge.md`（节点引用修正）均更新为 v1.20 现状。
 - **部署包**：`adapters/coze/ct-advisor_coze_v1.20_20260921.zip`（105 文件，8.98 MB）。上传后须**重建/重启 Coze 镜像**（长驻进程，光传 zip 不生效）。
 
-## [Unreleased] — 2026-09-17 · 飞书补写 `coze_version`（版本字段落点统一，ct-base §2.1）
+### 2026-09-17 · 飞书补写 `coze_version`（版本字段落点统一，ct-base §2.1）
 
 - **依据**：ct-base `references/coze_io_contract.md` §2.1（2026-09-17 定）——版本类元数据
   （`skill_version` / `coze_version`）一律写在**出参侧**，`querystr` 侧不再存版本信息。

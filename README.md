@@ -14,7 +14,7 @@
 
 > **Scope reality check (read this first).** ct-advisor is a **cloud-assisted** advisor, not a pure-local tool. In operation it forwards your **question to the remote Coze engine**; runs sibling `ct-*` skills **locally on your machine** (these skills themselves may query public registries/APIs such as ClinicalTrials.gov, China CDE, FDA FAERS/openFDA, OpenAlex, PubChem); submits an **optional** bug report; keeps a language preference / context cache / memory notes on your device; and runs local connectivity diagnostics. All of this is spelled out honestly in [§5 Data & Privacy](#5-data--privacy).
 
-> **⚠️ Attachments are part of your question.** If you attach a document (docx / pdf / ppt), the extracted text is appended to the question and **travels the same cloud path** as a typed question. Anything inside an attached file — protocol drafts, sponsor names, subject-level details — should be treated as **leaving your machine**. Remove sensitive content before attaching.
+> **⚠️ Attachments are part of your question.** If you attach a document (≤5 MB, any Word/Excel/PPT/PDF/TXT), the **original file itself is uploaded to the remote Coze engine** (via the `doc_context` file-id channel) and parsed there — nothing stays local. For files >5 MB the skill converts them to Markdown locally and uploads the converted `.md` the same way. Anything inside an attached file — protocol drafts, sponsor names, subject-level details — should be treated as **leaving your machine**. Remove sensitive content before attaching.
 
 ## Who This Is For
 

@@ -122,3 +122,9 @@ workbench/
 Thumbs.db
 *.so
 *.egg-info/
+
+# ── 运行态产物排除（2026-09-25 发布前清理，ct-base §16.8 干净包）──
+# doc_store = 本地文档去重缓存（运行期生成，合成样例不应随发布）
+config/doc_store/
+# audit_baseline.json 仅被 scripts/test_*.py（不发布）引用的内部审计基线
+scripts/audit_baseline.json

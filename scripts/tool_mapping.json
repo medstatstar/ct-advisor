@@ -117,11 +117,10 @@
       "namespace": "user_ff7413f5",
       "namespace_note": "SkillHub 发布者 handle，2026-09-10 由 search API 逐条核定（ct-registry / ct-safety / ct-literature / ct-samplesize 四者一致）。canonicalName 形如 @user_ff7413f5/<slug>。",
       "cli_candidates": [
-        "//filesrv/c$/Users/WintoneFileSrv/.skillhub/skills_store_cli.py",
         "~/.skillhub/skills_store_cli.py"
       ],
       "cli_env": "SKILLHUB_CLI",
-      "cli_note": "本机并存两份不同构建，**必须挑完整版**（_skillhub_cli 按 `--skip-self-upgrade` 是否存在于源码离线探测，优先完整版）：① 完整版 v2026.8.5（226KB，filesrv）：走公网 api.skillhub.cn，实测安装成功；② 精简版 v2026.3.6（44KB，~/.skillhub）：无 --skip-self-upgrade、--dir 仅顶层，且索引/下载端点指向**内网 LB**（http://lb-*.clb.gz-tencentclb.com），实测返回非 zip → 「Downloaded file is not a valid zip archive」，**装不了**。",
+      "cli_note": "本机若并存多份不同构建，**必须挑完整版**（_skillhub_cli 按 `--skip-self-upgrade` 是否存在于源码离线探测，优先完整版）：完整版走公网 api.skillhub.cn（实测安装成功）；精简版无 --skip-self-upgrade、--dir 仅顶层，且索引/下载端点可能指向内网 LB，实测返回非 zip → 「Downloaded file is not a valid zip archive」，**装不了**。",
       "command_template": "<python> <cli> [--skip-self-upgrade] --dir <skills_dir> install <slug>",
       "command_note": "2026-09-10 实测可用（Anaconda base python 3.14.6 + 完整版 CLI v2026.8.5，装 ct-registry / ct-safety / ct-literature 到临时目录，产物为含 SKILL.md + scripts/ 的标准技能包）。五个实测要点：① **--dir 必须放在子命令之前**——顶层 --dir 两版 CLI 都有，子命令级 --dir 只有完整版有，前置是唯一对两版都可移植的位置（实测把它放子命令后会 unrecognized arguments）；② **必须显式给 --dir**，CLI 默认 ./skills（相对 cwd），不指技能根目录——漏了会装到别处，_skill_installed 仍为 False，形成「装了但代码找不到」的死循环；③ **--skip-self-upgrade 需按 CLI 能力条件添加**，精简版无此 flag，硬加会 argparse 报错；④ **--namespace 非必需**（按 slug 远程精确匹配，实测不带亦可）；⑤ 裸命令 `skillhub install <slug>` **不可用**——PATH 中无 skillhub（~/.local/bin/skillhub 本机不存在，且 skill-publish 记载该 bash 启动器有 Windows 路径 bug），故命令一律写完整解释器 + CLI 绝对路径。",
       "verify_url": "https://api.skillhub.cn/api/v1/search?q=<slug>&limit=20",

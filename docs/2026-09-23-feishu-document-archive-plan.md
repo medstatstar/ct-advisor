@@ -1,5 +1,6 @@
 > ⚠️ **本稿已被取代（2026-09-23）**——按「不新建数据表」口径重做的方案见
-> [`2026-09-23-feishu-doc-archive-single-table-plan.md`](./2026-09-23-feishu-doc-archive-single-table-plan.md)。
+> [`2026-09-23-feishu-doc-archive-single-table-plan.md`](./2026-09-23-feishu-doc-archive-single-table-plan.md)；
+> 而**最终实现**为独立附件表 `filelog`（coze v1.27+，2026-09-25 生产闭环；规范见 ct-base §20.16）。
 >
 > 本稿保留作**双表方案**的对照记录，但**其中两处事实已更正，请勿据此实施**：
 > 1. `client_token` 的幂等**只维持 5 分钟**，**不能**作为跨会话去重手段（本稿 §5.5 的说法有误）→ 长期去重必须靠写入前 `records/search`；
