@@ -104,7 +104,7 @@ python scripts/entry.py --q "<user question>" [--attach "<path>"]
 | Size | Path | Mechanism |
 |---|---|---|
 | `< 5 MB` | **Upload original file, never convert locally** | `doc_memory.build_file_payload(allow_upload=True)` → Coze `/upload_file` → top-level `doc_context` (`mode=file_id`); auto-degrade to base64 forward (`mode=file`) on failure. Coze decodes ANY Office format natively (OOXML and OLE2 alike). |
-| `> 5 MB` | Convert locally, append md text into question, file NOT uploaded | `office_to_md.py` (OOXML, stdlib) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported → explicit user prompt |
+| `> 5 MB` | Convert locally, then **upload the resulting `.md` as the attachment** — same `doc_context` channel — plus an ℹ️ notice | `office_to_md.py` (OOXML, stdlib) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported → explicit user prompt |
 
 ## Deliverable boundary (v1.24 · 2026-09-23)
 

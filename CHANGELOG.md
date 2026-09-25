@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased] — 2026-09-25 · >5MB 附件路径修正：转 md 后按 .md 附件上传（用户指正）
+
+- **原错误**：entry.py `_handle_attachment_oversized` 把 >5MB 附件转 md 后**拼进 question 文本**且不上传（"附件未上传，仅本地解析"）——文档结构、分块检索与「文档§N」引用全部失效。
+- **正确行为（用户口径）**：>5MB → 本地转 Markdown（office_to_md / 直读），**把 .md 写成临时文件后按 <5MB 同一条 doc_context 通道上传**（/upload_file → mode=file_id），并附 ℹ️ 提示"云端基于转换后的 md 作答"。
+- 实现：`_handle_attachment_oversized` 返回 `(question, doc_context)` 二元组；临时文件 `%TEMP%/ctadv_<stem>_oversized.md`；SKILL.md / AGENTS.md 管线图与附件矩阵同步修正。
+- **回归**：8.6MB txt 端到端——Coze 正确引用文档**尾部** END_MARKER 编号（7391，§4286），证明上传+分块检索真实生效；<5MB docx 路径不变；py_compile 通过。
+
 ## [Unreleased] — 2026-09-25 · v1.2.0 框架整理（用户："技能内容复杂了，整理框架使流程更清楚"）
 
 - **文档-代码对齐**：SKILL.md / AGENTS.md 此前仍写旧流程（OOXML 本地转 md 追加 question、

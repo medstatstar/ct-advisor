@@ -8,7 +8,8 @@ ct-advisor — 唯一代码入口（本地 LLM 唯一允许的动作）
   原样透传给终端用户。任何难度判定、附件预处理、Coze 调用、结果缝合均由本脚本内部代码完成。
 
 正确流程（2026-09-25 修正）：
-  1) 附件判断：>5MB 转 md 提示用户；<5MB 直接上传（doc_context 通道）
+  1) 附件判断：>5MB 本地转 Markdown 后按 .md 附件上传；<5MB 原文件直接上传
+     （两条路径统一走 doc_context 通道，Coze 端拿到的都是文件附件）
   2) 难度分级：仅判断 vague / non-vague
   3) vague → 本地澄清循环；non-vague → 直接发 Coze
 
@@ -62,8 +63,14 @@ def _safe_wrap_with_checksum(text: str) -> str:
     return _wrap(text)
 
 
-def _handle_attachment_oversized(attach_path: str, question: str) -> str:
-    """附件 >5MB：转 md 拼入 question，提示用户附件未上传"""
+def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
+    """附件 >5MB：本地转 Markdown 后**按 .md 附件上传**（doc_context 通道）。
+
+    返回 (question, doc_context)。Coze 端拿到的是一份标准 .md 文件
+    （经 /upload_file → mode=file_id），与 <5MB 原文件上传同一条通道。
+    解析失败 / 格式不支持时返回 (带 ⚠️ 提示的 question, "")。
+    """
+    import tempfile
     p = Path(attach_path)
     ext = p.suffix.lower()
 
@@ -73,25 +80,30 @@ def _handle_attachment_oversized(attach_path: str, question: str) -> str:
             capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0:
-            return question + f"\n\n⚠️ 附件解析失败: {result.stderr[:200]}"
+            return question + f"\n\n⚠️ 附件《{p.name}》解析失败，未能上传: {result.stderr[:200]}", ""
         md = result.stdout
-        return (
-            f"{question}\n\n"
-            f"⚠️ 附件《{p.name}》体积超过 5MB，已转为 Markdown 全文如下（附件未上传，仅本地解析）：\n"
-            f"===== 附件解码内容 =====\n{md}\n===== 附件结束 ====="
-        )
     elif ext in (".txt", ".md", ".csv", ".tsv", ".json"):
-        text = p.read_text(encoding="utf-8", errors="replace")
-        return (
-            f"{question}\n\n"
-            f"⚠️ 附件《{p.name}》体积超过 5MB，已读取全文如下（附件未上传，仅本地解析）：\n"
-            f"===== 附件内容 =====\n{text}\n===== 附件结束 ====="
-        )
+        md = p.read_text(encoding="utf-8", errors="replace")
     else:
         return question + (
-            f"\n\n⚠️ 附件《{p.name}》体积超过 5MB，格式 {ext} 暂不支持本地解析。"
+            f"\n\n⚠️ 附件《{p.name}》体积超过 5MB，格式 {ext} 暂不支持本地转换。"
             f"请精简内容至 5MB 以下后重试，或另存为 .docx/.xlsx/.pptx/.txt/.md。"
-        )
+        ), ""
+
+    # 写出临时 .md，按 md 格式走统一上传通道（<5MB 同一套账）
+    md_path = Path(tempfile.gettempdir()) / f"ctadv_{p.stem}_oversized.md"
+    md_path.write_text(md, encoding="utf-8")
+    sys.stderr.write(f"[entry] >5MB 已转 md: {md_path} ({md_path.stat().st_size / 1024:.1f} KB)\n")
+    payload_json, doc_id = build_file_payload(
+        path=str(md_path),
+        instruction=question,
+        allow_upload=True,
+    )
+    note = (
+        f"\n\nℹ️ 附件《{p.name}》体积超过 5MB，已转换为 Markdown 版并随问题上传，"
+        f"云端将基于转换后的 .md 全文作答。"
+    )
+    return question + note, payload_json
 
 
 def _handle_attachment_normal(attach_path: str, question: str) -> str:
@@ -178,9 +190,11 @@ def main():
             sys.stderr.write(f"[entry] 附件: {args.attach}, 体积: {file_size / 1024:.1f} KB\n")
 
             if file_size > MAX_FILE_BYTES:
-                # >5MB：转 md 提示用户，不传 Coze
-                sys.stderr.write("[entry] 附件 >5MB，转 md 提示用户\n")
-                original_question = _handle_attachment_oversized(args.attach, original_question)
+                # >5MB：本地转 md 后，按 .md 附件上传（doc_context 通道）
+                sys.stderr.write("[entry] 附件 >5MB，转 md 后按 md 格式上传\n")
+                original_question, doc_context = _handle_attachment_oversized(args.attach, original_question)
+                if doc_context:
+                    sys.stderr.write(f"[entry] md doc_context 构建完成 ({len(doc_context)} chars)\n")
             else:
                 # <5MB：直接上传（doc_context 通道）
                 sys.stderr.write("[entry] 附件 <5MB，构建 doc_context 直接上传\n")

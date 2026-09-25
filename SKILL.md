@@ -29,7 +29,7 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "controlled-coze-opt-in"
-  network_note: "All questions are forwarded to Coze (single call, internal `scripts/orchestrate.py`). Local side performs NO knowledge base lookup, NO local network retrieval, NO web search. Attachments under 5 MB are uploaded as original bytes to Coze `/upload_file` and shipped as the top-level `doc_context` field (Coze decodes natively); attachments over 5 MB are converted to Markdown locally via `scripts/office_to_md.py` (stdlib-only) and appended to the question. The Coze-side knowledge base is the single source of truth."
+  network_note: "All questions are forwarded to Coze (single call, internal `scripts/orchestrate.py`). Local side performs NO knowledge base lookup, NO local network retrieval, NO web search. Attachments under 5 MB are uploaded as original bytes to Coze `/upload_file` and shipped as the top-level `doc_context` field (Coze decodes natively); attachments over 5 MB are converted to Markdown locally via `scripts/office_to_md.py` (stdlib-only) and the resulting .md is uploaded through the SAME doc_context channel. The Coze-side knowledge base is the single source of truth."
   filesystem: "Read-only to own files; no confidential data leaves locally — Coze payloads sanitized, query_origin is a stable per-machine sha256 hash (non-PII)."
 adapted_from: "https://github.com/A-xin946/clinical-trial-advisor"
 dependencies:
@@ -89,14 +89,15 @@ python scripts/entry.py --q "这个文档和医学有关吗" --attach "/path/to/
 ### What entry.py does internally (all code, zero LLM) — the canonical pipeline
 
 ```
-STEP 1  Attachment gate (only if --attach given)
+STEP 1  Attachment gate (only if --attach given) — BOTH paths ship a FILE via doc_context
         ├─ size < 5 MB  → doc_memory.build_file_payload(allow_upload=True)
         │                 uploads the ORIGINAL file to Coze /upload_file,
         │                 ships it as top-level `doc_context` (mode=file_id;
         │                 auto-fallback to base64 forward channel on failure)
-        └─ size > 5 MB  → office_to_md.py converts to Markdown locally and
-                          APPENDS the text into the question (file NOT uploaded),
-                          with a visible ⚠️ notice to the user
+        └─ size > 5 MB  → convert locally (office_to_md.py for OOXML / direct read
+                          for txt-like), then upload the resulting **.md as the
+                          attachment** through the SAME doc_context channel,
+                          plus an ℹ️ notice that the cloud answers from the md version
 STEP 2  Vague gate (deterministic regex, scripts/route.py — the ONLY difficulty check)
         ├─ vague      → clarify_loop.py (≤3 rounds) → questions back to user, stop
         └─ non-vague  → continue
@@ -148,12 +149,12 @@ if m:
 
 ## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
 
-**Single gate = 5 MB, decided FIRST inside `entry.py` (v1.1.0 workflow correction, 2026-09-25).**
+**Single gate = 5 MB, decided FIRST inside `entry.py` (v1.1.0 workflow correction, 2026-09-25). BOTH paths deliver a FILE to Coze through the same `doc_context` channel.**
 
 | Size | Behavior | Channel |
 |---|---|---|
 | `< 5 MB` | **Upload the original file directly** — never converted locally | `doc_memory.build_file_payload(allow_upload=True)` → Coze `/upload_file` → `doc_context` (`mode=file_id`); on upload failure auto-degrades to the base64 forward channel (`mode=file`) |
-| `> 5 MB` | Convert to Markdown locally, **append text into the question, file NOT uploaded**, with a visible ⚠️ notice | `scripts/office_to_md.py` (stdlib-only; OOXML) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported formats get an explicit user prompt |
+| `> 5 MB` | Convert to Markdown locally, then **upload the resulting `.md` as the attachment** — same `doc_context` channel — plus an ℹ️ notice that the cloud answers from the md version | `scripts/office_to_md.py` (stdlib-only; OOXML) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported formats get an explicit user prompt |
 
 Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.xls/.ppt` included), so fidelity is higher than any local conversion — this is why the <5 MB path uploads instead of converting.
 
