@@ -97,7 +97,10 @@ TOOL_TRIGGERS = {
         r"已发表文献|published literature|"
         r"(?:检索|查询|查找|搜索|列出|查|搜|找)[^。；;]{0,12}?(?:文献|论文|综述|证据)|"
         r"(?:find|search|list|retrieve|pull|fetch)\b[^.;]{0,24}?"
-        r"(?:literature|papers?|publications?|reviews?)"),
+        r"(?:literature|papers?|publications?|reviews?)|"
+        # 外用 JAK 抑制剂 MUsT / 最大用量 / 系统暴露类问题（具名药物 + 暴露场景）→ 强触发文献核验
+        r"(?=.*(?:ruxolitinib|芦可替尼|opzelura|pg-011|普美昔替尼|pumecitinib))"
+        r"(?=.*(?:must|最大用量|系统暴露|maximum[- ]use|pk暴露|暴露安全))"),
 }
 
 # 弱触发词（2026-09-10 新增）：歧义大，**不自动调用**，仅作答案末尾的软建议。

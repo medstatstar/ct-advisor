@@ -281,6 +281,14 @@ class RefineRequest:
     # 供远端 refiner 走 long_timeout（默认 300s）避免多轮上下文追问被截断。
     # 远端相关性判权已完全交 Coze LLM（经 conversation_history），本地不再做追问分类。
     is_followup: bool = False
+    # 增量兼容字段（2026-09-23 大文档处理管线）：大文档的结构化载荷（JSON 信封，见
+    # adapters/coze/src/doc/payload.py 契约真源：{v,doc_id,instruction,mode,text|chunks,...}）。
+    # 非空时随契约外发，供 Coze（v1.21+）自行分块检索并按「文档 §N」引用；
+    # 老 Coze 忽略该字段（pydantic extra='ignore'）→ 退化为 original_question 内联片段（仍可用）。
+    doc_context: str = ""
+    # 增量兼容字段（2026-09-23）：范围路由标签（""=在范围；"medical_writing" 等=超范围，
+    # 由 scope_guard 产出）。本地已前置转介声明；非空时随契约外发，Coze 在提示词层一并强化声明。
+    scope_hint: str = ""
     max_items: Optional[int] = None  # 已废弃且无操作：条目数量不再校验上限，统一直接发送 coze。
 
     def normalize(self) -> List[str]:
@@ -366,6 +374,11 @@ class RefineRequest:
         # 6.5) conversation_history（2026-08-25 混合上下文）：非 list 一律归一为空 list
         if not isinstance(self.conversation_history, list):
             self.conversation_history = []
+        # 6.6) doc_context / scope_hint（2026-09-23 本地守卫）：非 str 一律归一为空串
+        if not isinstance(self.doc_context, str):
+            self.doc_context = ""
+        if not isinstance(self.scope_hint, str):
+            self.scope_hint = ""
 
         # 3) query_origin：脚本会盖章，写入 query_meta 字典（不再另设顶层字段）
         qm = self.query_meta if isinstance(self.query_meta, dict) else {}
@@ -426,6 +439,12 @@ class RefineRequest:
         # 前三者为原始契约三字段；conversation_history 为 2026-08-25 新增的可选字段，
         # 由本地按时间窗+轮数裁剪后传出，供 Coze LLM 自行判相关性引用前情。
         # 默认空 list（无历史时不携带），历史版本 Coze 忽略此字段亦兼容。
+        # ── 2026-09-23 大文档处理管线：doc_context / scope_hint 按「非空才带」外发 ──
+        # doc_context：大文档结构化载荷（含 doc_id/instruction/正文或分块），Coze v1.21+ 据此
+        #   自行分块检索并以「文档 §N」引用；空串时不带（普通问题零负担）。
+        # scope_hint ：范围路由标签（如 medical_writing），Coze 在提示词层强化范围外声明。
+        # 兼容性：老 Coze 的 GraphInput 为 pydantic 模型（extra='ignore'）→ 静默忽略这两个字段；
+        #   老本地不发 → 新 Coze 用字段缺省值（""）→ 走无文档路径。双向兼容。
         # question_profile / confirmation / tone_profile / memory_context 保留在 RefineRequest
         # 内但不再外发（服务端未实现；待服务端补齐后再恢复发送）。
         # ── ct-base coze_io_contract §1.2：skill_version 注入 query_meta（与 query_origin 同级，非顶层）──
@@ -434,13 +453,18 @@ class RefineRequest:
         self.query_meta = qm
         # ── ct-base coze_io_contract §1.1：user_language（备用语言提示）注入顶层 params 子对象 ──
         user_language = resolve_user_language(self.original_question, None)
-        return {
+        payload = {
             "query_meta": self.query_meta,
             "original_question": self.original_question,
             "draft_answer": self.draft_answer,
             "conversation_history": self.conversation_history,
             "params": {"user_language": user_language},
         }
+        if getattr(self, "doc_context", ""):
+            payload["doc_context"] = self.doc_context
+        if getattr(self, "scope_hint", ""):
+            payload["scope_hint"] = self.scope_hint
+        return payload
 class Refiner(ABC):
     @abstractmethod
     def refine(self, req: RefineRequest, timeout: float = 90.0) -> str:
@@ -661,10 +685,12 @@ class CozeRefiner(Refiner):
             resp = requests.post(
                 self.endpoint, json=payload, headers=_headers, timeout=timeout,
             )
-        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             # 系统代理残留（Windows：HTTP_PROXY/HTTPS_PROXY 指向无监听端口）→ requests 走死代理
             # → WinError 10061。自动绕过系统代理直连重试一次：直连可达即恢复（本端点实测直连正常）；
             # 直连也不可达则继续抛给上层 fallback。
+            # 2026-09-25 扩展：ReadTimeout 也纳入代理绕过重试——本地代理能建 TCP 但无法转发 HTTPS，
+            # 导致 ReadTimeout，此时绕过代理直连即可恢复。
             try:
                 sys.stderr.write(
                     f"[ct-advisor] 代理连接失败({type(e).__name__})，尝试绕过系统代理直连重试...\n"

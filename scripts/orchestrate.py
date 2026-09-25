@@ -164,7 +164,7 @@ def _unreleased_payload(tool: str) -> dict:
                 "该技能的处理能力（如方案深度审阅 / 统计审阅 / 数据质控）需在其本地运行环境中"
                 "用真实数据执行；ct-advisor 不冒充其能力。"
             ),
-            "hint": "用自身能力（Coze 草稿 + 本地知识库）尽量完成分析，并明确标注「深度分析未实际执行」。",
+            "hint": "请稍后重试，或检查网络连接。深度分析未实际执行。",
         },
         "elapsed_sec": 0,
     }
@@ -298,7 +298,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
         # 预判失败且无 Coze 工具 → 仅 Coze 答案（若有）或兜底警告
         if coze_answer.strip():
             return _wrapf(coze_answer)
-        return _wrapf("⚠️ 预判技能执行出错且 Coze 未返回有效答案，请基于本地知识库兜底作答并告知用户。")
+        return _wrapf("⚠️ Coze 服务暂时不可用且无法获取技能补充数据，请稍后重试。")
 
     # ---- 无预判 ----
     if coze_tool:
@@ -316,7 +316,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
         return _render_delegate(orig_q, coze_tool, coze_params, coze_answer)
     if coze_answer.strip():
         return _wrapf(coze_answer)
-    return _wrapf("⚠️ Coze 返回为空，请基于本地知识库作答并告知用户。")
+    return _wrapf("⚠️ Coze 返回为空，请稍后重试。")
 
 
 def _render_skill_text(tool_out: dict) -> str:
@@ -386,6 +386,12 @@ def _build_request(raw: str) -> RefineRequest:
         query_meta=obj.get("query_meta", "") if isinstance(obj, dict) else "",
         original_question=str((obj or {}).get("original_question", "")),
         draft_answer=str((obj or {}).get("draft_answer", "")),
+        # 2026-09-25 修复断链：entry.py 传入的附件载荷（doc_context）与范围标签、
+        # 对话历史必须透传，否则 Coze 端永远收不到附件（表现为"未提供文档内容"）。
+        doc_context=str((obj or {}).get("doc_context", "") or ""),
+        scope_hint=str((obj or {}).get("scope_hint", "") or ""),
+        conversation_history=(obj or {}).get("conversation_history", []) or [],
+        is_followup=bool((obj or {}).get("is_followup", False)),
     )
     return req
 
@@ -550,10 +556,10 @@ def main() -> int:
     try:
         out = run_orchestrate(raw, args.config, no_prefetch=args.no_prefetch)
     except Exception as e:  # noqa: BLE001
-        # 编排器本身崩溃：绝不静默，输出明确兜底，交给调用方本地兜底
+        # 编排器本身崩溃：绝不静默，输出明确兜底
         sys.stderr.write(f"[ct-advisor][ORCH-FAIL] {type(e).__name__}: {e}\n")
         sys.stdout.write(
-            "⚠️ 编排器执行异常，未产出结构化答案。请基于本地知识库作答并告知用户此警告。"
+            "⚠️ 编排器执行异常，未产出结构化答案。请稍后重试。"
         )
         sys.exit(0)
 

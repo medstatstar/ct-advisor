@@ -1,0 +1,9 @@
+{
+  "appId": "wbapp_FBxILYuXi6yMolY8CsYzA7",
+  "appName": "ct-advisor 工作台",
+  "domainPrefix": "ct-advisor",
+  "shareLink": "https://ct-advisor.app.workbuddy.host/",
+  "startCmd": "python -m http.server $PORT --bind 0.0.0.0",
+  "deployedAt": "2026-09-14T14:52:03+08:00",
+  "deployedAs": "static-site"
+}

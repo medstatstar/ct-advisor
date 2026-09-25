@@ -1,0 +1,22 @@
+{
+  "doc_82f29239f43d581a": {
+    "size": 5709,
+    "chunks": 10,
+    "created_at": 1790163911.2516468
+  },
+  "doc_ae446eab85a14907": {
+    "size": 6409,
+    "chunks": 12,
+    "created_at": 1790163911.969271
+  },
+  "doc_51b8400858a18d14": {
+    "size": 12000,
+    "chunks": 1,
+    "created_at": 1790163912.6371744
+  },
+  "doc_f86edd3fb81e3b4a": {
+    "size": 13609,
+    "chunks": 24,
+    "created_at": 1790164618.9001746
+  }
+}

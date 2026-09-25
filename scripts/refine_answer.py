@@ -669,7 +669,24 @@ def main() -> None:
             sys.stdout.write(t("error.empty_question") + "\n")
         else:
             sys.stdout.write(draft)
-        sys.exit(0)
+            sys.exit(0)
+
+    # ── 2026-09-23 改进（诊断报告落地）：转发前本地守卫 ──
+    # 范围路由 / 大文档压缩 / 同 origin 去重；fire_only·collect 路径 no-op（遵守 race 硬闸门）。
+    # 防御式：任何守卫异常都跳过，绝不阻断主流程（与 context_stitch 同策略）。
+    try:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import forward_guards as _fg
+        _mode = ("fire_only" if args.fire_only else "collect" if args.collect
+                 else "ship" if args.ship else "forward" if args.forward else "serial")
+        _go = _fg.apply_guards(req, _mode)
+        if _go.notes:
+            sys.stderr.write("[ct-advisor] forward_guards: " + "; ".join(_go.notes) + "\n")
+        if _go.short_circuit:
+            sys.stdout.write(_go.answer)
+            sys.exit(0)
+    except Exception as _ge:  # noqa: BLE001
+        sys.stderr.write(f"[ct-advisor] forward_guards skipped: {_ge}\n")
 
     if args.ship:
         # 代码旁路主链路（2026-08-15）：单次调用 Coze；need_tool 分支在代码内执行 + 确定性缝合；
@@ -679,7 +696,7 @@ def main() -> None:
         ):
             # 未授权出站：无法获取 Coze 答案，明确告知 agent 走本地兜底
             _emit_wrapped(
-                "⚠️ 未授权出站到 Coze，无法获取精校答案。请基于本地知识库作答，并明确告知用户"
+                "⚠️ 未授权出站到 Coze，无法获取精校答案。请确认允许后重试。"
                 "「答案未经过 Coze 精校，请谨慎使用」。"
             )
             sys.exit(0)
@@ -697,7 +714,7 @@ def main() -> None:
                 f"[ct-advisor] ship 失败（{type(e).__name__}）：Coze 不可用，需本地兜底\n"
             )
             _emit_wrapped(
-                "⚠️ 无法连接 Coze 服务，答案未经过精校。请基于本地知识库作答，并明确告知用户此警告。"
+                "⚠️ 无法连接 Coze 服务，答案未经过精校。请稍后重试。"
             )
             sys.exit(0)
         coze_answer = result.final_answer or ""
@@ -725,7 +742,7 @@ def main() -> None:
         else:
             merged = coze_answer
         if not merged.strip():
-            merged = "⚠️ Coze 返回为空，请基于本地知识库作答并告知用户。"
+            merged = "⚠️ Coze 返回为空，请稍后重试。"
         # 更新会话上下文（供下一轮类型 B 追问拼接）：累积多轮历史（q + 结论摘要）。
         # 保留规则（2026-08-24 修订，OR + 24h 硬上限）：在 2h 内 OR 总数 ≤10 任一即留，
         # 再 AND 未超 24h（任何超 24h 记录必丢，防孤立旧记录污染）。裁剪统一由
@@ -780,6 +797,17 @@ def main() -> None:
             if _st:
                 merged = merged + suggest_footer(
                     _st, lang=_detect_lang(req.original_question))
+        # 2026-09-23 改进：超范围前置转介 + 回写去重库（防御式）
+        try:
+            import forward_guards as _fg3
+            _sh = getattr(req, "scope_hint", "")
+            if _sh:
+                merged = _fg3.apply_scope_referral(merged, _sh)
+            if merged.strip():
+                _fg3.record_answer(((req.query_meta or {}) or {}).get("query_origin", ""),
+                                   req.original_question, merged)
+        except Exception:  # noqa: BLE001
+            pass
         _emit_wrapped(merged)
         sys.exit(0)
 
@@ -822,9 +850,20 @@ def main() -> None:
             "run_id": result.run_id,
             "message": result.message,  # §20.15：顶层可选 message 字段，供消费端（如工作台）置顶渲染
         }
-        # 失败回退标记（stderr 同时输出，供 agent 判定是否本地兜底）
+        # 失败回退标记（stderr 同时输出，供调用方提示用户）
         if result.need_tool is None and not result.cache_hit and not result.final_answer.strip():
-            sys.stderr.write("[ct-advisor][FALLBACK] Coze 返回空/失败，建议本地知识库兜底\n")
+            sys.stderr.write("[ct-advisor][FALLBACK] Coze 返回空/失败，无法生成答案\n")
+        # 2026-09-23 改进：超范围前置转介 + 回写去重库（防御式）
+        try:
+            import forward_guards as _fg3
+            _sh = getattr(req, "scope_hint", "")
+            if _sh and out.get("final_answer"):
+                out["final_answer"] = _fg3.apply_scope_referral(out["final_answer"], _sh)
+            if out.get("final_answer", "").strip():
+                _fg3.record_answer(((req.query_meta or {}) or {}).get("query_origin", ""),
+                                   req.original_question, out["final_answer"])
+        except Exception:  # noqa: BLE001
+            pass
         sys.stdout.write(json.dumps(out, ensure_ascii=False))
         sys.exit(0)
 
@@ -917,6 +956,17 @@ def main() -> None:
     # 统一取 .final_answer 以兼容两种返回形态，避免离线/无网回归时 (final or "").strip() 抛 AttributeError。
     if not isinstance(final, str):
         final = getattr(final, "final_answer", "") or ""
+    # 2026-09-23 改进：超范围前置转介 + 回写去重库（防御式）
+    try:
+        import forward_guards as _fg3
+        _sh = getattr(req, "scope_hint", "")
+        if _sh:
+            final = _fg3.apply_scope_referral(final, _sh)
+        if (final or "").strip():
+            _fg3.record_answer(((req.query_meta or {}) or {}).get("query_origin", ""),
+                               req.original_question, final)
+    except Exception:  # noqa: BLE001
+        pass
     # 诊断兜底（2026-08-13）：Coze 失败且无本地草稿时输出友好询问（agent 应征得用户同意后
     # 自动运行 check_coze.py 诊断），而非空输出——空输出会被误判为"没有答案"。
     if not (final or "").strip():

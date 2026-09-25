@@ -1,0 +1,1329 @@
+<!DOCTYPE html>
+<!-- ct-advisor 工作台 · 基于 ct-base 工作台标准框架（workbench_ui.md §5.4 多视图形态）构建 -->
+<html lang="zh-CN" data-brand="clinical-indigo" data-page-node-id="fsBDfTRTyQDu5S9K6UUtXk">
+<head data-page-node-id="pMq77fXUtzAV1wNIJzxux3">
+<meta charset="UTF-8" data-page-node-id="C7JI9xNfq4VIjWSmz5wC0A" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" data-page-node-id="Mol4aXAjgMObc1KbFfj3PU" />
+<title>ct-advisor · 临床试验总顾问工作台</title>
+<link rel="stylesheet" href="./tokens.css" data-page-node-id="2OeWbGpAa92oudVZrkIS6t" />
+<link rel="stylesheet" href="./wb-list.css" data-page-node-id="Cp5jn0CLZluqWUbBHiOoLt" />
+<style>
+  /* ===== advisor 特有布局（三视图 + 侧栏），一律用 --wb-* 令牌，禁止裸色/自造别名 ===== */
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; padding:0; height:100%}
+  body{
+    font-family:var(--wb-font); color:var(--wb-ink);
+    background:
+      radial-gradient(1100px 620px at 88% -8%, rgba(28,109,208,.14), transparent 58%),
+      radial-gradient(900px 560px at 0% 102%, rgba(91,155,213,.14), transparent 55%),
+      linear-gradient(180deg, var(--wb-bg), var(--wb-bg-2));
+    background-attachment:fixed; min-height:100vh; line-height:1.6;
+  }
+  .app{position:relative; z-index:1; display:flex; flex-direction:column; min-height:100vh}
+
+  /* ---- 顶栏：品牌渐变实心条 + 控件反色（视觉三件套·其一） ---- */
+  .topbar{
+    display:flex; align-items:center; gap:14px; padding:12px var(--wb-pad);
+    background:var(--wb-topbar-bg); border-bottom:1px solid rgba(255,255,255,.25);
+    position:sticky; top:0; z-index:30;
+  }
+  .wb-brand{display:flex; align-items:center; gap:12px; min-width:0}
+  .wb-brand svg{width:34px; height:34px; flex:0 0 auto; filter:drop-shadow(0 2px 4px rgba(0,0,0,.18))}
+  .wb-brand h1{font-size:16px; margin:0; font-weight:700; letter-spacing:.3px; white-space:nowrap; color:var(--wb-topbar-ink)}
+  .wb-brand .sub{font-size:11px; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--wb-topbar-sub)}
+  .spacer{flex:1}
+  .top-actions{display:flex; align-items:center; gap:8px}
+  .langbtn,.iconbtn{
+    background:rgba(255,255,255,.12); color:var(--wb-topbar-ink); border:1px solid rgba(255,255,255,.35);
+    border-radius:var(--wb-radius-sm); padding:8px 12px; font-size:13px; cursor:pointer;
+    display:inline-flex; align-items:center; gap:6px; min-height:40px; transition:.15s; font-family:inherit;
+  }
+  .langbtn:hover,.iconbtn:hover{background:rgba(255,255,255,.22); color:#fff; border-color:rgba(255,255,255,.55)}
+  .pill{font-size:12px; font-weight:600; border-radius:var(--wb-radius-pill); padding:5px 12px; border:1px solid rgba(255,255,255,.3); background:rgba(255,255,255,.15); color:var(--wb-topbar-ink); white-space:nowrap}
+  .pill.ok{background:rgba(6,95,70,.55); border-color:rgba(110,231,183,.6); color:#fff}
+  .pill.warn{background:rgba(180,83,9,.5); border-color:rgba(252,211,77,.55); color:#fff}
+  .pill.err{background:rgba(185,28,28,.55); border-color:rgba(252,165,165,.6); color:#fff}
+
+  .layout{display:flex; flex:1; min-height:0}
+  /* ===== 简化版声明条（ct-base workbench_ui.md §17）===== */
+  .wb-lite-notice{display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+    padding:8px var(--wb-pad); font-size:12.5px; line-height:1.55;
+    background:var(--wb-brand-soft); color:var(--wb-brand-ink); border-bottom:1px solid var(--wb-line)}
+  .wb-lite-notice svg{width:15px; height:15px; flex:0 0 auto; color:var(--wb-brand)}
+  .wb-lite-notice .wb-lite-notice-t{flex:1; min-width:0}
+  nav.side{width:212px; flex:0 0 auto; border-right:1px solid var(--wb-line); padding:14px 10px; background:var(--wb-panel); transition:width .16s ease, padding .16s ease; cursor:pointer}  /* 单击空白折叠（ct-base §5.4） */
+  nav.side .navitem{display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:var(--wb-radius-sm); cursor:pointer; color:var(--wb-sub); font-size:14px; margin-bottom:6px; border:1px solid transparent; transition:.15s; position:relative; white-space:nowrap}
+  nav.side .navitem svg{width:18px; height:18px; flex:0 0 auto}
+  nav.side .navitem:hover{color:var(--wb-ink); background:var(--wb-panel)}
+  nav.side .navitem.active{color:var(--wb-brand); background:var(--wb-panel); border-color:var(--wb-line); font-weight:600}
+  nav.side .navitem.locked{opacity:.38; pointer-events:none; filter:grayscale(.6)}
+  .bottomtab .navitem.locked{opacity:.4; pointer-events:none}
+  nav.side .navitem .badge{margin-left:auto; background:var(--wb-err); color:#fff; font-size:11px; border-radius:var(--wb-radius-pill); padding:1px 7px; font-weight:700}
+  /* 侧栏折叠（桌面端；ct-base §5.4 多视图导航可折叠）——触发：单击导航栏空白处（点中 .navitem 不触发），无独立折叠钮 */
+  .app.side-collapsed nav.side{width:62px; padding:14px 8px}
+  .app.side-collapsed nav.side .navitem{justify-content:center; gap:0; padding:11px 0}
+  .app.side-collapsed nav.side .navitem span{display:none}
+  .app.side-collapsed nav.side .navitem .badge{position:absolute; top:3px; right:3px; margin:0; min-width:17px; height:17px; line-height:15px; padding:0 4px; font-size:10px; text-align:center}
+  .app.side-collapsed nav.side .navitem:hover{background:var(--wb-bg)}
+  main{flex:1; min-width:0; padding:18px var(--wb-pad) 40px; overflow:auto}
+  .view{display:none; animation:fade .25s ease}
+  .view.active{display:block}
+  @keyframes fade{from{opacity:0; transform:translateY(6px)} to{opacity:1; transform:none}}
+  .card{background:var(--wb-panel); border:1px solid var(--wb-line); border-radius:var(--wb-radius); padding:16px; box-shadow:var(--wb-shadow-sm)}
+  .card+.card{margin-top:14px}
+  .card h2{margin:0 0 12px; font-size:15px; display:flex; align-items:center; gap:8px; color:var(--wb-ink)}
+  .card h2 .dot{width:8px; height:8px; border-radius:2px; background:var(--wb-brand); box-shadow:0 0 8px var(--wb-brand-2)}
+  .pending-strip{display:flex; gap:10px; overflow-x:auto; padding-bottom:4px}
+  .pending-chip{flex:0 0 auto; min-width:210px; border:1px solid var(--wb-err); border-radius:var(--wb-radius-sm); padding:10px 12px; cursor:pointer; background:rgba(220,38,38,.06); transition:.15s}
+  .pending-chip:hover{border-color:var(--wb-brand); box-shadow:0 3px 12px rgba(28,109,208,.15)}
+  .pending-chip .t{font-size:12px; color:var(--wb-err); font-weight:700; display:flex; align-items:center; gap:6px}
+  .pending-chip .s{font-size:12px; color:var(--wb-ink); margin-top:4px; font-family:var(--wb-mono)}
+  .chatlog{display:flex; flex-direction:column; gap:10px; margin-top:16px; padding:14px; background:var(--wb-bg); border:1px solid var(--wb-line); border-radius:var(--wb-radius)}  /* 对话面板：与上方操作区界限分明 */
+  .msg{position:relative; border-radius:var(--wb-radius); padding:12px 15px; border:1px solid var(--wb-line); animation:fadeup .18s ease}
+  .msg.user{align-self:flex-end; width:auto; max-width:82%; margin-left:auto; background:linear-gradient(135deg, var(--wb-brand-soft), rgba(21,92,168,.10)); border-color:rgba(28,109,208,.30)}
+  .msg.bot{align-self:stretch; width:100%; background:var(--wb-panel); border-color:var(--wb-line-soft); box-shadow:0 1px 0 rgba(255,255,255,.65) inset, 0 2px 10px rgba(15,37,53,.04)}
+  .msg.bot.err{background:rgba(220,38,38,.06); border-color:var(--wb-err); box-shadow:none}
+  .msg.bot.err .body{color:var(--wb-err)}
+  .msg .who{font-size:11px; color:var(--wb-sub); margin-bottom:7px; display:flex; gap:7px; align-items:center; flex-wrap:wrap; line-height:1}
+  .msg .who .ava{width:16px; height:16px; border-radius:6px; flex:0 0 auto; display:inline-block}
+  .msg .who .nm{font-size:12px; font-weight:700; letter-spacing:.2px}
+  .msg.user .who .nm{color:#14509B}
+  .msg.bot .who .nm{color:var(--wb-brand)}
+  .msg .who .tm{margin-left:auto; font-size:10.5px; font-family:var(--wb-mono); opacity:.75}
+  .msg .who .tag{font-family:var(--wb-mono); border:1px solid var(--wb-line); background:rgba(255,255,255,.55); border-radius:var(--wb-radius-pill); padding:1.5px 8px; color:var(--wb-brand-ink); font-size:10.5px; line-height:1.4}
+  .msg .body{font-size:14px; white-space:pre-wrap; word-break:break-word; color:var(--wb-ink); line-height:1.7}
+  .msg .body table{border-collapse:collapse; margin:10px 0; width:100%; font-size:13px; border-radius:10px; overflow:hidden; box-shadow:0 1px 0 var(--wb-line)}
+  .msg .body th,.msg .body td{border:1px solid var(--wb-line); padding:7px 10px; text-align:left; vertical-align:top}
+  .msg .body th{background:linear-gradient(180deg, var(--wb-brand-soft), rgba(28,109,208,.10)); color:var(--wb-brand-ink); font-weight:700; border-bottom:1px solid rgba(28,109,208,.4)}
+  .msg .body tr:nth-child(even) td{background:rgba(91,155,213,.05)}
+  .msg .body td strong{color:#123F73}
+  .msg .body code{font-family:var(--wb-mono); background:rgba(91,155,213,.12); border:1px solid rgba(91,155,213,.18); padding:1px 6px; border-radius:6px; font-size:12.5px; color:#0b4f6b}
+  .msg .body pre{background:#10242f; border:1px solid rgba(15,37,53,.2); border-radius:12px; padding:12px 14px; overflow:auto; margin:10px 0}
+  .msg .body pre code{background:none; border:none; padding:0; color:#d7e7ef; font-size:12.5px; line-height:1.65; display:block}
+  .msg .body h1,.msg .body h2,.msg .body h3{margin:16px 0 7px; color:var(--wb-brand); line-height:1.4; font-weight:800}
+  .msg .body h1:first-child,.msg .body h2:first-child,.msg .body h3:first-child{margin-top:2px}
+  .msg .body h2,.msg .body h3{display:flex; align-items:center; gap:8px}
+  .msg .body h2::before,.msg .body h3::before{content:""; width:4px; height:1em; border-radius:3px; background:linear-gradient(180deg, var(--wb-brand), var(--wb-brand-2)); flex:0 0 auto}
+  .msg .body h1{font-size:16px} .msg .body h2{font-size:15px} .msg .body h3{font-size:14px}
+  .msg .body a{color:var(--wb-brand-ink); font-weight:600; text-decoration:underline; text-underline-offset:2px}
+  .msg .body ul,.msg .body ol{margin:8px 0; padding-left:22px}
+  .msg .body li{margin:3px 0}
+  .msg .body li::marker{color:var(--wb-brand)}
+  .msg .body blockquote{border-left:4px solid var(--wb-brand); background:rgba(28,109,208,.07); margin:10px 0; padding:8px 14px; color:var(--wb-ink); border-radius:0 10px 10px 0}
+  .msg .body blockquote p{margin:0}
+  .msg .body hr{border:none; border-top:1px dashed var(--wb-line-soft); margin:14px 0}
+  .typing{display:inline-flex; gap:4px; align-items:center}
+  .typing i{width:7px; height:7px; border-radius:50%; background:var(--wb-brand); display:inline-block; animation:blink 1s infinite}
+  .typing i:nth-child(2){animation-delay:.2s} .typing i:nth-child(3){animation-delay:.4s}
+  @keyframes blink{0%,60%,100%{opacity:.25}30%{opacity:1}}
+  @keyframes fadeup{from{opacity:0; transform:translateY(5px)} to{opacity:1; transform:none}}
+
+  /* ---- 输入区：品牌软底交叉（视觉三件套·其三） ---- */
+  .composer{position:sticky; top:0; z-index:5; margin-top:12px; background:var(--wb-brand-soft); border:1px solid var(--wb-line); border-radius:var(--wb-radius); padding:10px; box-shadow:0 10px 18px -12px rgba(15,37,53,.28)}  /* 与下方对话面板形成界限 */
+  .composer textarea{width:100%; resize:vertical; min-height:96px; max-height:320px; background:var(--wb-panel); color:var(--wb-ink); border:1px solid var(--wb-line); border-radius:var(--wb-radius-sm); padding:10px 12px; font-family:var(--wb-font); font-size:14px; line-height:1.5}
+  .composer textarea:focus{outline:none; border-color:var(--wb-brand)}
+  .attachrow{display:flex; gap:10px; align-items:stretch; margin-top:6px}
+  .filechip{flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; gap:6px; background:var(--wb-panel); color:var(--wb-sub); border:1px dashed var(--wb-line); border-radius:10px; padding:0 13px; font-size:12.5px; font-family:var(--wb-font); cursor:pointer; white-space:nowrap; user-select:none}
+  .filechip:hover{border-color:var(--wb-brand); color:var(--wb-brand)}
+  .composer .attach{flex:1; width:auto; min-width:0; background:var(--wb-panel); color:var(--wb-sub); border:1px dashed var(--wb-line); border-radius:10px; padding:7px 11px; font-size:12.5px; font-family:var(--wb-font); resize:vertical; min-height:50px}
+  .sendmeta{display:flex; align-items:center; gap:10px; font-size:11px; color:var(--wb-muted); min-width:0; flex-wrap:wrap}
+  .sendbtn{background:linear-gradient(135deg, var(--wb-brand), var(--wb-brand-2)); color:#fff; border:none; border-radius:11px; padding:0 22px; min-height:40px; font-weight:700; font-size:13.5px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:7px; transition:background .25s, box-shadow .25s, transform .08s; font-family:inherit; box-shadow:0 3px 12px rgba(28,109,208,.22)}
+  .sendbtn:hover{filter:brightness(1.07)}
+  .sendbtn .sendIcon svg{width:16px; height:16px}
+  .sendbtn:active{transform:scale(.96)}
+  .sendbtn:disabled{opacity:.7; cursor:not-allowed}
+  .sendbtn .sendIcon{display:inline-flex}
+  .sendbtn .spin{width:16px; height:16px; border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; display:none}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .sendbtn.loading .sendIcon{display:none}
+  .sendbtn.loading .spin{display:inline-block}
+  .sendbtn.sent{background:linear-gradient(135deg,#16a34a,#15803d); box-shadow:0 6px 18px rgba(22,163,74,.35)}
+  .toolbar{display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:6px; font-size:12px; color:var(--wb-sub)}
+  .toolbar .switch{margin-right:auto}
+  .toolbar select,.toolbar label{display:inline-flex; align-items:center; gap:6px}
+  .toolbar select{background:var(--wb-panel); color:var(--wb-ink); border:1px solid var(--wb-line); border-radius:8px; padding:6px 8px; font-size:12.5px; font-family:inherit}
+  .switch{display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none}
+  .switch input{display:none}
+  .switch .track{width:36px; height:20px; border-radius:var(--wb-radius-pill); background:var(--wb-panel); border:1px solid var(--wb-line); position:relative; transition:.15s}
+  .switch .track::after{content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:var(--wb-sub); transition:.15s}
+  .switch input:checked + .track{background:var(--wb-brand-soft); border-color:var(--wb-brand)}
+  .switch input:checked + .track::after{left:18px; background:var(--wb-brand)}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill, minmax(230px,1fr)); gap:12px}
+  .qcard{border:1px solid var(--wb-line); border-radius:var(--wb-radius-sm); padding:14px; background:var(--wb-panel); cursor:pointer; transition:.15s; display:flex; flex-direction:column}
+  .qcard:hover{border-color:var(--wb-brand); transform:translateY(-2px); box-shadow:0 6px 18px rgba(28,109,208,.14)}
+  .qcard .ic{width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:var(--wb-brand-soft); color:var(--wb-brand); margin-bottom:10px}
+  .qcard .ic svg{width:20px; height:20px}
+  .qcard .ti{font-size:14px; font-weight:600; color:var(--wb-ink)}
+  .qcard .de{font-size:12px; color:var(--wb-sub); margin-top:4px; flex:1}
+  .qcard .route{font-size:11px; color:var(--wb-brand-ink); margin-top:8px; font-family:var(--wb-mono)}
+
+  /* ---- 历史卡片（WBList 卡片行模板容器） ---- */
+  #wb-hist-list{margin-top:4px}
+  .hist-q{font-size:13.5px; font-weight:600; color:var(--wb-ink)}
+  .hist-m{font-size:11px; color:var(--wb-sub); margin-top:5px; font-family:var(--wb-mono); display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+  .hist-a{font-size:12.5px; color:var(--wb-sub); margin-top:6px}
+  .btnbar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}
+  .ghostbtn{background:var(--wb-panel); color:var(--wb-ink); border:1px solid var(--wb-line); border-radius:var(--wb-radius-sm); padding:8px 12px; font-size:12.5px; cursor:pointer; font-family:inherit}
+  .ghostbtn:hover{border-color:var(--wb-brand); color:var(--wb-brand)}
+  .ghostbtn.danger:hover{border-color:var(--wb-err); color:var(--wb-err)}
+  .empty{color:var(--wb-sub); text-align:center; padding:30px; font-size:13px}
+
+  .drawer-mask,.modal-mask{position:fixed; inset:0; background:rgba(15,30,45,.4); z-index:40; display:none}
+  .drawer-mask.open,.modal-mask.open{display:block}
+  .drawer{position:fixed; top:0; right:0; height:100%; width:min(380px,92vw); background:var(--wb-panel); border-left:1px solid var(--wb-line); z-index:41; transform:translateX(100%); transition:.22s; padding:18px; overflow:auto}
+  .drawer.open{transform:none}
+  .drawer h3{margin:0 0 14px; font-size:15px; display:flex; align-items:center; justify-content:space-between; color:var(--wb-ink)}
+  .modal{position:fixed; top:50%; left:50%; transform:translate(-50%,-46%); width:min(560px,94vw); max-height:88vh; overflow:auto; background:var(--wb-panel); border:1px solid var(--wb-line); border-radius:var(--wb-radius-lg); z-index:41; padding:18px 20px; opacity:0; transition:.2s; box-shadow:var(--wb-shadow)}
+  .modal.open{opacity:1; transform:translate(-50%,-50%)}
+  .modal h3{margin:0 0 4px; font-size:16px; display:flex; align-items:center; justify-content:space-between; color:var(--wb-ink)}
+  .modal .closex{cursor:pointer; color:var(--wb-sub); border:1px solid var(--wb-line); border-radius:8px; padding:4px 9px; background:var(--wb-panel); display:inline-flex}
+  .modal .closex:hover{border-color:var(--wb-brand); color:var(--wb-brand)}
+  .modal .mde{font-size:12px; color:var(--wb-sub); margin:0 0 12px}
+  .field{margin-bottom:12px}
+  .field label{display:block; font-size:12.5px; color:var(--wb-sub); margin-bottom:6px; font-weight:600}
+  .field input,.field select,.field textarea{width:100%; background:var(--wb-panel); color:var(--wb-ink); border:1px solid var(--wb-line); border-radius:var(--wb-radius-sm); padding:10px 12px; font-size:13px; font-family:var(--wb-font)}
+  .field textarea{resize:vertical; min-height:60px; font-family:var(--wb-mono)}
+  .field .hint{font-size:11px; color:var(--wb-sub); margin-top:5px}
+  .field .req{color:var(--wb-err); margin-left:3px}
+  .cmdbox{background:rgba(15,37,53,.06); border:1px solid var(--wb-line); border-radius:10px; padding:10px 12px; font-family:var(--wb-mono); font-size:12.5px; color:#123F73; white-space:pre-wrap; word-break:break-word; margin:8px 0}
+  .refbox{border:1px solid var(--wb-line-soft); border-radius:10px; padding:10px 12px; font-size:13px; color:var(--wb-ink); background:rgba(91,155,213,.06); margin:8px 0}
+  .refbox a{color:var(--wb-brand-ink); font-weight:600; word-break:break-word}
+  .engine-badge{display:inline-block; font-size:11px; padding:2px 9px; border-radius:var(--wb-radius-pill); border:1px solid var(--wb-line); color:var(--wb-brand); background:var(--wb-brand-soft); font-family:var(--wb-mono)}
+  .bottomtab{display:none; position:fixed; bottom:0; left:0; right:0; z-index:35; background:var(--wb-panel); backdrop-filter:blur(10px); border-top:1px solid var(--wb-line); padding:6px 4px calc(6px + env(safe-area-inset-bottom)); justify-content:space-around}
+  .bottomtab .navitem{flex-direction:column; gap:3px; font-size:10px; padding:6px 4px; margin:0; border:none; background:none; min-height:auto; color:var(--wb-sub); display:flex; align-items:center; cursor:pointer}
+  .bottomtab .navitem svg{width:20px; height:20px}
+  .bottomtab .navitem.active{color:var(--wb-brand); font-weight:600}
+  .bottomtab .navitem .badge{position:absolute; top:2px; right:50%; transform:translateX(14px); background:var(--wb-err); color:#fff}
+  .toast{position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--wb-panel); border:1px solid var(--wb-brand); color:var(--wb-ink); padding:10px 16px; border-radius:10px; font-size:13px; z-index:60; opacity:0; transition:.2s; max-width:90vw; text-align:center; box-shadow:var(--wb-shadow)}
+  .toast.show{opacity:1}
+  .toast.err{border-color:var(--wb-err); color:var(--wb-err)}
+  .row-btns{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px}
+  .primarybtn{background:linear-gradient(135deg, var(--wb-brand), var(--wb-brand-2)); color:#fff; border:none; border-radius:10px; padding:10px 16px; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit}
+  .primarybtn:hover{filter:brightness(1.05)}
+  .primarybtn:disabled{opacity:.5; cursor:not-allowed}
+  .note{font-size:12px; color:var(--wb-sub); background:rgba(217,119,6,.08); border:1px solid rgba(217,119,6,.25); border-radius:10px; padding:9px 11px; margin:8px 0}
+  @media (max-width:768px){
+    nav.side{display:none}
+    main{padding:14px 12px 96px}
+    .bottomtab{display:flex}
+    .wb-brand .sub{display:none}
+    .grid{grid-template-columns:1fr 1fr}
+    .composer{padding:10px}
+    .attachrow{flex-direction:column}
+    .filechip{width:100%; padding:11px; justify-content:center}
+    .composer .row1 textarea{min-height:88px}
+    .toolbar .switch{margin-right:0; width:100%}
+    .sendmeta{width:100%; justify-content:flex-end}
+    .toolbar .sendbtn{width:100%}
+  }
+  .kb-hint{font-size:11px; color:var(--wb-muted); white-space:nowrap}
+  @media (max-width:420px){ .grid{grid-template-columns:1fr} }
+</style>
+</head>
+<body data-page-node-id="yDzIHs345Jonen4huLMgXQ">
+<div class="app" data-page-node-id="msKrpt3HYzpvWLNELYYHfk">
+  <header class="topbar" data-page-node-id="UjQOGa0DNKjz9zysQoSgHq">
+    <div class="wb-brand" data-page-node-id="kmeG8PjQp4gnJgLndAvsz2">
+      <!-- logo = 本技能自有图标（assets/icon.svg 内联）；侧栏折叠触发在导航栏空白处，logo 纯展示 -->
+      <svg id="wb-logo" viewBox="0 0 104 104" fill="none" aria-hidden="true">
+        <defs>
+          <filter id="logoShadow" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="2.5" stdDeviation="2.5" flood-color="#1C6DD0" flood-opacity="0.30"/>
+          </filter>
+        </defs>
+        <rect x="-52" y="-52" width="104" height="104" rx="20" fill="#EEEDFE" stroke="#C9DCEE" stroke-width="0.5" transform="translate(52,52)" filter="url(#logoShadow)"/>
+        <g transform="translate(7,13)">
+          <text font-family="Arial Black,Helvetica Neue,Arial,sans-serif" font-size="16" font-weight="900" font-style="italic" fill="#1C6DD0" stroke="#1C6DD0" stroke-width="0.25" paint-order="stroke" stroke-linejoin="round">Clinical</text>
+          <text y="12" font-family="Arial Black,Helvetica Neue,Arial,sans-serif" font-size="16" font-weight="900" font-style="italic" fill="#1C6DD0" stroke="#1C6DD0" stroke-width="0.25" paint-order="stroke" stroke-linejoin="round">Trial</text>
+        </g>
+        <g transform="translate(-7,0)">
+          <path d="M55.7 104.0 L54.2 102.1 L52.1 100.8 L49.7 100.4 L47.3 100.6 L44.9 101.0 L42.5 101.4 L40.1 101.9 L37.6 102.0 L35.1 101.8 L33.7 99.9 L33.3 97.4 L33.7 95.0 L32.7 92.9 L32.0 90.8 L31.9 89.1 L30.8 87.1 L31.9 85.0 L31.6 83.0 L29.3 82.1 L27.5 80.7 L28.0 78.3 L29.1 76.2 L30.4 74.2 L31.8 72.2 L33.1 70.2 L33.7 67.9 L33.0 65.6 L32.2 63.4 L32.0 60.9 L32.6 58.6 L33.3 56.4 L33.9 54.0 L34.6 51.8 L35.3 49.5 L33.9 48.3 L31.7 47.4 L30.4 45.4 L29.9 43.0 L29.5 40.6 L30.5 40.2 L31.4 38.9 L32.4 37.7 L33.0 38.9 L33.3 36.5 L34.3 36.8 L35.5 38.2 L36.1 35.9 L36.5 33.5 L37.8 33.1 L39.4 34.9 L41.7 35.5 L44.0 34.7 L46.1 33.6 L48.3 32.8 L50.6 32.2 L53.0 32.2 L55.5 32.4 L57.8 33.0 L60.3 33.2 L62.8 33.0 L65.1 32.4 L67.5 32.0 L69.9 32.2 L72.3 32.6 L74.5 33.5 L76.7 34.3 L78.8 35.5 L80.8 36.9 L82.8 38.4 L84.4 40.2 L86.0 42.1 L87.2 44.2 L88.3 46.3 L89.1 48.5 L89.8 50.8 L90.3 53.2 L90.5 55.6 L90.5 58.2 L90.3 60.7 L90.0 63.1 L89.5 65.5 L88.9 67.8 L88.1 70.0 L87.4 72.3 L86.6 74.5 L85.9 76.8 L85.2 79.1 L84.5 81.3 L83.7 83.5 L82.7 85.7 L82.0 88.0 L81.7 90.4 L82.2 92.8 L83.2 94.9 L84.8 96.3 L85.6 98.6 L87.3 100.0 L89.0 101.7 L89.7 104.0 Z" fill="#1C6DD0" stroke="#1657A8" stroke-width="1"/>
+          <g transform="translate(59.0,62.2)">
+            <path d="M0 -24 L5.5 0 L-5.5 0 Z" fill="#D85A30"/>
+            <path d="M0 24 L-5.5 0 L5.5 0 Z" fill="#9FE1CB"/>
+            <path d="M-24 0 L0 -5.5 L0 5.5 Z" fill="#AFA9EC" opacity="0.95"/>
+            <path d="M24 0 L0 5.5 L0 -5.5 Z" fill="#C5DCF5" opacity="0.95"/>
+            <circle r="2.4" fill="#FFFFFF"/>
+          </g>
+          <g transform="translate(83,43)">
+            <circle r="8" fill="#FFFFFF" stroke="#1C6DD0" stroke-width="1.2"/>
+            <rect x="-1.6" y="-5" width="3.2" height="10" rx="0.8" fill="#E2342E"/>
+            <rect x="-5" y="-1.6" width="10" height="3.2" rx="0.8" fill="#E2342E"/>
+          </g>
+        </g>
+      </svg>
+      <div data-page-node-id="B8fce3zyzjSfCl2GI27VS1">
+        <h1 id="appTitle" data-page-node-id="9D6EcMWW01n0tHYSuGkEfT">ct-advisor 工作台</h1>
+        <p class="sub" id="appSub" data-page-node-id="vnlumJriiZeyJEPHlnfIEj">临床试验总顾问 · Coze 云端计算</p>
+      </div>
+    </div>
+    <div class="spacer" data-page-node-id="XXZee4PvwBbfuCSGATirw0"></div>
+    <div class="top-actions" data-page-node-id="b04dmtCiO1LtfZW65N9pPK">
+      <span class="pill" id="connPill" data-page-node-id="zhvJajIQug5BxJCABIDpmC">本地服务</span>
+      <button class="langbtn" id="wb-lang" onclick="wbToggleLang()" aria-label="切换语言" data-page-node-id="J7LRYdNClm5f5qeCIoFZfM">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="MR7bdy0kcBMpXVCYRkRM5U"><circle cx="12" cy="12" r="9" data-page-node-id="aneiyscsYZssnZcU9GVeQa"/><path d="M3 12h18M12 3c2.5 2.5 2.5 15 0 18M12 3c-2.5 2.5-2.5 15 0 18" data-page-node-id="LK4tda0D5ctVDPXbw5F52V"/></svg>
+        <span id="langLabel" data-page-node-id="QnStVnG1Ty3ISPBRkSpCEQ">EN</span>
+      </button>
+      <button class="iconbtn" onclick="openFeedback()" title="反馈 / Bug 上报" data-page-node-id="gIwGAB8RzhQEpE4JydY7Tv">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="zWC9CC7mjYVyE7ekz8fiIR"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L4 21l1.1-3.5A8.4 8.4 0 1 1 21 11.5Z" data-page-node-id="E6CmsBwb1EvH3EpkOQS4BJ"/><path d="M8 11h8M8 15h5" data-page-node-id="0qQK2mMdREhfm2QHIw9UdA"/></svg>
+      </button>
+      <button class="iconbtn" onclick="openSettings()" data-page-node-id="oDq14AVCj6iHkowdA8jCE5">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="WtXUnSMuRFhWKRChHYZtOn"><circle cx="12" cy="12" r="3" data-page-node-id="qfOnwlMLxwQJ2F4VCC7Nfr"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L16.2 3h-4l-.4 2.5a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.5h4l.4-2.5a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z" data-page-node-id="qm9xJOEfHHQCWOOZNvfRj6"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ===== 简化版声明条：本页仅为技能基础功能前端，完整功能请安装对应技能 ===== -->
+  <div class="wb-lite-notice" role="note" data-page-node-id="wbLiteNotice">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/></svg>
+    <span class="wb-lite-notice-t" id="liteNotice">本页面是「ct-advisor」技能的简化版，仅实现基础功能；如需使用完整功能，请安装相应的技能。</span>
+  </div>
+
+  <div class="layout" data-page-node-id="InV72yEsOvoSMFF3km19p3">
+    <nav class="side" id="wb-side" title="" onclick="if(!event.target.closest('.navitem')) toggleSide()" data-page-node-id="bjumawIGUdWGqE3JlXATgZ">
+      <div class="navitem active" data-view="console" onclick="switchView('console')" data-page-node-id="NgzUXgoPYbN5oBZkk1FHib">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="rdbz5XaNNgJ8r9P7xi3bKV"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L4 21l1.1-3.5A8.4 8.4 0 1 1 21 11.5Z" data-page-node-id="inj9aQobJPemyd2MjdKHHy"/></svg>
+        <span id="navConsole" data-page-node-id="BnPMhXEsSz5spMWKXEBsx5">顾问对话</span>
+      </div>
+      <div class="navitem" data-view="skills" onclick="switchView('skills')" data-page-node-id="83QBZ4aAqCBLV4y6lqtVwp">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="1iCjzeYSglDzuWHb38voIh"><rect x="3" y="3" width="7" height="7" rx="1.5" data-page-node-id="dl1DkRolyMUecXn0GQGerZ"/><rect x="14" y="3" width="7" height="7" rx="1.5" data-page-node-id="Eh6dGigibG90RqAn8xU5uh"/><rect x="3" y="14" width="7" height="7" rx="1.5" data-page-node-id="5Uh3dyuR7knDd6UjrZsgQK"/><rect x="14" y="14" width="7" height="7" rx="1.5" data-page-node-id="mVa5ymTsw5HfTA1iWmn6iE"/></svg>
+        <span id="navSkills" data-page-node-id="DGU9iCuHdoDAVjkfHuS5bx">技能控制台</span>
+        <span class="badge" id="pendingBadge" style="display:none" data-page-node-id="fq212KHflvT5CE0ELXraIu">0</span>
+      </div>
+      <div class="navitem" data-view="history" onclick="switchView('history')" data-page-node-id="V3Qpyb3jVnCXiD9JG2GxKf">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="yHGXyXsOElgvyt5YNgo3Dm"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" data-page-node-id="OlATbIltJmXbD3RJkARM8G"/><path d="M3 4v4h4" data-page-node-id="wtiOZauRSVPzuY8r0O7MLb"/><path d="M12 8v4l3 2" data-page-node-id="F54ynbjIDAOXV6VsKno3H9"/></svg>
+        <span id="navHistory" data-page-node-id="brDqJJ7ChZuSC7VJPy9gOa">历史记录</span>
+      </div>
+    </nav>
+
+    <main data-page-node-id="QrKtDhJzljJ8yfLsVTZggo">
+      <!-- ============ CONSOLE ============ -->
+      <section class="view active" id="view-console" data-page-node-id="Z87CCnHbvVTzfVg634aJDS">
+        <div class="card" data-page-node-id="vwS4G2eC529fVcWaoEz9xE">
+          <h2 data-page-node-id="6sfNPl0mQWpoB0kslm6E3Z"><span class="dot" data-page-node-id="8eTxBIogBwwxBCmuRGBrLV"></span><span id="consoleTitle" data-page-node-id="B57B9B5UqpaLDBOg9aJ1lv">顾问对话台</span></h2>
+          <!-- 本地服务状态仅保留顶栏 #connPill 一处（三态 + title 指引），不再用页内横幅重复提醒 -->
+          <div class="composer" data-page-node-id="WqsYOn3FHJRAaCdJTiSB3I">
+            <div class="row1" data-page-node-id="sc09uLqiQNHenAhzLQeENk">
+              <textarea id="qinput" placeholder="" onkeydown="onKey(event)"></textarea>
+            </div>
+            <div class="attachrow">
+              <label class="filechip" for="attachFile" role="button" tabindex="0">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                <span id="attachChipLabel">上传文件</span>
+              </label>
+              <textarea class="attach" id="attachInput" placeholder=""></textarea>
+            </div>
+            <input type="file" id="attachFile" accept=".txt,.md,.csv,.tsv,.json,.docx,.pdf,.pptx" onchange="handleAttachFile()" style="display:none" data-page-node-id="gHhg7XELg7GT4klPmNnOYc" />
+            <div class="hint" id="attachFileHint" style="font-size:11px;color:var(--wb-sub);margin-top:4px" data-page-node-id="NwFC2xItBdCK8lXFMXQHVK"></div>
+            <div class="note" id="extractNote" style="display:none" data-page-node-id="Cvx21keXYvzxMfbA0T1q1I"></div>
+            <div class="toolbar" data-page-node-id="kDwwvQDlnq2Qj0g1EULTNy">
+              <label class="switch" data-page-node-id="2Sh75I0OwQgoyPlADXkKK5">
+                <input type="checkbox" id="contChk" checked data-page-node-id="xnuGNqAL5GlPYXyOB3JEZE" />
+                <span class="track" data-page-node-id="xSZljKO9NRWqANQB6xJl5E"></span>
+                <span id="contLabel" data-page-node-id="BuIMfzhI9A7YUzGwN82AWm">连续对话（携带前文）</span>
+              </label>
+              <div class="sendmeta">
+                <span id="charHint"></span>
+                <span id="sendHint" class="kb-hint"></span>
+              </div>
+              <button class="sendbtn" id="sendBtn" onclick="sendConsole()" aria-label="发送">
+                <span class="sendIcon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4 20-7Z"/></svg></span>
+                <span class="spin"></span>
+                <span id="sendLabel">发送</span>
+              </button>
+            </div>
+          </div>
+          <div class="chatlog" id="chatlog" data-page-node-id="kYIZDUKfp8ohGhGHAgVG7a"></div>
+        </div>
+      </section>
+
+      <!-- ============ SKILLS ============ -->
+      <section class="view" id="view-skills" data-page-node-id="vimMFUEWojuZBU8sAFE5J0">
+        <div class="card" id="pendingCard" data-page-node-id="CV3tUBetqOxlEfI5heykWV">
+          <h2 data-page-node-id="U9l3Pq1Y5S56GySAcPNZ1a"><span class="dot" data-page-node-id="4aKSpejOdgKct51WwMieHU"></span><span id="pendingTitle" data-page-node-id="xmCiIoqyTsOBVRHw1T0N9q">需本地技能跟进（Coze 返回 need_tool）</span></h2>
+          <div class="pending-strip" id="pendingStrip" data-page-node-id="us7OwBwI6Mf1aoOfDIYZrH">
+            <div class="empty" id="pendingEmpty" style="padding:8px" data-page-node-id="xUTGkTWt7OO6ztqPTW1CQx">—</div>
+          </div>
+        </div>
+        <div class="card" data-page-node-id="MqmEnz3vIC1BszkmbpZbEg">
+          <h2 data-page-node-id="UP3EWP45CEbkvsiWjFOWoL"><span class="dot" data-page-node-id="zVHzvefDTLUkMdp8griThO"></span><span id="skillsTitle" data-page-node-id="wtnFnxy1adewvt3FBYiQ0p">技能控制台</span></h2>
+          <p class="mde" id="skillsIntro" style="font-size:12.5px;color:var(--wb-sub);margin:0 0 12px" data-page-node-id="Q4VCyCw10HFcp3toZI6EiR"></p>
+          <div class="grid" id="skillGrid" data-page-node-id="zdiBZAUqvVOFttZVLBb6nj"></div>
+        </div>
+      </section>
+
+      <!-- ============ HISTORY ============ -->
+      <section class="view" id="view-history" data-page-node-id="CFXi15EgYMNmYHC7sDIZ8q">
+        <div class="card" data-page-node-id="5WSnF0wxgy0VkDCVa1d6xN">
+          <h2 data-page-node-id="GfiGy3A5J19RGvmQjDL3yG"><span class="dot" data-page-node-id="Q0mgI6D49uUnLxhk2Z3mbB"></span><span id="histTitle" data-page-node-id="CIkPhXHHFrtKNGGUsieopz">历史记录</span></h2>
+          <div class="btnbar" data-page-node-id="9TFsww5cJO2bVsBxWAjRCf">
+            <button class="ghostbtn" id="exportBtn" onclick="exportJSON()" data-page-node-id="OG3ksXjBcNJvQTjmUCivBK">导出 JSON 备份</button>
+            <button class="ghostbtn" id="importBtn" onclick="document.getElementById('importFile').click()" data-page-node-id="xBAJUGWyT7rbsjMx0pdUCm">导入恢复</button>
+            <input type="file" id="importFile" accept="application/json" style="display:none" onchange="importJSON(event)" data-page-node-id="qZXiL9w1jVmzaeHMlFcA2J" />
+            <button class="ghostbtn danger" id="clearBtn" onclick="clearHistory()" data-page-node-id="TUfUrN9qiQ2glXudnhXsbn">清空历史</button>
+          </div>
+          <div id="wb-hist-list" data-page-node-id="2rYsrODZSpdJNGqZK77iVK"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <nav class="bottomtab" data-page-node-id="yFaw5RCcU1T8M0WJCDpolP">
+    <div class="navitem active" data-view="console" onclick="switchView('console')" data-page-node-id="HB1rzKy4m3QIgyXrrfcjJH">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="nRE6IanZyiDxDbSRPbZOfZ"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L4 21l1.1-3.5A8.4 8.4 0 1 1 21 11.5Z" data-page-node-id="GF9V31n1z6AkFQOCm8D8Yu"/></svg><span id="mConsole" data-page-node-id="aFx4rnzgR2VKo0UdycXjyo">对话</span>
+    </div>
+    <div class="navitem" data-view="skills" onclick="switchView('skills')" data-page-node-id="PxbT36fYeFM4gMBCJnCKNJ">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="O1UN0VlxujwxGpzOHrmhWc"><rect x="3" y="3" width="7" height="7" rx="1.5" data-page-node-id="YaHAtSaUUJx4uEsK0YuwC9"/><rect x="14" y="3" width="7" height="7" rx="1.5" data-page-node-id="S8tBY5jYq5zcEguME18EcS"/><rect x="3" y="14" width="7" height="7" rx="1.5" data-page-node-id="HXMw1TTHr4h4LGDgXTzjjw"/><rect x="14" y="14" width="7" height="7" rx="1.5" data-page-node-id="58KV3vXSeKfAAuRQIToq56"/></svg><span id="mSkills" data-page-node-id="98SEdt4RMbuwBg8GSxVmVz">技能</span>
+    </div>
+    <div class="navitem" data-view="history" onclick="switchView('history')" data-page-node-id="kEwMCf4251HNkA9aCuqTNq">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="gZaeeJ32d0nwGb7SEnlxH5"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" data-page-node-id="ixLIZe1WycWEw1RnBxC8dC"/><path d="M3 4v4h4" data-page-node-id="dfyCIpRYUfczbpWSjlcjFO"/><path d="M12 8v4l3 2" data-page-node-id="q3H2ULhurRsWnErE1Jw7Kq"/></svg><span id="mHistory" data-page-node-id="rHZsCA4Y5htKPgp21AzFh8">历史</span>
+    </div>
+  </nav>
+</div>
+
+<!-- settings drawer（语言已收归顶栏单按钮，此处不再含 locale 下拉） -->
+<div class="drawer-mask" id="drawerMask" onclick="closeSettings()" data-page-node-id="xhAmmTFSdbpXCa7TyOGyYg"></div>
+<div class="drawer" id="drawer" data-page-node-id="IPNqKk0wUX2qU4E9KWpEeA">
+  <h3 data-page-node-id="IEqmLX2YXNskMrSudZmNyI"><span id="setTitle" data-page-node-id="UGmV1zQQ5KYGGCrDD7aRpD">连接设置</span><span class="closex" onclick="closeSettings()" data-page-node-id="VJPIaHX58Vqv6xVe6w5eB8"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="waEcl6sJKfBZrbbGmfMJ1c"><path d="M6 6l12 12M18 6 6 18" data-page-node-id="SjKHHtVqf9nxuhP3iPs4sJ"/></svg></span></h3>
+  <div class="field" data-page-node-id="H3CvMcprUeQYUnOcQnGVyu">
+    <label id="setEndpointL" data-page-node-id="kDRxGbpjwtwqNJIUdwgscQ">Coze 端点 URL</label>
+    <input id="setEndpoint" data-page-node-id="C4B9ZF4UQz1z7FBXv1A5eA" />
+    <div class="hint" id="setEndpointH" data-page-node-id="YkAAU8GwOLGSLRNmvi4jBm">默认调用本页同源的 /run（本地双击 run_app.bat 启动；已发布到云端则自动走同源，无需本机代理）</div>
+  </div>
+  <div class="field" data-page-node-id="k0q7HeClDTMVSwvoDuheXt">
+    <label id="setTokenL" data-page-node-id="2o9VeJSpN4WqvPZH1nPTkp">Bearer Token（私有 LLM key）</label>
+    <input id="setToken" type="password" data-page-node-id="d8al8OeTCfGH4zacokR7Dq" />
+    <div class="hint" id="setTokenH" data-page-node-id="ISHwQ1EmsP6on97LWwFpUz">填入你自己的私有大模型 key（不随技能发布，仅存于本机浏览器）；前端直连大模型时使用</div>
+  </div>
+  <div class="field" data-page-node-id="hLSyc6jXbz9Mw3B5Ui2LLG">
+    <label id="setContL" data-page-node-id="JboXwpZnutEnVdBfQbMF6h">连续对话默认开启</label>
+    <select id="setCont" data-page-node-id="CLHiWOHY7MF2TsnlJgKOUd"><option value="on" id="setContOn" data-page-node-id="pbcRWPBar48t8HArohkh4x">开启</option><option value="off" id="setContOff" data-page-node-id="Hf6BzC0uWhQNdplzdYRP29">关闭</option></select>
+  </div>
+  <div class="btnbar" data-page-node-id="hrIirAVMF1X8St45t8d38s">
+    <button class="ghostbtn" id="saveBtn" onclick="saveSettings()" data-page-node-id="Mfo31k6D4SOKl1eOEnOV9E">保存</button>
+    <button class="ghostbtn" id="resetBtn" onclick="resetSettings()" data-page-node-id="5hkOjfcJ3tkAb5Yl079t8j">恢复默认</button>
+  </div>
+  <div class="hint" id="setNote" style="margin-top:10px" data-page-node-id="1kMGVijT0tOx7En7OBq0B0"></div>
+</div>
+
+<!-- generic modal (skill form / need_tool detail) -->
+<div class="modal-mask" id="modalMask" onclick="closeModal()" data-page-node-id="FCABAt3LkTa0fO44KCybIH"></div>
+<div class="modal" id="modal" data-page-node-id="3BJfP3cNNHWHZtAnQl8VFF">
+  <h3 data-page-node-id="FeAjBHwoqqXD776AIWkoaG"><span id="modalTitle" data-page-node-id="BF1eZ3fDWmHgAiSmSZYbKl"></span><span class="closex" onclick="closeModal()" data-page-node-id="5C3CQweiJ7ZO2hLV7CvRbC"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" data-page-node-id="a0ixLPYmbEzE3woEstHV8N"><path d="M6 6l12 12M18 6 6 18" data-page-node-id="tZXmUTPrTwRiAtyxz9NiNX"/></svg></span></h3>
+  <p class="mde" id="modalDesc" data-page-node-id="cPc7euJ6jK5gCHSsBeoAhq"></p>
+  <div id="modalBody" data-page-node-id="BvXKo7zVqqU1nMLMA96vt0"></div>
+</div>
+
+<div class="toast" id="toast" data-page-node-id="1ZkUKCY8Ud46WG80eSctSN"></div>
+
+<script src="./wb-list.js"></script>
+<script>
+/* ===================== i18n ===================== */
+const I18N = {
+  zh:{
+    appTitle:"ct-advisor 工作台", appSub:"临床试验总顾问 · Coze 云端计算",
+    liteNotice:"本页面是「ct-advisor」技能的简化版，仅实现基础功能；如需使用完整功能，请安装相应的技能。",
+    navConsole:"顾问对话", navSkills:"技能控制台", navHistory:"历史记录",
+    mConsole:"对话", mSkills:"技能", mHistory:"历史",
+    pendingTitle:"需本地技能跟进（Coze 返回 need_tool）", pendingEmpty:"暂无待跟进项",
+    consoleTitle:"顾问对话台", sendLabel:"发送",
+    contLabel:"连续对话（携带前文）",
+    vagueTitle:"问题表述可能不明确（疑似 vague）",
+    vagueDesc:"这句话缺少明确对象（过短 / 指代不明 / 依赖前文），而网页版工作台不带澄清追问，直接发送可能答非所问。建议补充具体对象与背景后再发；如需引导式澄清，请在 WorkBuddy 中使用 ct-advisor 技能（本地 route.py 会先澄清 vague 再转发）。",
+    vagueProceed:"仍要发送", vagueRefine:"先补充细节",
+    qPlaceholder:"描述你的临床试验问题，例如：PD-1 单抗三线 NSCLC 的 ORR 如何估算样本量？",
+    attachChipLabel:"上传文件",
+    attachPlaceholder:"可选：粘贴背景资料 / 方案片段 / 数据摘要，将随问题一并发送给 Coze（对应原技能的附件追加）",
+    attachFileHint:"或上传文件（txt/md/csv/docx/pdf/pptx，自动抽取文本并入附件）",
+    extracting:"正在抽取文件文本…", extractOk:"已抽取并填入附件：", extractFail:"文件抽取失败：",
+    feedbackTitle:"问题反馈 / Bug 上报", feedbackDesc:"发现问题？直接上报，将记录到本地服务日志。",
+    feedbackPlaceholder:"请描述你遇到的问题或建议…",
+    feedbackContact:"联系方式（可选，便于回访）",
+    feedbackSubmit:"提交反馈", feedbackDone:"已收到你的反馈，谢谢！",
+    runLocal:"在本机运行（本地技能）", runLocalResult:"本地执行结果", running:"正在本机运行…",
+    skillsTitle:"技能控制台", skillsIntro:"点击下方能力卡片，填写结构化参数后直接调用 ct-advisor 云端精校。各入口字段对齐本地技能 CLI，Coze 判定 need_tool 后由本地技能执行并缝合。",
+    histTitle:"历史记录",
+    exportBtn:"导出 JSON 备份", importBtn:"导入恢复", clearBtn:"清空历史",
+    connOk:"本地服务已连接", connOff:"未配置", connErr:"Coze 错误", connProxy:"本地服务未启动（双击 run_app.bat）",
+    bannerOk:"连接正常：本地服务已就绪，可直接发送问题。",
+    bannerWarn:"本地服务未启动，发送将无法到达云端。请双击：",
+    bannerChecking:"正在连接本地服务…",
+    bannerExternal:"请用系统浏览器（Edge / Chrome）打开本页；若直接双击 html 文件或用预览面板打开，会因无法访问同源服务而失败——本地请运行 run_app.bat，已发布到云端则直接由同源 /run 提供服务。",
+    bannerTimeout:"连接检查超时。若你在 WorkBuddy 预览面板内查看，它会拦截本页对同源服务的请求——请改用系统浏览器（Edge / Chrome）打开本页地址。",
+    sending:"分析中…", sent:"已发送", langLabel:"EN",
+    setEndpointL:"Coze 端点 URL", setEndpointH:"Default calls same-origin /run (run run_app.bat locally; if published to cloud it uses same-origin automatically, no local proxy needed)",
+    setTokenL:"Bearer Token（公开凭据）", setTokenH:"默认已内嵌技能公开凭据，无需填写；如需自定义可在此覆盖",
+    setContL:"连续对话默认开启", setContOn:"开启", setContOff:"关闭",
+    setTitle:"连接设置", saveBtn:"保存", resetBtn:"恢复默认",
+    setNote:"设置保存在本机浏览器（localStorage），不上云。",
+    charHint:"字符", sendHint:"· Enter 发送 / Shift+Enter 换行", sideFoldTip:"单击导航栏空白处折叠 / 展开", you:"你", bot:"ct-advisor", needTool:"需本地技能", reask:"重问", copyCard:"复制卡片",
+    pendingSkill:"技能", runId:"运行ID", cached:"缓存命中",
+    histQ:"问题", histEmpty:"暂无历史，先去对话台提问吧。",
+    histReask:"重问",
+    clearConfirm:"确定清空全部历史记录？此操作不可撤销。",
+    copied:"已复制", saved:"已保存",
+    errNet:"发送失败：请确认本页由同源服务托管。本地使用请双击 run_app.bat 启动服务；已发布到云端则直接走同源 /run，无需本机代理。",
+    errHttp:"Coze 返回错误：",
+    errEmpty:"已收到响应，但未包含答案字段（final_answer/content/answer 均缺失）。若响应含 msg 将一并显示。",
+    formSend:"发送分析", formCancel:"取消",
+    reqField:"必填项未填写：",
+    ntTitle:"need_tool 跟进详情", ntRunLocal:"在本机运行（WorkBuddy CLI）", ntCopy:"复制命令",
+    ntPrepHint:"准备提示：", ntEngineLocal:"本地引擎（本机执行技能）", ntEngineCoze:"云端引擎（Coze 远程 R 服务）",
+    ntReferral:"转诊（referral-only，不经 need_tool 自动调用）",
+    ntReferralNote:"该能力需数据抽取 + 重型 R 管线，请显式调用对应技能并附数据集 / 效应量矩阵。",
+    ntSampleNote:"样本量计算实际由云端 R 服务完成；以下命令用于在本机 WorkBuddy 中复现，或访问 ct-samplesize.coze.site/run。",
+    tasks:[
+      {ti:"方案 / 方法学 / 合规审查", de:"设计、合规、审查类问题（方法学 A–J 工作流）", route:"→ ct-advisor 内部工作流", ic:"doc"},
+      {ti:"样本量 / 效能", de:"样本量与统计效能计算（转 ct-samplesize）", route:"→ ct-samplesize（coze 引擎）", ic:"calc"},
+      {ti:"注册试验检索", de:"ClinicalTrials.gov / CDE 检索（转 ct-registry）", route:"→ ct-registry", ic:"search"},
+      {ti:"安全性信号检测", de:"FAERS 不相称性信号（转 ct-safety）", route:"→ ct-safety", ic:"signal"},
+      {ti:"文献检索与综述", de:"已发表文献检索（转 ct-literature）", route:"→ ct-literature", ic:"book"},
+      {ti:"Meta 分析", de:"Meta 分析与森林图（referral-only）", route:"→ @skill:meta-analysis", ic:"meta"},
+      {ti:"法规 / 监管要求", de:"FDA / CDE / NMPA 监管差异", route:"→ ct-advisor 内部知识", ic:"law"}
+    ]
+  },
+  en:{
+    appTitle:"ct-advisor Workspace", appSub:"Clinical-Trial Advisor · Cloud Coze Computing",
+    liteNotice:"This page is a simplified version of the \"ct-advisor\" skill covering only the basics; for the complete feature set, please install the corresponding skill.",
+    navConsole:"Consult", navSkills:"Skill Console", navHistory:"History",
+    mConsole:"Chat", mSkills:"Skills", mHistory:"History",
+    pendingTitle:"Local-skill follow-ups (Coze need_tool)", pendingEmpty:"No follow-ups",
+    consoleTitle:"Consultation Console", sendLabel:"Send",
+    contLabel:"Continuous (carry context)",
+    vagueTitle:"Question may be vague",
+    vagueDesc:"This question lacks a clear subject (too short / unclear reference / relies on prior context), and the web workbench has no clarification loop — sending as-is may miss the point. Add concrete detail first; for guided clarification, use the ct-advisor skill in WorkBuddy (local route.py clarifies vague questions before forwarding).",
+    vagueProceed:"Send anyway", vagueRefine:"Refine first",
+    qPlaceholder:"Describe your clinical-trial question, e.g. How to size a sample for PD-1 3L NSCLC ORR?",
+    attachChipLabel:"Upload file",
+    attachPlaceholder:"Optional: paste background / protocol snippet / data summary — sent with the question (maps to attachment append).",
+    attachFileHint:"Or upload a file (txt/md/csv/docx/pdf/pptx) — text is extracted and appended automatically.",
+    extracting:"Extracting file text…", extractOk:"Extracted & appended: ", extractFail:"File extraction failed: ",
+    feedbackTitle:"Feedback / Bug Report", feedbackDesc:"Found an issue? Report it — logged to the local server.",
+    feedbackPlaceholder:"Describe the problem or suggestion…",
+    feedbackContact:"Contact (optional, for follow-up)",
+    feedbackSubmit:"Submit feedback", feedbackDone:"Feedback received, thanks!",
+    runLocal:"Run locally (local skill)", runLocalResult:"Local execution result", running:"Running on this machine…",
+    skillsTitle:"Skill Console", skillsIntro:"Pick a capability card, fill the structured form, and call ct-advisor cloud refinement directly. Fields align with the local skill CLIs; Coze judges need_tool, then the local skill executes and stitches.",
+    histTitle:"History",
+    exportBtn:"Export JSON", importBtn:"Import", clearBtn:"Clear",
+    connOk:"Local server connected", connOff:"Not set", connErr:"Coze error", connProxy:"Local server not started (run run_app.bat)",
+    bannerOk:"Connection OK: local server ready — send your question.",
+    bannerWarn:"Local server not started — sends won't reach the cloud. Run:",
+    bannerChecking:"Connecting to local server…",
+    bannerExternal:"Open this page in your system browser (Edge / Chrome). Opening the .html file directly or via the preview panel fails because it cannot reach the same-origin server — run run_app.bat locally, or use the cloud-published URL which serves same-origin /run.",
+    bannerTimeout:"Connection check timed out. If you are viewing this inside the WorkBuddy preview panel, it blocks page requests to the same-origin server — open the page URL in your system browser (Edge / Chrome) instead.",
+    sending:"Analyzing…", sent:"Sent", langLabel:"中",
+    setEndpointL:"Coze Endpoint URL", setEndpointH:"Same-origin /run is used by default (run run_app.bat locally; if published to cloud it uses same-origin automatically, no local proxy needed)",
+    setTokenL:"Bearer Token (public)", setTokenH:"The embedded shared token is used by default; no need to fill. Override here if needed.",
+    setContL:"Continuous by default",
+    setContOn:"On", setContOff:"Off",
+    setTitle:"Connection Settings", saveBtn:"Save", resetBtn:"Reset",
+    setNote:"Settings stored in this browser (localStorage), not in the cloud.",
+    charHint:"chars", sendHint:"· Enter to send / Shift+Enter newline", sideFoldTip:"Click blank area of the nav to collapse / expand", you:"You", bot:"ct-advisor", needTool:"Needs local skill", reask:"Re-ask", copyCard:"Copy card",
+    pendingSkill:"Skill", runId:"Run ID", cached:"Cached",
+    histQ:"Q", histEmpty:"No history yet — ask something in the console.",
+    histReask:"Re-ask",
+    clearConfirm:"Clear all history? This cannot be undone.",
+    copied:"Copied", saved:"Saved",
+    errNet:"Send failed: make sure this page is served by its host. Locally, run run_app.bat first; if published to cloud it calls same-origin /run directly — no local proxy needed.",
+    errHttp:"Coze error: ",
+    errEmpty:"Response received but no answer field (final_answer/content/answer missing). Any msg in the response is shown above.",
+    formSend:"Run analysis", formCancel:"Cancel",
+    reqField:"Required field missing: ",
+    ntTitle:"need_tool follow-up detail", ntRunLocal:"Run locally (WorkBuddy CLI)", ntCopy:"Copy command",
+    ntPrepHint:"Prep hint: ", ntEngineLocal:"Local engine (skill runs on this machine)", ntEngineCoze:"Cloud engine (Coze remote R service)",
+    ntReferral:"Referral (referral-only, not auto-invoked via need_tool)",
+    ntReferralNote:"This capability needs data extraction + heavy R pipeline — explicitly call the skill and attach the dataset / effect-size matrix.",
+    ntSampleNote:"Sample-size is actually computed by the cloud R service; the command below reproduces it in local WorkBuddy, or visit ct-samplesize.coze.site/run.",
+    tasks:[
+      {ti:"Protocol / Methodology / Compliance", de:"Design, compliance, review questions (workflows A–J)", route:"→ ct-advisor internal workflows", ic:"doc"},
+      {ti:"Sample Size / Power", de:"n / power (→ ct-samplesize)", route:"→ ct-samplesize (coze engine)", ic:"calc"},
+      {ti:"Registry Search", de:"ClinicalTrials.gov / CDE (→ ct-registry)", route:"→ ct-registry", ic:"search"},
+      {ti:"Safety Signal", de:"FAERS disproportionality (→ ct-safety)", route:"→ ct-safety", ic:"signal"},
+      {ti:"Literature", de:"Published literature (→ ct-literature)", route:"→ ct-literature", ic:"book"},
+      {ti:"Meta Analysis", de:"Meta-analysis & forest plots (referral-only)", route:"→ @skill:meta-analysis", ic:"meta"},
+      {ti:"Regulatory", de:"FDA / CDE / NMPA differences", route:"→ ct-advisor internal knowledge", ic:"law"}
+    ]
+  }
+};
+const ICONS = {
+  close:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  reask:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 4v4h4"/><path d="M12 8v4l3 2"/></svg>',
+  doc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>',
+  calc:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8M8 11h2M12 11h2M16 11h0M8 15h2M12 15h2M16 15v4M8 19h4"/></svg>',
+  search:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>',
+  signal:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
+  book:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2Z"/><path d="M19 19H6a2 2 0 0 0-2 2"/></svg>',
+  meta:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18 9 6l3 6 3-9 6 15"/><path d="M3 21h18"/></svg>',
+  law:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M5 7l7-3 7 3M5 7l-2 7h4zM19 7l-2 7h4zM8 21h8"/></svg>'
+};
+
+/* ===================== skill form definitions (fields align to tool_mapping.json) ===================== */
+const SKILLS = {
+  design:{ category:"design", accuracy:"good",
+    fields:[
+      {key:"q", type:"textarea", required:true, rows:4, label:{zh:"问题或方案片段", en:"Question / protocol snippet"}, ph:{zh:"例如：请审查以下 III 期随机对照试验的盲法设计与统计边界…", en:"e.g. review the blinding design and statistical boundary of this phase III RCT…"}},
+      {key:"attach", type:"textarea", rows:3, label:{zh:"附件（可选）", en:"Attachment (optional)"}, ph:{zh:"粘贴方案 / SAP 片段，将随问题一并发给 Coze", en:"paste protocol/SAP snippet, sent with the question"}}
+    ],
+    build:(v,T)=> (v.q||"") + (v.attach? ("\n\n[附件]\n"+v.attach):"")
+  },
+  samplesize:{ category:"statistics", accuracy:"good",
+    fields:[
+      {key:"test", type:"select", label:{zh:"检验类型", en:"Test type"}, options:[{v:"",t:{zh:"自动判断",en:"Auto"}},{v:"proportion_two",t:{zh:"两比例（率/ORR）",en:"Two proportions"}},{v:"proportion_one",t:{zh:"单组率",en:"One proportion"}},{v:"ttest_ind",t:{zh:"两样本均值 t 检验",en:"Two-sample t-test"}},{v:"ttest_paired",t:{zh:"配对 t 检验",en:"Paired t-test"}},{v:"survival",t:{zh:"生存分析（HR）",en:"Survival (HR)"}},{v:"non_inferiority",t:{zh:"非劣效",en:"Non-inferiority"}},{v:"equivalence",t:{zh:"等效",en:"Equivalence"}}]},
+      {key:"p1", type:"num", label:{zh:"p1（对照组率）", en:"p1 (control rate)"}},
+      {key:"p2", type:"num", label:{zh:"p2（试验组率）", en:"p2 (treat rate)"}},
+      {key:"effect", type:"num", label:{zh:"效应量（均值差）", en:"Effect (mean diff)"}},
+      {key:"sd", type:"num", label:{zh:"标准差 SD", en:"SD"}},
+      {key:"margin", type:"num", label:{zh:"非劣/等效界值", en:"Margin (NI/Equiv)"}},
+      {key:"alpha", type:"num", label:{zh:"α（默认 0.05）", en:"α (default .05)"}, def:0.05},
+      {key:"power", type:"num", label:{zh:"效能 power（默认 0.8）", en:"power (default .8)"}, def:0.8},
+      {key:"side", type:"select", label:{zh:"单/双侧", en:"One/Two-sided"}, options:[{v:"two",t:{zh:"双侧",en:"Two-sided"}},{v:"one",t:{zh:"单侧",en:"One-sided"}}]},
+      {key:"k_groups", type:"num", label:{zh:"组数 k", en:"# groups k"}, def:2}
+    ],
+    build:(v,T)=>{ const parts=[T.zh?"请估算样本量 / 效能：":""];
+      if(v.test) parts.push("检验="+v.test);
+      if(v.p1!=="") parts.push("p1="+v.p1); if(v.p2!=="") parts.push("p2="+v.p2);
+      if(v.effect!=="") parts.push("effect="+v.effect); if(v.sd!=="") parts.push("sd="+v.sd);
+      if(v.margin!=="") parts.push("margin="+v.margin);
+      if(v.alpha!==""&&v.alpha!==null) parts.push("alpha="+v.alpha);
+      if(v.power!==""&&v.power!==null) parts.push("power="+v.power);
+      if(v.side) parts.push("side="+v.side);
+      if(v.k_groups&&v.k_groups!=2) parts.push("k="+v.k_groups);
+      return parts.join("，")+"。";
+    }
+  },
+  registry:{ category:"data-intel", accuracy:"",
+    fields:[
+      {key:"cond", type:"text", required:true, label:{zh:"适应症 / 疾病", en:"Condition / disease"}, ph:{zh:"如 NSCLC、2 型糖尿病", en:"e.g. NSCLC, type 2 diabetes"}},
+      {key:"intr", type:"text", label:{zh:"干预 / 药物", en:"Intervention / drug"}, ph:{zh:"如 Pembrolizumab", en:"e.g. Pembrolizumab"}},
+      {key:"sponsor", type:"text", label:{zh:"申办方", en:"Sponsor"}, ph:{zh:"可选", en:"optional"}},
+      {key:"status", type:"text", label:{zh:"状态", en:"Status"}, ph:{zh:"如 recruiting / completed", en:"e.g. recruiting / completed"}},
+      {key:"max", type:"num", label:{zh:"最多条数（默认 20）", en:"Max (default 20)"}, def:20},
+      {key:"with_cde", type:"bool", label:{zh:"含 CDE（中国）", en:"Include CDE (China)"}},
+      {key:"cde_keyword", type:"text", label:{zh:"CDE 关键词", en:"CDE keyword"}, ph:{zh:"可选，配合 CDE", en:"optional, with CDE"}}
+    ],
+    build:(v,T)=>{ const p=[T.zh?"检索临床试验：":""];
+      if(v.cond) p.push("适应症="+v.cond); if(v.intr) p.push("干预="+v.intr);
+      if(v.sponsor) p.push("申办方="+v.sponsor); if(v.status) p.push("状态="+v.status);
+      if(v.max) p.push("最多"+v.max+"条"); if(v.with_cde) p.push("含CDE");
+      if(v.cde_keyword) p.push("CDE关键词="+v.cde_keyword);
+      return p.join("，")+"。";
+    }
+  },
+  safety:{ category:"data-intel", accuracy:"",
+    fields:[
+      {key:"drug", type:"text", required:true, label:{zh:"药物（通用名，英文）", en:"Drug (generic, EN)"}, ph:{zh:"如 semaglutide", en:"e.g. semaglutide"}},
+      {key:"event", type:"text", label:{zh:"不良事件（MedDRA PT，可选）", en:"Event (MedDRA PT, opt)"}, ph:{zh:"留空则列 top 信号事件", en:"blank = top signal events"}},
+      {key:"top", type:"num", label:{zh:"Top N（默认 10）", en:"Top N (default 10)"}, def:10},
+      {key:"date_from", type:"text", label:{zh:"起始日期", en:"Date from"}, ph:{zh:"YYYY-MM-DD", en:"YYYY-MM-DD"}},
+      {key:"date_to", type:"text", label:{zh:"截止日期", en:"Date to"}, ph:{zh:"YYYY-MM-DD", en:"YYYY-MM-DD"}}
+    ],
+    build:(v,T)=>{ const p=[T.zh?"FAERS 安全性信号检测：":""];
+      if(v.drug) p.push("药物="+v.drug); if(v.event) p.push("事件="+v.event);
+      if(v.top) p.push("top="+v.top); if(v.date_from) p.push("起="+v.date_from); if(v.date_to) p.push("止="+v.date_to);
+      return p.join("，")+"。";
+    }
+  },
+  literature:{ category:"data-intel", accuracy:"",
+    fields:[
+      {key:"topic", type:"text", required:true, label:{zh:"主题", en:"Topic"}, ph:{zh:"如 PD-1 晚期 NSCLC 疗效", en:"e.g. PD-1 advanced NSCLC efficacy"}},
+      {key:"year_from", type:"num", label:{zh:"起始年份", en:"Year from"}},
+      {key:"year_to", type:"num", label:{zh:"截止年份", en:"Year to"}},
+      {key:"safety", type:"bool", label:{zh:"限定安全性文献", en:"Safety-only literature"}},
+      {key:"max", type:"num", label:{zh:"最多条数（默认 20）", en:"Max (default 20)"}, def:20},
+      {key:"with_europepmc", type:"bool", label:{zh:"含 Europe PMC", en:"Include Europe PMC"}, def:true}
+    ],
+    build:(v,T)=>{ const p=[T.zh?"检索已发表文献：":""];
+      if(v.topic) p.push("主题="+v.topic); if(v.year_from) p.push("年≥"+v.year_from);
+      if(v.year_to) p.push("年≤"+v.year_to); if(v.safety) p.push("安全性文献");
+      if(v.max) p.push("最多"+v.max+"篇"); if(v.with_europepmc) p.push("含Europe PMC");
+      return p.join("，")+"。";
+    }
+  },
+  meta:{ referral:true, fields:[], build:()=>"" },
+  regulatory:{ category:"regulatory", accuracy:"",
+    fields:[
+      {key:"q", type:"textarea", required:true, rows:4, label:{zh:"监管 / 法规问题", en:"Regulatory question"}, ph:{zh:"例如：FDA 与 CDE 在 MRCT 主方案上的监管要求差异？", en:"e.g. FDA vs CDE differences on MRCT master protocols?"}},
+      {key:"attach", type:"textarea", rows:3, label:{zh:"附件（可选）", en:"Attachment (optional)"}, ph:{zh:"粘贴法规文本 / 沟通纪要", en:"paste regulatory text / meeting notes"}}
+    ],
+    build:(v,T)=> (v.q||"") + (v.attach? ("\n\n[附件]\n"+v.attach):"")
+  }
+};
+
+/* ===================== engine + CLI mapping ===================== */
+const SKILL_META = {
+  "ct-registry":{engine:"local", script:"ct-registry/scripts/ct_registry.py", extra:["--auto-confirm","--run","--print-summary","--kw-adopt"], prep:{zh:"需确认检索主词（适应症 / 靶点 / 药物名，中英文均可）、可选期别与申办方范围", en:"Confirm search terms (condition/target/drug, EN+ZH), optional phase & sponsor"}},
+  "ct-safety":{engine:"local", script:"ct-safety/scripts/ct_safety.py", extra:["--run"], prep:{zh:"需确认药物通用名（openFDA 用英文通用名，如 semaglutide）、目标 AE 术语（MedDRA PT，可选）、起止时间（可选）", en:"Confirm generic drug name (openFDA EN, e.g. semaglutide), target AE (MedDRA PT, opt), date range (opt)"}},
+  "ct-literature":{engine:"local", script:"ct-literature/scripts/ct_literature.py", extra:["--run"], prep:{zh:"需确认检索主题（药物 / 靶点 + 适应症）、年份范围、是否限定安全性文献", en:"Confirm topic (drug/target + indication), year range, safety-only?"}},
+  "ct-samplesize":{engine:"coze", script:"ct-samplesize/scripts/samplesize_power.py", extra:[], prep:{zh:"需确认检验类型与效应量假设（p1+p2 / effect+sd / HR）、α、power、单双侧", en:"Confirm test type & effect assumption (p1+p2 / effect+sd / HR), α, power, side"}},
+  "meta-analysis":{referral:true, prep:{zh:"需数据抽取 + 重型 R 管线；请显式调用并附数据集 / 效应量矩阵", en:"Needs data extraction + heavy R pipeline; call explicitly with dataset / effect-size matrix"}}
+};
+function cliCmd(tool, params){
+  const m = SKILL_META[tool]; if(!m || m.engine!=="local") return "";
+  const map = {
+    "ct-registry":{cond:"--cond",intr:"--intr",sponsor:"--sponsor",status:"--status",max:"--max",drug:"--drug",with_cde:"--with-cde",cde_keyword:"--cde-keyword"},
+    "ct-safety":{drug:"--drug",event:"--event",top:"--top",date_from:"--date-from",date_to:"--date-to"},
+    "ct-literature":{topic:"--topic",year_from:"--year-from",year_to:"--year-to",safety:"--safety",max:"--max",with_europepmc:"--with-europepmc"}
+  }[tool] || {};
+  const parts=["python","~/.workbuddy/skills/"+m.script];
+  Object.keys(map).forEach(k=>{ let val=(params||{})[k];
+    if(val===undefined||val===null||val==="") return;
+    if(typeof val==="boolean"){ if(val) parts.push(map[k]); return; }
+    parts.push(map[k]+' "'+String(val).replace(/"/g,'\\"')+'"');
+  });
+  (m.extra||[]).forEach(e=>parts.push(e));
+  return parts.join(" ");
+}
+
+/* ===================== state & storage ===================== */
+const LS = { hist:"wb_ctadvisor_hist_", cfg:"wb_ctadvisor_cfg_", lang:"wb_ctadvisor_lang_", qid:"wb_ctadvisor_qid_", seen:"wb_ctadvisor_seen_", side:"wb_ctadvisor_side_" };
+let state = { lang:"zh", hist:[], cfg:null };
+let lastConnOk = false;
+let REMOTE_DEFAULT = { endpoint:"", token:"" }; // 默认相对端点：托管页（本地或云端）自动用同源 /run
+// 前端 Bearer Token = 用户私有 LLM key（前端直连大模型时使用），不随技能发布，由设置框手动填入（存于浏览器 localStorage）。
+// 项目 Coze 连接凭据（ct_advisor_coze / ct_bugreport_coze）统一内嵌 adapters/coze_token_embedded.py，不经此通道下发到前端。
+
+function loadCfg(){
+  try{ state.cfg = JSON.parse(localStorage.getItem(LS.cfg)) || null; }catch(e){ state.cfg=null; }
+  if(!state.cfg) state.cfg = { endpoint:REMOTE_DEFAULT.endpoint, token:REMOTE_DEFAULT.token, locale:"zh", continuous:"on" };
+  if(!state.cfg.endpoint || state.cfg.endpoint.indexOf("ct-advisor.coze.site")>=0 || state.cfg.endpoint.indexOf("8787")>=0) state.cfg.endpoint=REMOTE_DEFAULT.endpoint;
+  if(!state.cfg.token) state.cfg.token = REMOTE_DEFAULT.token;
+  return state.cfg;
+}
+function saveCfg(){ localStorage.setItem(LS.cfg, JSON.stringify(state.cfg)); }
+function getQid(){
+  const existing = localStorage.getItem(LS.qid); if(existing) return existing;
+  const sig = [ navigator.userAgent||"", screen.width+"x"+screen.height, navigator.hardwareConcurrency||"", Intl.DateTimeFormat().resolvedOptions().timeZone||"", (navigator.language||"") ].join("|");
+  let h1=0x811c9dc5, h2=0x1000193;
+  for(let i=0;i<sig.length;i++){ const c=sig.charCodeAt(i); h1=((h1^c)*0x01000193)>>>0; h2=((h2^(c+1))*0x85ebca6b)>>>0; }
+  const id="env:"+h1.toString(16).padStart(8,"0")+h2.toString(16).padStart(8,"0");
+  localStorage.setItem(LS.qid, id); return id;
+}
+function loadHist(){ try{ state.hist = JSON.parse(localStorage.getItem(LS.hist))||[]; }catch(e){ state.hist=[]; } }
+function saveHist(){ if(!_histDirty) return; localStorage.setItem(LS.hist, JSON.stringify(state.hist)); _histDirty=false; }
+function loadLang(){ state.lang = localStorage.getItem(LS.lang) || (navigator.language||"zh").startsWith("zh")?"zh":"en"; window.WB_LANG = state.lang; }
+function saveLang(){ localStorage.setItem(LS.lang, state.lang); }
+
+/* ===================== i18n apply ===================== */
+function t(){ return I18N[state.lang]; }
+function applyLang(){
+  const T = t(); window.WB_LANG = state.lang;
+  document.documentElement.lang = state.lang==="zh"?"zh-CN":"en";
+  const set=(id,v)=>{const e=document.getElementById(id); if(e) e.textContent=v;};
+  set("appTitle",T.appTitle); set("appSub",T.appSub);
+  set("liteNotice",T.liteNotice);
+  set("navConsole",T.navConsole); set("navSkills",T.navSkills); set("navHistory",T.navHistory);
+  set("mConsole",T.mConsole); set("mSkills",T.mSkills); set("mHistory",T.mHistory);
+  set("pendingTitle",T.pendingTitle);
+  set("consoleTitle",T.consoleTitle); set("sendLabel",T.sendLabel);
+  set("contLabel",T.contLabel);
+  set("sendHint",T.sendHint);
+  const snav=document.getElementById("wb-side"); if(snav) snav.title=T.sideFoldTip;
+  set("skillsTitle",T.skillsTitle); set("skillsIntro",T.skillsIntro);
+  set("histTitle",T.histTitle);
+  set("exportBtn",T.exportBtn); set("importBtn",T.importBtn); set("clearBtn",T.clearBtn);
+  set("langLabel",T.langLabel);
+  set("setEndpointL",T.setEndpointL); set("setEndpointH",T.setEndpointH);
+  set("setTokenL",T.setTokenL); set("setTokenH",T.setTokenH);
+  set("setContL",T.setContL); set("setContOn",T.setContOn); set("setContOff",T.setContOff);
+  set("setTitle",T.setTitle); set("saveBtn",T.saveBtn); set("resetBtn",T.resetBtn); set("setNote",T.setNote);
+  document.getElementById("qinput").placeholder = T.qPlaceholder;
+  const chip=document.getElementById("attachChipLabel"); if(chip) chip.textContent=T.attachChipLabel;
+  document.getElementById("attachInput").placeholder = T.attachPlaceholder;
+  const afh=document.getElementById("attachFileHint"); if(afh) afh.textContent=T.attachFileHint;
+  document.getElementById("contChk").checked = state.cfg.continuous!=="off";
+  setConnState(lastConnOk, T);
+  renderSkills(); renderHistory(); renderPending(); renderChat();
+}
+// 语言单入口（顶栏单按钮；设置抽屉已无 locale 下拉）
+function wbToggleLang(){
+  state.lang = state.lang==="zh"?"en":"zh"; saveLang();
+  state.cfg.locale = state.lang; saveCfg();
+  applyLang();
+  if(window.wbHistory) window.wbHistory.rerender();   // WBList 重建文案（不重拉数据）
+}
+
+/* ===================== views ===================== */
+const SKILLS_LOCKED = true;
+function toggleSide(){
+  const a=document.querySelector(".app"); if(!a) return;
+  a.classList.toggle("side-collapsed");
+  try{ localStorage.setItem(LS.side, a.classList.contains("side-collapsed")?"1":"0"); }catch(e){}
+}
+function switchView(v){
+  if(v==="skills" && SKILLS_LOCKED) v="console";
+  document.querySelectorAll(".view").forEach(s=>s.classList.remove("active"));
+  document.getElementById("view-"+v).classList.add("active");
+  document.querySelectorAll("nav.side .navitem, .bottomtab .navitem").forEach(n=>{ n.classList.toggle("active", n.dataset.view===v); });
+  if(v==="history") renderHistory();
+  if(v==="skills") renderSkills();
+}
+
+/* ===================== skills console ===================== */
+function renderSkills(){
+  const T=t(); const grid=document.getElementById("skillGrid"); grid.innerHTML="";
+  T.tasks.forEach((tk,i)=>{
+    const key = ["design","samplesize","registry","safety","literature","meta","regulatory"][i];
+    const d=document.createElement("div"); d.className="qcard";
+    d.innerHTML=`<div class="ic">${ICONS[tk.ic]||""}</div><div class="ti">${esc(tk.ti)}</div><div class="de">${esc(tk.de)}</div><div class="route">${esc(tk.route)}</div>`;
+    d.onclick=()=>openSkillForm(key);
+    grid.appendChild(d);
+  });
+}
+function openSkillForm(key){
+  const T=t(); const sk=SKILLS[key]; if(!sk) return;
+  if(sk.referral){ openReferralDetail("meta-analysis"); return; }
+  document.getElementById("modalTitle").textContent = T.tasks[Object.keys(SKILLS).indexOf(key)].ti;
+  document.getElementById("modalDesc").textContent = T.tasks[Object.keys(SKILLS).indexOf(key)].de;
+  const body=document.getElementById("modalBody"); body.innerHTML="";
+  const form=document.createElement("form");
+  sk.fields.forEach(f=>{
+    const wrap=document.createElement("div"); wrap.className="field";
+    const lab=document.createElement("label");
+    lab.innerHTML = esc(typeof f.label==="string"? f.label : f.label[state.lang]) + (f.required?'<span class="req">*</span>':"");
+    wrap.appendChild(lab);
+    let inp;
+    if(f.type==="textarea"){ inp=document.createElement("textarea"); if(f.rows) inp.rows=f.rows; if(f.ph) inp.placeholder=f.ph[state.lang]; }
+    else if(f.type==="select"){ inp=document.createElement("select"); (f.options||[]).forEach(o=>{ const op=document.createElement("option"); op.value=o.v; op.textContent=(typeof o.t==="string"?o.t:o.t[state.lang]); inp.appendChild(op); }); }
+    else if(f.type==="bool"){ inp=document.createElement("input"); inp.type="checkbox"; inp.style.width="auto"; }
+    else { inp=document.createElement("input"); inp.type=(f.type==="num"?"number":"text"); if(f.ph) inp.placeholder=f.ph[state.lang]; }
+    inp.id="f_"+key+"_"+f.key;
+    if(f.def!==undefined && (f.type==="num"||f.type==="select")) inp.value=f.def;
+    if(f.type==="bool" && f.def===true) inp.checked=true;
+    wrap.appendChild(inp); form.appendChild(wrap);
+  });
+  const btns=document.createElement("div"); btns.className="row-btns";
+  const send=document.createElement("button"); send.className="primarybtn"; send.type="button"; send.textContent=T.formSend;
+  send.onclick=()=>{
+    const vals={}; let missing=[];
+    sk.fields.forEach(f=>{ const el=document.getElementById("f_"+key+"_"+f.key);
+      let v=(f.type==="bool")? el.checked : el.value;
+      if(f.type==="num"){ v=el.value===""? "":el.value; }
+      vals[f.key]=v;
+      if(f.required && (v===""||v===null||v===undefined)) missing.push(typeof f.label==="string"?f.label:f.label[state.lang]);
+    });
+    if(missing.length){ toast(T.reqField+missing.join("、")); return; }
+    const q=sk.build(vals,T); closeModal();
+    sendToCoze(q, "", {category:sk.category, accuracy:sk.accuracy||"", difficulty:"", continuous:state.cfg.continuous!=="off", meta:{skill:key}});
+  };
+  const cancel=document.createElement("button"); cancel.className="ghostbtn"; cancel.type="button"; cancel.textContent=T.formCancel; cancel.onclick=closeModal;
+  btns.appendChild(send); btns.appendChild(cancel); form.appendChild(btns); body.appendChild(form); openModal();
+}
+
+/* ===================== console / chat ===================== */
+// §性能（ct-base workbench_perf.md ④）：增量渲染——仅新增条目 append，不整表重建；
+// 仅 init/导入/删除/清空/切语言 走 full 全量。配合下方 _mdCache 缓存 md2html，历史重渲染近乎零成本。
+let _chatSeq = 0;
+let _histDirty = false;
+const _chatNodes = new Map(); // _id -> {user:Node, bot:Node|null}
+function _bubbleBot(h){ return bubble("bot", h.answer, h.meta, h.need_tool? h:{need_tool:null}, h.error, h.ts, h); }
+function _syncChatEntry(h){
+  const log = document.getElementById("chatlog");
+  if(!log) return;
+  let rec = _chatNodes.get(h._id);
+  if(!rec){
+    const user = bubble("user", h.q, h.meta, null, false, h.ts);
+    const bot = (h.answer!=null && h.answer!==undefined) ? _bubbleBot(h) : null;
+    rec = {user, bot}; _chatNodes.set(h._id, rec);
+    log.insertBefore(rec.user, log.firstChild);
+    if(rec.bot) log.insertBefore(rec.bot, rec.user.nextSibling);
+  } else if(!rec.bot && h.answer!=null && h.answer!==undefined){
+    rec.bot = _bubbleBot(h);
+    log.insertBefore(rec.bot, rec.user.nextSibling);
+  }
+}
+function renderChat(opts){
+  const log = document.getElementById("chatlog");
+  if(!log) return;
+  const full = !opts || opts.full;
+  if(state.hist.length===0){ log.innerHTML=`<div class="empty">${esc(t().histEmpty)}</div>`; _chatNodes.clear(); return; }
+  if(full){ log.innerHTML=""; _chatNodes.clear(); }
+  const entries = state.hist.slice().reverse(); // 最新在前
+  for(const h of entries){
+    if(!full && _chatNodes.has(h._id)) continue;
+    _syncChatEntry(h);
+  }
+}
+function fmtTime(ts){ try{ return new Date(ts||Date.now()).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"}); }catch(e){ return ""; } }
+function bubble(role, text, meta, extra, isErr, ts, msgObj){
+  const T=t(); const d=document.createElement("div"); d.className="msg "+role+(isErr? " err":"");
+  const who = role==="user"? T.you : T.bot;
+  const ava = role==="user" ? "#14509B" : "#1C6DD0";
+  let metaHtml="";
+  if(meta){ const tags=[];
+    if(extra && extra.need_tool) tags.push(`<span class="tag" style="color:var(--wb-err);border-color:var(--wb-err)">${esc(T.needTool)}: ${esc(extra.need_tool)}</span>`);
+    if(meta.cached) tags.push(`<span class="tag">${esc(T.cached)}</span>`);
+    if(meta.runId) tags.push(`<span class="tag">${esc(T.runId)}: ${esc(String(meta.runId).slice(0,8))}</span>`);
+    metaHtml = tags.join(" ");
+  }
+  const tm = fmtTime(ts);
+  // §20.15：Coze 顶层 message 字段 → 置顶可关闭 banner（仅承载表面提示）
+  let bannerHtml="";
+  if(role==="bot" && msgObj && msgObj.message){
+    const m=msgObj.message; const lvl=m.level||"notice";
+    const icon={tip:"💡",info:"ℹ️",notice:"📌",warning:"⚠️"}[lvl]||"📌";
+    const label={tip:"提示",info:"说明",notice:"提示",warning:"提醒"}[lvl]||"提示";
+    const dis=(m.dismissible!==false);
+    bannerHtml=`<div class="coze-msg" style="display:flex;align-items:center;gap:6px;margin-bottom:8px;padding:6px 10px;border-radius:8px;background:rgba(28,109,208,.10);border:1px solid rgba(28,109,208,.25);font-size:13px;color:var(--wb-tx,#222)"><span style="font-size:14px">${icon}</span><b style="font-weight:600">${esc(label)}</b><span style="flex:1">${esc(m.text)}</span>${dis? '<button class="coze-msg-dismiss" style="margin-left:6px;border:none;background:transparent;cursor:pointer;font-size:15px;color:#888" title="隐藏提示">×</button>':''}</div>`;
+  }
+  // 缓存来源声明（2026-09-09，彤 规范）：命中云计算缓存 → 答案上方明示，非本次实时计算
+  let cacheDeclHtml="";
+  if(role==="bot" && meta && meta.cached){
+    const zh=(document.documentElement.lang||"").indexOf("zh")===0;
+    const txt=zh? "本答案来自云计算缓存（历史运行结果，非本次实时计算）。如需最新结果，请追问要求重新生成。" : "This answer is from the cloud cache (a previous run, not freshly computed for this request). Ask again for a fresh generation if needed.";
+    cacheDeclHtml=`<div style="margin-bottom:6px;font-size:12px;color:#a16207;background:rgba(250,204,21,.12);border:1px solid rgba(250,204,21,.35);border-radius:6px;padding:4px 8px">📦 ${esc(txt)}</div>`;
+  }
+  d.innerHTML=`<div class="who"><span class="ava" style="background:${ava}"></span><span class="nm">${esc(who)}</span>${metaHtml}<span class="tm">${esc(tm)}</span></div><div class="body">${cacheDeclHtml}${bannerHtml}${role==="bot"? md2html(text||"") : esc(text)}</div>`;
+  if(role==="bot" && msgObj && msgObj.message){
+    const bd=d.querySelector(".coze-msg-dismiss");
+    if(bd) bd.onclick=()=>{ const el=d.querySelector(".coze-msg"); if(el) el.style.display="none"; };
+  }
+  return d;
+}
+function lastTurns(n){
+  const out=[]; const arr=state.hist.slice().reverse();
+  for(const h of arr){ if(h.answer){ out.push({role:"user",content:h.q}); out.push({role:"assistant",content:h.answer}); } if(out.length>=n*2) break; }
+  return out.slice(0,n*2);
+}
+function extractAnswer(data){
+  if(typeof data==="string") return data.trim();
+  if(!data || typeof data!=="object") return "";
+  const cand=[ data.final_answer, data.result, data.answer, data.content, data.output, data.text, data.reply, data.response,
+    data.data && (data.data.final_answer ?? data.data.answer ?? data.data.content ?? data.data.text ?? data.data.output) ];
+  for(const c of cand){ if(c===undefined||c===null||c==="") continue; if(typeof c==="string") return c.trim(); if(typeof c==="object"){ const s=extractAnswer(c); if(s) return s; } }
+  return "";
+}
+function stripDelimiters(s){
+  if(typeof s!=="string"||!s) return s;
+  return s.replace(/<<<CT_ANSWER_START>>>/g, "").replace(/<<<CT_ANSWER_END>>>/g, "").replace(/^\s*[\r\n]+|[\r\n]+\s*$/g, "");
+}
+function detectVague(q){
+  const s=(q||"").trim(); if(!s) return false;
+  if(/(这个|那个|它|它们|这|那|这种|那些|该药|该方案)/.test(s) && s.length<=24) return true;
+  if(/(前面|上面|刚才|上一条|上一个|上轮|上次|之前提到|前述|上述)/.test(s) && s.length<=30) return true;
+  if(s.length<=8 && !/(SDTM|ADaM|AE|SAE|CSR|TLF|CRF|EDC|GCP|CDISC|ADSL|BDS|OCCDS|ADTTE|PK|PD|MedDRA|WHO|ICF|SUSAR|DSUR|RBM|QbD|ALCOA|IB|SAP|什么是|的定义|含义|如何|步骤|流程|时限|保存|填写|提交|上报|复核|正确|规范|要求|记录|报告|破盲|回收|发放)/i.test(s)) return true;
+  const uncertain=/(不确定|不清楚|不知道|没想好|拿不准|没有头绪|not sure|unsure|don'?t know|no idea|not clear)/i.test(s);
+  const hasObject=/(是否|能不能|可不可以|对不对|合理|合规|正确|appropriate|valid|acceptable|\bif\b)/i.test(s);
+  if(uncertain && !hasObject) return true;
+  return false;
+}
+function doSend(q, att){
+  const qEl=document.getElementById("qinput"); const aEl=document.getElementById("attachInput");
+  qEl.value=""; aEl.value="";
+  sendToCoze(q, att, { category:"", accuracy:"", difficulty:"", continuous:document.getElementById("contChk").checked, meta:{} });
+}
+function showVagueConfirm(q, att){
+  const T=t();
+  document.getElementById("modalTitle").textContent=T.vagueTitle;
+  document.getElementById("modalDesc").textContent=T.vagueDesc;
+  const body=document.getElementById("modalBody"); body.innerHTML="";
+  const bar=document.createElement("div"); bar.className="row-btns";
+  const bRefine=document.createElement("button"); bRefine.type="button"; bRefine.className="ghostbtn"; bRefine.textContent=T.vagueRefine;
+  bRefine.onclick=()=>{ closeModal(); document.getElementById("qinput").focus(); };
+  const bSend=document.createElement("button"); bSend.type="button"; bSend.className="primarybtn"; bSend.textContent=T.vagueProceed;
+  bSend.onclick=()=>{ closeModal(); doSend(q, att); };
+  bar.appendChild(bRefine); bar.appendChild(bSend); body.appendChild(bar); openModal();
+}
+function sendConsole(){
+  const qEl=document.getElementById("qinput"); const aEl=document.getElementById("attachInput");
+  const q=qEl.value.trim(); const att=aEl.value.trim();
+  if(!q) return;
+  if(detectVague(q)){ showVagueConfirm(q, att); return; }
+  doSend(q, att);
+}
+function setBtnLoading(T){ const b=document.getElementById("sendBtn"); b.classList.add("loading"); b.disabled=true; document.getElementById("sendLabel").textContent=T.sending; }
+function setBtnSent(T){ const b=document.getElementById("sendBtn"); b.classList.remove("loading"); b.classList.add("sent"); b.disabled=false; document.getElementById("sendLabel").textContent=T.sent; }
+function resetBtn(T){ const b=document.getElementById("sendBtn"); b.classList.remove("loading","sent"); b.disabled=false; document.getElementById("sendLabel").textContent=T.sendLabel; }
+// §20.15：归一化 Coze 响应信封顶层可选 message 字段（与 ct-base coze_io_contract §5 一致）
+function normalizeCozeMessage(raw){
+  if(!raw) return null;
+  if(typeof raw==="string"){ raw=raw.trim(); return raw? {level:"notice", text:raw, dismissible:true}:null; }
+  if(Array.isArray(raw)){ const parts=[]; raw.forEach(it=>{ const s=normalizeCozeMessage(it); if(s&&s.text) parts.push(s.text); }); return parts.length? {level:"notice", text:parts.join("\n"), dismissible:true}:null; }
+  if(typeof raw==="object"){ const text=(typeof raw.text==="string")? raw.text.trim():""; if(!text) return null; const lv=raw.level; const level=(["tip","info","notice","warning"].indexOf(lv)>=0)? lv:"notice"; const dis=(typeof raw.dismissible==="boolean")? raw.dismissible:true; return {level, text, dismissible:dis}; }
+  return null;
+}
+async function sendToCoze(q, att, opts){
+  const T=t();
+  if(!isHttpOrigin()){
+    const pill=document.getElementById("connPill"); pill.className="pill warn"; pill.textContent=T.connProxy; pill.title=T.bannerExternal;
+    toast(T.connProxy); return;
+  }
+  const continuous=opts.continuous;
+  const cur={_id: ++_chatSeq, q, answer:null, meta:{difficulty:opts.difficulty, cached:false, runId:"", skill:opts.meta&&opts.meta.skill||null}, need_tool:null, params:{}, ts:Date.now(), sample:false};
+  _histDirty = true;
+  state.hist.push(cur); renderChat(); scrollChat();
+  const log=document.getElementById("chatlog");
+  const typing=document.createElement("div"); typing.className="msg bot";
+  typing.innerHTML=`<div class="who"><span class="ava" style="background:#1C6DD0"></span><span class="nm">${esc(T.bot)}</span></div><div class="body"><span class="typing"><i></i><i></i><i></i></span></div>`;
+  const firstUser=log.querySelector(".msg.user");
+  if(firstUser && firstUser.nextSibling) log.insertBefore(typing, firstUser.nextSibling); else log.appendChild(typing);
+  scrollChat(); setBtnLoading(T);
+  const payload={ query_meta:{ difficulty:opts.difficulty, category:opts.category||"", accuracy:opts.accuracy||"", query_origin:getQid(), locale: state.cfg.locale || state.lang },
+    original_question: att? (q+"\n\n[附件]\n"+att) : q, draft_answer:"", conversation_history: continuous? lastTurns(10):[] };
+  try{
+    const headers={"Content-Type":"application/json"};
+    if(state.cfg.token) headers["Authorization"]="Bearer "+state.cfg.token;
+    const resp=await fetch(state.cfg.endpoint, {method:"POST", headers, body:JSON.stringify(payload)});
+    if(!resp.ok){ const _t=await resp.text(); throw new Error(T.errHttp+resp.status+(_t? "："+_t.slice(0,200):"")); }
+    const data = await readCozeResponse(resp, cur, typing, T); // §性能 ④/传输 + B轴3.1：流式直读；非 SSE 退化为原 JSON 行为
+    const bizErr = (data && typeof data==="object")? (data.error||data.message||data.msg||"") : "";
+    const answer = extractAnswer(data);
+    if(!answer){ cur.answer = bizErr? String(bizErr) : T.errEmpty; cur.error = true; }
+    else{ cur.answer = stripDelimiters(answer); cur.need_tool = data.need_tool || null; cur.params = data.params || {}; cur.meta.cached = !!data.cache_hit; cur.meta.runId = data.run_id || ""; }
+    cur.message = normalizeCozeMessage(data.message);  // §20.15：置顶提示（可关闭）
+    saveHist(); typing.remove(); renderChat(); renderPending(); updateBadge();
+    if(cur.error){ resetBtn(T); } else { setBtnSent(T); setTimeout(()=>resetBtn(t()), 1300); }
+  }catch(e){
+    typing.remove(); cur.answer = (e instanceof TypeError)? T.errNet : (T.errHttp + e.message); cur.error=true;
+    saveHist(); renderChat();
+    const pill=document.getElementById("connPill"); pill.className="pill err"; pill.textContent=T.connErr;
+    pill.title = (e instanceof TypeError)? T.bannerExternal : (T.bannerWarn+" run_app.bat");
+    resetBtn(T);
+  }finally{ scrollChat(); }
+}
+// §性能 ④/传输 + B轴3.1 页面侧：流式直读 Coze 响应。
+// - 端点返回 text/event-stream → 逐块更新气泡（首字即显，20s 等待"消失"）；
+// - 否则（当前 ct-advisor /run 返回单个 JSON）→ 退化为原 await resp.text()+JSON.parse，零回归。
+async function readCozeResponse(resp, cur, typing, T){
+  const ctype = resp.headers.get("content-type")||"";
+  if(ctype.includes("text/event-stream")){
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    const log = document.getElementById("chatlog");
+    let buf="", live=null, lastAnswer="";
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += decoder.decode(value, {stream:true});
+      const parts = buf.split("\n\n"); buf = parts.pop();
+      for(const ev of parts){
+        for(const line of ev.split("\n")){
+          if(!line.startsWith("data:")) continue;
+          const payload = line.slice(5).trim();
+          if(!payload || payload==="[DONE]") continue;
+          try{
+            const obj = JSON.parse(payload);
+            const delta = (obj.choices&&obj.choices[0]&&obj.choices[0].delta&&obj.choices[0].delta.content) || extractAnswer(obj) || "";
+            if(delta){
+              if(!live){ if(typing) typing.remove(); live=document.createElement("div"); live.className="msg bot";
+                live.innerHTML=`<div class="who"><span class="ava" style="background:#1C6DD0"></span><span class="nm">${esc(T.bot)}</span></div><div class="body"></div>`;
+                const fu = log? log.querySelector(".msg.user"):null; if(log) log.insertBefore(live, fu? fu.nextSibling : null); }
+              lastAnswer += delta;
+              live.querySelector(".body").innerHTML = md2html(lastAnswer);
+              scrollChat();
+            }
+          }catch(_){ /* 非 JSON 增量，忽略 */ }
+        }
+      }
+    }
+    if(live && log) live.remove(); // 交给后续 renderChat 重建正式气泡（含缓存声明/置顶提示）
+    return lastAnswer ? {final_answer:lastAnswer} : {};
+  }
+  const text = await resp.text();
+  if(ctype.includes("json")){ try{ return JSON.parse(text); }catch(_){ return text; } }
+  return text;
+}
+function onKey(e){ if(e.key==="Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); sendConsole(); } }
+function scrollChat(){ const m=document.querySelector("main"); if(m) m.scrollTo({top:0, behavior:"smooth"}); }
+
+/* ===================== pending / need_tool detail ===================== */
+function renderPending(){
+  const T=t(); const strip=document.getElementById("pendingStrip");
+  const items=state.hist.filter(h=>h.need_tool);
+  const card=document.getElementById("pendingCard");
+  if(card) card.style.display = items.length? "" : "none";
+  document.getElementById("pendingEmpty").textContent = items.length? "" : T.pendingEmpty;
+  strip.querySelectorAll(".pending-chip").forEach(n=>n.remove());
+  items.slice().reverse().forEach((h)=>{
+    const c=document.createElement("div"); c.className="pending-chip";
+    c.innerHTML=`<div class="t">${esc(T.needTool)}</div><div class="s">${esc(h.need_tool)}</div>`;
+    c.onclick=()=>openNeedToolDetail(h); strip.appendChild(c);
+  });
+  updateBadge();
+}
+function updateBadge(){
+  const n=state.hist.filter(h=>h.need_tool).length;
+  const b=document.getElementById("pendingBadge");
+  if(n>0){ b.style.display="inline-block"; b.textContent=n; } else b.style.display="none";
+}
+function openNeedToolDetail(h){
+  const T=t(); const tool=h.need_tool; const m=SKILL_META[tool];
+  document.getElementById("modalTitle").textContent = T.ntTitle;
+  document.getElementById("modalDesc").textContent = (tool||"") + " · " + (m? (m.engine==="coze"?T.ntEngineCoze:(m.referral?T.ntReferral:T.ntEngineLocal)) : "");
+  const body=document.getElementById("modalBody"); body.innerHTML="";
+  if(m && m.referral){ body.appendChild(referralBlock(tool)); }
+  else if(m && m.engine==="coze" && tool==="ct-samplesize"){
+    const note=document.createElement("div"); note.className="note"; note.textContent=T.ntSampleNote; body.appendChild(note);
+    if(m.prep) prepBlock(body, m.prep);
+    const cmd=cliCmd(tool, h.params); if(cmd) cmdBlock(body, cmd, T);
+    reaskBlock(body, h, T);
+  } else if(m && m.engine==="local"){
+    if(m.prep) prepBlock(body, m.prep);
+    const cmd=cliCmd(tool, h.params); if(cmd) cmdBlock(body, cmd, T);
+    const runBtn=document.createElement("button"); runBtn.className="primarybtn"; runBtn.textContent=T.runLocal; runBtn.style.marginTop="10px";
+    runBtn.onclick=()=>runLocalSkill(tool, h.params); body.appendChild(runBtn);
+    reaskBlock(body, h, T);
+  } else { const note=document.createElement("div"); note.className="note"; note.textContent=(T.ntPrepHint)+" "+JSON.stringify(h.params||{}); body.appendChild(note); }
+  openModal();
+}
+function openReferralDetail(tool){
+  const T=t(); const m=SKILL_META[tool];
+  document.getElementById("modalTitle").textContent = "@skill:"+tool;
+  document.getElementById("modalDesc").textContent = T.ntReferral;
+  const body=document.getElementById("modalBody"); body.innerHTML=""; body.appendChild(referralBlock(tool)); openModal();
+}
+function prepBlock(body, prep){ const T=t(); const d=document.createElement("div"); d.className="note"; d.innerHTML="<b>"+esc(T.ntPrepHint)+"</b> "+esc(typeof prep==="string"?prep:prep[state.lang]); body.appendChild(d); }
+function cmdBlock(body, cmd, T){ const box=document.createElement("div"); box.className="cmdbox"; box.textContent=cmd; body.appendChild(box);
+  const btns=document.createElement("div"); btns.className="row-btns"; const cp=document.createElement("button"); cp.className="ghostbtn"; cp.textContent=T.ntCopy; cp.onclick=()=>copyText(cmd); btns.appendChild(cp); body.appendChild(btns); }
+function referralBlock(tool){ const T=t(); const d=document.createElement("div");
+  const note=document.createElement("div"); note.className="note"; note.textContent=T.ntReferralNote; d.appendChild(note);
+  const box=document.createElement("div"); box.className="refbox";
+  box.innerHTML = `在 WorkBuddy 中调用：<b>@skill:${esc(tool)}</b><br>`+`GitHub：<a href="https://github.com/medstatstar/${esc(tool)}" target="_blank" rel="noopener">https://github.com/medstatstar/${esc(tool)}</a>`;
+  d.appendChild(box); return d; }
+function reaskBlock(body, h, T){ const btns=document.createElement("div"); btns.className="row-btns";
+  const ra=document.createElement("button"); ra.className="ghostbtn"; ra.textContent=T.reask;
+  ra.onclick=()=>{ closeModal(); document.getElementById("qinput").value=h.q; switchView("console"); document.getElementById("qinput").focus(); };
+  btns.appendChild(ra); body.appendChild(btns); }
+function copyText(s){ navigator.clipboard.writeText(s).then(()=>toast(t().copied)).catch(()=>toast(s)); }
+
+/* ===================== 附件文件上传 ===================== */
+async function handleAttachFile(){
+  const T=t(); const inp=document.getElementById("attachFile"); const note=document.getElementById("extractNote");
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  if(!isHttpOrigin()){ toast(T.connProxy); return; }
+  note.style.display="block"; note.style.borderColor="var(--wb-line)"; note.style.color="var(--wb-sub)"; note.textContent=T.extracting;
+  try{
+    const fd=new FormData(); fd.append("file", f);
+    const r=await fetch("/api/extract", {method:"POST", body:fd});
+    const data=await r.json();
+    if(data.ok && data.text){ const ta=document.getElementById("attachInput");
+      const tag="\n\n[附件文件："+data.name+"]\n"+data.text; ta.value=(ta.value? ta.value+tag : tag.trim());
+      note.style.borderColor="rgba(5,150,105,.4)"; note.style.color="var(--wb-ok)"; note.textContent=T.extractOk+data.name+"（"+data.text.length+" 字符）"; toast(T.extractOk+data.name);
+    }else{ note.style.borderColor="rgba(220,38,38,.4)"; note.style.color="var(--wb-err)"; note.textContent=T.extractFail+(data.note||T.errEmpty); }
+  }catch(e){ note.style.display="block"; note.style.borderColor="rgba(220,38,38,.4)"; note.style.color="var(--wb-err)"; note.textContent=T.extractFail+e.message; }
+  finally{ inp.value=""; }
+}
+
+/* ===================== 反馈 / Bug 上报 ===================== */
+function openFeedback(){
+  const T=t();
+  document.getElementById("modalTitle").textContent=T.feedbackTitle;
+  document.getElementById("modalDesc").textContent=T.feedbackDesc;
+  const body=document.getElementById("modalBody"); body.innerHTML="";
+  const ta=document.createElement("textarea"); ta.id="fbText"; ta.rows=5; ta.placeholder=T.feedbackPlaceholder; ta.style.width="100%"; ta.style.marginTop="4px"; ta.style.fontFamily="var(--wb-font)"; ta.style.fontSize="13px"; ta.style.padding="10px 12px"; ta.style.borderRadius="10px"; ta.style.border="1px solid var(--wb-line)"; ta.style.background="var(--wb-panel)"; ta.style.color="var(--wb-ink)";
+  const ct=document.createElement("input"); ct.id="fbContact"; ct.type="text"; ct.placeholder=T.feedbackContact; ct.style.width="100%"; ct.style.marginTop="10px"; ct.style.fontSize="13px"; ct.style.padding="10px 12px"; ct.style.borderRadius="10px"; ct.style.border="1px solid var(--wb-line)"; ct.style.background="var(--wb-panel)"; ct.style.color="var(--wb-ink)";
+  const bar=document.createElement("div"); bar.className="row-btns";
+  const sb=document.createElement("button"); sb.className="primarybtn"; sb.textContent=T.feedbackSubmit; sb.onclick=submitFeedback;
+  bar.appendChild(sb); body.appendChild(ta); body.appendChild(ct); body.appendChild(bar); openModal();
+}
+async function submitFeedback(){
+  const T=t(); const text=document.getElementById("fbText").value.trim();
+  if(!text){ toast(T.reqField+"反馈内容"); return; }
+  const contact=document.getElementById("fbContact").value.trim();
+  try{ const r=await fetch("/api/bug-report", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({text, contact, page:location.href})});
+    const data=await r.json();
+    if(data.ok){ closeModal(); toast(T.feedbackDone); } else toast(T.errHttp+(data.note||""));
+  }catch(e){ toast(T.errNet+": "+e.message); }
+}
+
+/* ===================== need_tool 本机运行 ===================== */
+async function runLocalSkill(tool, params){
+  const T=t(); const body=document.getElementById("modalBody");
+  const resBox=document.createElement("div"); resBox.className="cmdbox"; resBox.style.whiteSpace="pre-wrap"; resBox.style.marginTop="10px";
+  resBox.textContent=T.running; body.appendChild(resBox);
+  try{ const r=await fetch("/api/run-skill", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({tool, params})});
+    const data=await r.json();
+    if(data.ok){ resBox.textContent="["+T.runLocalResult+"]\n"+(data.stdout||""); }
+    else{ resBox.style.borderColor="var(--wb-err)"; resBox.textContent="["+T.runLocalResult+" ×]\n"+(data.note||"")+(data.stdout?("\n\n"+data.stdout):""); }
+  }catch(e){ resBox.style.borderColor="var(--wb-err)"; resBox.textContent="运行请求失败："+e.message; }
+}
+
+/* ===================== 历史列表（WBList · 卡片行模板 · 决策 C） ===================== */
+let wbHistory = null;
+function histRows(){ return state.hist.map(h=>{
+  const id = h.id || (h.id = "h"+h.ts+"_"+Math.random().toString(36).slice(2,7));
+  return { id, q:h.q, ts:h.ts, difficulty:(h.meta&&h.meta.difficulty)||"", needTool:h.need_tool||"",
+    answer:h.answer||"", summary:(h.answer? (h.answer.length>140? h.answer.slice(0,140)+"…":h.answer):"—") };
+}); }
+function histCard(r, lang){
+  const T=I18N[lang]; const d=new Date(r.ts); const tstr=isNaN(d)? "":d.toLocaleString();
+  const diff = r.difficulty? `<span class="wb-pill">${esc(r.difficulty)}</span>`:"";
+  const nt = r.needTool? `<span class="wb-pill" style="background:var(--wb-err-bg);color:var(--wb-err);border-color:var(--wb-err)">${esc(T.needTool)}: ${esc(r.needTool)}</span>`:"";
+  return `<div class="hist-q">${esc(r.q)}</div>
+    <div class="hist-m">${esc(tstr)} ${diff} ${nt}</div>
+    <div class="hist-a">${esc(r.summary)}</div>
+    <button type="button" class="wb-list-act" style="position:absolute;bottom:10px;right:54px" onclick="ctReask('${esc(r.id)}')" title="${esc(T.histReask)}">${ICONS.reask}</button>`;
+}
+function ctReask(id){ const h=state.hist.find(x=>(x.id||"")===id); if(h){ document.getElementById("qinput").value=h.q; switchView("console"); document.getElementById("qinput").focus(); } }
+function initHistoryList(){
+  if(wbHistory){ wbHistory.refresh(); return; }
+  wbHistory = WBList.create({
+    mount:"wb-hist-list", rowId:"id", pageSize:10, selectable:false,
+    columns:[
+      {key:"q", label:{zh:"问题",en:"Question"}, searchable:true},
+      {key:"answer", label:{zh:"答案",en:"Answer"}, searchable:true},
+      {key:"ts", label:{zh:"时间",en:"Time"}, sortable:true, sortValue:(r)=>r.ts},
+      {key:"difficulty", label:{zh:"难度",en:"Difficulty"}, sortable:true}
+    ],
+    rowRender: histCard, onDelete: delHistRow,
+    i18nExtra: { wblEmpty: t().histEmpty, wblConfirmDel: t().clearConfirm? "确认删除这条记录？" : "确认删除这条记录？" }
+  });
+}
+function renderHistory(){ initHistoryList(); }
+function delHistRow(row){
+  state.hist = state.hist.filter(h=> (h.id||"")!==row.id);
+  saveHist(); renderChat(); renderPending(); updateBadge();
+}
+function exportJSON(){
+  const blob=new Blob([JSON.stringify(state.hist,null,2)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="ct-advisor-history.json"; a.click();
+  toast(t().saved);
+}
+function importJSON(e){
+  const f=e.target.files[0]; if(!f) return;
+  const r=new FileReader();
+  r.onload=()=>{ try{ const data=JSON.parse(r.result); if(Array.isArray(data)){ state.hist=data; state.hist.forEach(h=>{ if(h._id==null) h._id=++_chatSeq; }); _histDirty=true; saveHist(); renderHistory(); renderChat({full:true}); renderPending(); toast(t().saved); } }catch(err){ toast(t().errHttp+"invalid JSON"); } };
+  r.readAsText(f); e.target.value="";
+}
+function clearHistory(){ if(!confirm(t().clearConfirm)) return; state.hist=[]; saveHist(); renderHistory(); renderChat(); renderPending(); updateBadge(); }
+
+/* ===================== settings ===================== */
+function openSettings(){
+  loadCfg();
+  document.getElementById("setEndpoint").value=state.cfg.endpoint;
+  document.getElementById("setToken").value=state.cfg.token;
+  document.getElementById("setCont").value=state.cfg.continuous||"on";
+  document.getElementById("drawer").classList.add("open"); document.getElementById("drawerMask").classList.add("open");
+}
+function closeSettings(){ document.getElementById("drawer").classList.remove("open"); document.getElementById("drawerMask").classList.remove("open"); }
+function saveSettings(){
+  state.cfg.endpoint=document.getElementById("setEndpoint").value.trim()||REMOTE_DEFAULT.endpoint;
+  state.cfg.token=document.getElementById("setToken").value.trim()||REMOTE_DEFAULT.token;
+  state.cfg.locale=state.lang; state.cfg.continuous=document.getElementById("setCont").value;
+  saveCfg(); closeSettings(); applyLang(); toast(t().saved); checkProxy();
+}
+function resetSettings(){
+  state.cfg={endpoint:REMOTE_DEFAULT.endpoint, token:REMOTE_DEFAULT.token, locale:state.lang, continuous:"on"};
+  saveCfg(); openSettings(); toast(t().saved); checkProxy();
+}
+
+/* ===================== modal ===================== */
+function openModal(){ document.getElementById("modal").classList.add("open"); document.getElementById("modalMask").classList.add("open"); }
+function closeModal(){ document.getElementById("modal").classList.remove("open"); document.getElementById("modalMask").classList.remove("open"); }
+
+/* ===================== utils ===================== */
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",'"':"&quot;","'":"&#39;",">":">"}[c])); }
+function toast(msg){ const el=document.getElementById("toast"); el.textContent=msg; el.classList.add("show"); el.classList.remove("err"); setTimeout(()=>el.classList.remove("show"),1800); }
+
+/* markdown -> html (safe) */
+const _mdCache = new Map(); // §性能 ④：(text,lang) -> html，避免历史全量重解析
+const _MD_CACHE_MAX = 500;
+function md2html(src){
+  if(src==null) return "";
+  const _k = (state.lang||"zh") + " " + src;
+  const _hit = _mdCache.get(_k);
+  if(_hit!==undefined) return _hit;
+  const _html = _md2htmlImpl(src);
+  if(_mdCache.size >= _MD_CACHE_MAX) _mdCache.clear();
+  _mdCache.set(_k, _html);
+  return _html;
+}
+function _md2htmlImpl(src){
+  if(src==null) return "";
+  const escSrc=esc(src).replace(/\r/g,"");
+  const lines=escSrc.split(/\n/); let html=""; let i=0;
+  const closeLists=()=>{ if(_ul){html+="</ul>";_ul=false;} if(_ol){html+="</ol>";_ol=false;} if(_blk){html+="</blockquote>";_blk=false;} };
+  let _ul=false,_ol=false,_blk=false,_code=false; let codeBuf=[]; let tableBuf=[];
+  const isTableRow=ln=>/^\s*\|.*\|\s*$/.test(ln);
+  const isSepRow=ln=>{ const body=ln.replace(/^\s*\|/,"").replace(/\|\s*$/,""); const cells=body.split("|").map(c=>c.trim()); return cells.length>0 && cells.every(c=>/^:?-{2,}:?$/.test(c)); };
+  const flushTable=()=>{ if(!tableBuf.length) return; const rows=tableBuf.slice(); tableBuf=[];
+    if(rows.length>=2 && isSepRow(rows[1])) rows.splice(1,1);
+    const splitRow=ln=>ln.replace(/^\s*\|/,"").replace(/\|\s*$/,"").split("|").map(c=>c.trim());
+    if(rows.length){ html+="<table><thead><tr>"+splitRow(rows[0]).map(c=>`<th>${inline(c)}</th>`).join("")+"</tr></thead><tbody>";
+      for(let k=1; k<rows.length; k++) html+="<tr>"+splitRow(rows[k]).map(c=>`<td>${inline(c)}</td>`).join("")+"</tr>"; html+="</tbody></table>"; } };
+  for(;i<lines.length;i++){ let ln=lines[i];
+    if(/^```/.test(ln)){ if(_code){ html+="<pre><code>"+codeBuf.join("\n")+"</code></pre>"; codeBuf=[]; _code=false; } else { closeLists(); flushTable(); _code=true; } continue; }
+    if(_code){ codeBuf.push(ln); continue; }
+    if(isTableRow(ln)){ closeLists(); tableBuf.push(ln); continue; }
+    if(tableBuf.length){ flushTable(); }
+    if(/^#{1,3}\s/.test(ln)){ closeLists(); const lv=ln.match(/^#+/)[0].length; html+=`<h${lv}>${inline(ln.replace(/^#+\s/,""))}</h${lv}>`; continue; }
+    if(/^>\s?/.test(ln)){ if(!_blk){closeLists();html+="<blockquote>";_blk=true;} html+=`<p>${inline(ln.replace(/^>\s?/,""))}</p>`; continue; }
+    if(/^\s*[-*]\s/.test(ln)){ if(!_ul){closeLists();html+="<ul>";_ul=true;} html+=`<li>${inline(ln.replace(/^\s*[-*]\s/,""))}</li>`; continue; }
+    if(/^\s*\d+\.\s/.test(ln)){ if(!_ol){closeLists();html+="<ol>";_ol=true;} html+=`<li>${inline(ln.replace(/^\s*\d+\.\s/,""))}</li>`; continue; }
+    if(/^\s*(---+|\*\*\*+)\s*$/.test(ln)){ closeLists(); html+="<hr>"; continue; }
+    if(ln.trim()===""){ closeLists(); continue; }
+    closeLists(); html+=`<p>${inline(ln)}</p>`;
+  }
+  flushTable(); if(_code) html+="<pre><code>"+codeBuf.join("\n")+"</code></pre>"; closeLists(); return html;
+  function inline(s){ let out=s; out=out.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, (m,tx,url)=>`<a href="${url}" target="_blank" rel="noopener noreferrer">${tx}</a>`);
+    return out.replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>").replace(/\*([^*]+)\*/g,"<em>$1</em>").replace(/`([^`]+)`/g,"<code>$1</code>"); }
+}
+
+/* ===================== init ===================== */
+function seedSamples(){
+  const T=t(); const now=Date.now();
+  if(localStorage.getItem(LS.seen)) return;
+  state.hist=[
+    {q:"FDA 与 CDE 在 MRCT 主方案上的监管要求有何差异？", answer:"两者均接受 master protocol，但 FDA 强调 ICH E6(R3) 的适应性设计事先定型，CDE 偏好阶段性沟通与 Pre-IND 会议明确统计边界。关键差异在盲态与期中分析委员会的独立性要求。", meta:{cached:false,runId:"sample1",skill:"regulatory"}, need_tool:null, params:{}, ts:now-3600e3, sample:true},
+    {q:"两组 ORR 30% vs 45%，power 80%，样本量多少？", answer:"按两比例检验（双侧 α=0.05、power 80%）约需每组 95 例，合计 190 例（含 10% 脱落约 211 例）。", meta:{cached:false,runId:"sample2",skill:"samplesize"}, need_tool:"ct-samplesize", params:{test:"proportion_two",p1:0.3,p2:0.45,power:0.8,alpha:0.05}, ts:now-1800e3, sample:true},
+    {q:"检索 PD-1 三线 NSCLC 的注册 III 期试验。", answer:"已在知识库中匹配数项；如需完整检索结果请在 WorkBuddy 中运行 ct-registry。", meta:{cached:false,runId:"sample3",skill:"registry"}, need_tool:"ct-registry", params:{cond:"NSCLC",intr:"PD-1",status:"",max:20}, ts:now-600e3, sample:true}
+  ];
+  saveHist(); localStorage.setItem(LS.seen,"1");
+}
+// 异步读取 workbench.config.json（端点）+ /api/config（token：前端私有 LLM key，留空则用户在设置框填写）
+async function loadRemoteDefaults(){
+  try{
+    const r=await fetch("workbench.config.json", {cache:"no-store"});
+    if(r.ok){ const j=await r.json(); if(j.backend && j.backend.remoteEndpoint) REMOTE_DEFAULT.endpoint=j.backend.remoteEndpoint; }
+  }catch(e){ /* file:// 直开无 server，用硬编码默认 */ }
+  try{
+    const r2=await fetch("/api/config", {cache:"no-store"});
+    if(r2.ok){ const j2=await r2.json(); if(j2.token) REMOTE_DEFAULT.token=j2.token; }
+  }catch(e){ /* 离线：无 /api/config 时回退空 token（由设置框手动填入） */ }
+}
+function refreshAll(){
+  loadLang();
+  loadRemoteDefaults().then(()=>{
+    loadCfg(); loadHist();
+    if(SKILLS_LOCKED) document.querySelectorAll('[data-view="skills"]').forEach(n=>n.classList.add("locked"));
+    if(state.hist.length===0) seedSamples();
+    applyLang(); renderChat(); renderPending(); updateBadge();
+    document.getElementById("qinput").addEventListener("input", ()=>{ document.getElementById("charHint").textContent = document.getElementById("qinput").value.length + " " + t().charHint; });
+    document.getElementById("charHint").textContent="0 "+t().charHint;
+    if(window.wbHistory) window.wbHistory.rerender();
+  }).catch(e=>{ console.error("refreshAll:", e); });
+}
+function setConnState(ok, T, reason){
+  lastConnOk = ok;
+  const pill=document.getElementById("connPill");
+  pill.className = "pill " + (ok? "ok":"warn");
+  pill.textContent = ok? T.connOk : T.connProxy;
+  // 启动指引并入 pill title（仅异常态）；避免与页内横幅双处提醒
+  pill.title = ok? "" : ((reason==="external" || reason==="timeout")? T.bannerExternal : (T.bannerWarn + " run_app.bat"));
+}
+function isHttpOrigin(){ const p=(location.protocol||"").toLowerCase(); return p==="http:" || p==="https:"; }
+async function checkProxy(){
+  const T=t();
+  if(!isHttpOrigin()){ setConnState(false, T, "external"); return; }
+  const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(), 4000);
+  try{
+    const base = (state.cfg.endpoint && state.cfg.endpoint.indexOf("http")===0)? state.cfg.endpoint : location.origin + "/run";
+    const url = new URL("/api/health", base).href;
+    const r=await fetch(url, {cache:"no-store", signal:ctrl.signal}); clearTimeout(timer);
+    if(r.ok) setConnState(true, T, "ok"); else throw new Error("http "+r.status);
+  }catch(e){ clearTimeout(timer); const aborted=!!(e && e.name==="AbortError"); setConnState(false, T, aborted? "timeout":"err"); }
+}
+// 冒烟自检（铁律 10）：挂载点 / 视图 / 组件存在性
+function smokeCheck(){
+  const issues=[];
+  ["wb-hist-list","view-console","view-skills","view-history","qinput","sendBtn","wb-lang"].forEach(id=>{ if(!document.getElementById(id)) issues.push("缺失 #"+id); });
+  if(typeof WBList==="undefined") issues.push("WBList 未加载（wb-list.js 缺失？）");
+  if(issues.length) console.warn("[ct-advisor smoke] "+issues.join("；"));
+  return issues;
+}
+/* 恢复侧栏折叠状态（本地记忆） */
+(function(){ try{ if(localStorage.getItem(LS.side)==="1"){ const a=document.querySelector(".app"); if(a) a.classList.add("side-collapsed"); } }catch(e){} })();
+window.addEventListener("DOMContentLoaded", ()=>{ try{ refreshAll(); }catch(e){ console.error("refreshAll:", e); } try{ checkProxy(); }catch(e){ console.error("checkProxy:", e); } try{ smokeCheck(); }catch(e){} });
+</script>
+</body>
+</html>

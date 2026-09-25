@@ -1,5 +1,105 @@
 # Changelog
 
+## [Unreleased] — 2026-09-25 · 代理容错全覆盖 + doc_context 透传断链修复
+
+- **代理容错（用户问"以后还会不会错走代理"引出）**：
+  1. `adapters/refiner.py` `_call_coze`：绕过代理直连重试的条件扩为 `ProxyError/ConnectionError/ReadTimeout`（此前半死代理——能建 TCP 但不转发 HTTPS——导致的 ReadTimeout 不在重试范围）。实测死代理 `127.0.0.1:59999` 下主链路正常返回。
+  2. `scripts/doc_memory.py` `_coze_upload_available` 探测：原实现网络异常直接判"不可用"→ 死代理下永远回退老通道。改为与 refiner 同策略：失败 → `ProxyHandler({})` 直连重试一次。
+  3. `scripts/doc_memory.py` `upload_to_coze`：补同款两步重试 + **urllib 陷阱修复**——`Request` 对象经历代理路由失败后内部残留代理状态，复用同一 req 绕过重试仍打死代理；重试必须用**全新 Request**（headers 暂存后重建）。实测死代理下真实上传成功（file_id 返回）。
+- **doc_context 透传断链（严重）**：`scripts/orchestrate.py` `_build_request` 只取 query_meta/original_question/draft_answer 三字段，entry.py 构建的 `doc_context`（附件载荷）被**静默丢弃** → Coze 永远收不到附件，表现为"你未提供文档内容"。修复：`_build_request` 透传 `doc_context/scope_hint/conversation_history/is_followup`。
+- **entry.py 附件通道升级**：`_handle_attachment_normal` 显式 `allow_upload=True` 强制 file_id 上传通道（Coze 原生解析原始文件，保真度高于 base64 内联转发）；`instruction` 改用用户真实问题；内部失败自动降级老通道。
+- **回归（死代理 + 正常代理双环境）**：① 无附件简单题 → Coze 正常；② 带 36.8KB docx → Coze 按「文档§1-§5」结构化引用附件内容作答 ✓；③ 上传探测/真实上传死代理下绕过成功 ✓。
+
+## [Unreleased] — 2026-09-24 · 文档上传 Coze 终端：file_id 真实上传通道（v1.25）
+
+- **依据**：用户 2026-09-24 08:56 需求——飞书归档暂停，优先做"文档上传到 Coze 终端"；
+  ≤5MB 传原文件给 Coze 解码，>5MB 本地转 MD 后上传；新/老 Office 格式统一流程。
+- **冲突（读源码核实）**：现有 `mode=file`+`file_b64` 内联上限 ≈3.75MB 且只接老格式；
+  `GraphInput` 仅 `doc_context` JSON 字符串字段，无文件上传入口。
+- **方案**：file_id 真实上传（绕开 3.75MB 上限，任意大小 Office 可传）；5MB 分流仅本地"传原文件还是 MD"的判断，传输统一为一次 file_id 上传；新/老格式走同一条路。
+- **服务端改动（Coze v1.25，需重新上传部署包生效）**：
+  1. `src/utils/file/upload_store.py`（新增）：自托管临时落盘（`/tmp/coze_uploads/<file_id><ext>`），50MB 上限，uuid.hex 命名。
+  2. `src/main.py`：新增 `/upload_file` 端点（multipart，鉴权/限流与 `/run` 同源，平台前置校验）；回传 `file_id`/`file_name`/`size`。
+  3. `src/doc/payload.py`：`DocPayload` 新增 `file_id`/`file_url` 字段 + `is_file_id` 属性；mode 推断新增 `file_id` 退化规则（不复用 `mode="file"`）。
+  4. `src/doc/__init__.py`：新增 `_decode_file_id`（调 `upload_store.resolve_path` → `office_reader.read_bytes`，OLE2+OOXML 通用）；`ingest_and_select` 在 `is_file` 分支后加 `is_file_id` 分支；`doc_ingest_node` 无需改动（`file_error` 统一分支已覆盖）。
+- **本地改动**：`scripts/doc_memory.py` 新增统一上传入口 `build_upload_payload`/`upload_to_coze`/`prepare_file_upload`；5MB 分流（`UPLOAD_THRESHOLD_BYTES=5*1024*1024`）；OOXML 不再本地转文本，改为传原文件。
+- **向后兼容**：旧 `mode=file`+`file_b64` 内联路径保留（回退）；老 Coze 未读 `file_id` 字段 → 静默走旧路径。
+- **决策**（用户拍板）：① file_id 取回 = 工作流侧直接调 Coze API（当前实现为服务端自托管落盘 + 内部路径解析，一行可切真 `files.retrieve`）；② 合规 = 暂不设 TTL，未来飞书清理；③ 限流 = 与 `/run` 同源；④ mode 命名 = 新增 `file_id`。
+
+## [Unreleased] — 2026-09-23 · 作答契约 C14：交付物边界（不返回修改后的文档）
+
+- **依据**：用户口径——用户索要「改好的 / 修改后的文档」时，**直接提示「目前不提供此功能」**，
+  只能提供修改建议等文字信息。
+- **服务端改动（coze v1.24：需重新上传部署包才生效）**：
+  1. `config/full_analysis_cfg.json`（sp）：新增作答契约 **C14 交付物边界**（位于「文档类请求的
+     参考性边界」之后、「模板归纳请求」之前），自检清单新增**第 26 条**；顶部注释 `C1-C13` → `C1-C14`。
+  2. `config/shared_contract.md`：补 **C14 全文**，并补 **C13 指针**——修掉「C1-C13 唯一落点」
+     与文件实际只写到 C12 之间的既存漂移。
+  3. `config/review_cfg.json`：镜像精简版 C14（含核查动作：发现文件承诺必须删除并补声明，保留文字建议部分）。⚠️ 该文件是 `pack.py` **明确排除**的孤儿配置（review 节点 v1.20 已移除）→ **不进运行镜像**，仅同步留档。
+  4. 代码层：`src/graphs/nodes/answer_postprocess.py` 新增 `ensure_deliverable_boundary` /
+     `asks_for_deliverable_file`（确定性判定 + 幂等前置固定能力说明）；
+     `full_analysis_node.py` 在 accuracy 提取后、**写缓存前** 调用（与 C12 范围声明同层、同
+     `substance_len` 空答案防线）→ 缓存命中的答案同样带该说明。
+  5. `_doc_prompt_directive` 新增第 7 条（文档在场时首句声明 + 转为可直接替换的文字措辞）。
+- **新增自测**：`tests/test_deliverable_boundary.py`（59 项：判定正/负例、四态与幂等、
+  契约落点、接线顺序）。
+- **本地文档**：`SKILL.md` 附件章节新增第 8 条、`AGENTS.md` 新增交付物边界小节、
+  `adapters/coze/docs/deliverable-boundary.md`（新增专文）、`coze_modification_guide.md` §八、
+  `ct-base §6.8`（底座对等条款）。
+- **兼容性**：入口契约字段未变 → **可单独升级 Coze 端**（不要求与本地同期，区别于 v1.23）。
+
+- **回归中发现并修复的既有缺陷（审计器 L4 长期静默失效）**：`scripts/test_adapter_audit.py`
+  的 `MODULES` 仍列出 v1.20 已中性化的 `graphs.nodes.review_node` /
+  `graphs.nodes.validity_check_node`（现为 `*.py.disabled`）→ L3 必然 `ModuleNotFoundError`
+  → `ok=False` → **整个 L4 被跳过**（L4a 图装配一致性、L4b 写闸×范围声明不变量、
+  L4d 基线 md5 比对从未执行）。修法：L3 **自行识别同名 `.py.disabled` 并跳过**
+  （名字保留作历史记录，对未来再次中性化的节点免疫）。修后审计 `PASS=10 → 23 / FAIL=0`，L4 恢复执行。
+
+## [Unreleased] — 2026-09-21 · 作答契约 C13：需求分解与 B 类能力边界
+
+- **依据**：用户反馈——多子需求问题（如"请给出 1/2/3/4"）被混为一谈逐点输出，且涉及 B 类技能
+  （`ct-protocol` / `ct-csr` / `ct-analysis` 等）专业范围的内容被本技能"硬答"，质量不可接受。
+  需要：① 先拆解子需求、逐一判定；② 对 B 类范围子需求输出"专业提示 + 兜底答案"两段式。
+- **服务端改动（coze：需重新上传部署包才生效）**：
+  1. `config/full_analysis_cfg.json`（sp）：新增作答契约 **C13 需求分解与能力边界感知**（位于 C11 之后、自检之前），
+     含 B 类技能清单（`ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` / `ct-eligibility` / `ct-synthdata`）
+     及"提示段 + 兜底段"两段式输出规范；自检清单新增第 24/25 条 C13 检查项。
+  2. 修复 sp 内残留的 `review_cfg.json` 注释（改为"C1-C13 唯一落点"）。
+- **本地文档**：`SKILL.md`（C13 加入契约摘要 + Tier B 描述对齐）、`coze_modification_guide.md`
+  （作答契约内容补 C11/C12/C13）、`CHANGELOG.md`（本条目）。
+
+## [Unreleased] — 2026-09-21 · 移除答案双重核查（v1.20 架构简化）
+
+- **依据**：v1.16~v1.19 的「答案双重核查」层（`review` / `review_guard` 节点 + 前置 `validity_check` 门）
+  实际 0% 命中——`draft_answer` 上游恒定空，`validity_check` 永远判无效 → 全流量走 `full_analysis`，
+  双核查等于没生效；且 `full_analysis`/`review` 双写缓存与飞书、`review` 会把 `full_analysis` 自评 good 降级。
+- **服务端改动（coze：需重新上传部署包才生效）**：
+  1. `src/graphs/graph.py`：删除 `validity_check` 门与 `route_after_validity_check` 路由；图简化为 4 节点直线图
+     `cache_check → generate_organized_problems → full_analysis → tool_router → END`（`full_analysis` 为唯一产出节点，`tool_router` 零 LLM 规则判定 need_tool）。
+  2. `src/graphs/nodes/review_node.py` / `validity_check_node.py` 改名 `.disabled`（不再随包加载）；`review_guard` 相关代码一并清除。
+  3. `full_analysis_node.py` 成为唯一缓存/飞书写入点（消除双写与 accuracy 降级）。
+  4. `config/review_cfg.json` 成为孤儿配置（无 active 代码引用），不再随包发布。
+  5. `src/graphs/nodes/_version.py::COZE_VERSION` 由历史漂移的 `1.18` 升到 `1.20`（与部署包 `ct-advisor_coze_v1.20_20260921.zip` 对齐；上一轮 v1.19 包未同步此常量）。
+  6. `src/kb/__init__.py`：`detect_scope` 新增 `general_knowledge` 档（ICH/GCP 等简单定义类问题返回温和 💡 提示，不再弹「未命中知识库」式吓人声明）；三个知识缓存改为 (mtime,size) 失效，覆盖线上索引即自动热重载；`build_knowledge_index.py` 新增 `--merge` 可重复重建且保留既有键。
+- **文档同步（本次随包）**：`AGENTS.md`（节点清单/流程图/分支函数/accuracy 说明）、`README_部署说明.md`（标题升 v1.20 + 当前架构段）、`UPGRADE_20260814.md`（v1.20 现状段）、`coze_modification_guide.md`（v1.20 架构变更横幅 + 旧 review 章节标注历史）、`NEED_TOOL_SCHEMA.md` / `coze_sync_guide_knowledge.md`（节点引用修正）均更新为 v1.20 现状。
+- **部署包**：`adapters/coze/ct-advisor_coze_v1.20_20260921.zip`（105 文件，8.98 MB）。上传后须**重建/重启 Coze 镜像**（长驻进程，光传 zip 不生效）。
+
+## [Unreleased] — 2026-09-17 · 飞书补写 `coze_version`（版本字段落点统一，ct-base §2.1）
+
+- **依据**：ct-base `references/coze_io_contract.md` §2.1（2026-09-17 定）——版本类元数据
+  （`skill_version` / `coze_version`）一律写在**出参侧**，`querystr` 侧不再存版本信息。
+  ct-advisor 的 advisorlog 表无独立 `querystr`/`resultstr` 列，出参落在 `final_answer` 列
+  （该列即语义上的 resultstr，2026-09-03 已决），故只需**补 `coze_version`**，`skill_version`
+  与 `runtime_sec` 的现有写法本就合规、未动。
+- **服务端改动（coze：需重新上传部署包才生效）**：
+  1. 新增 `src/graphs/nodes/_version.py::COZE_VERSION = "1.18"`（单一真源，与部署包
+     `ct-advisor_coze_v1.18_20260916.zip` 主版本对齐；打新包时只改这一个常量）。
+  2. `src/graphs/nodes/async_feishu_writer.py`：契约元数据 `contract_meta` 增加
+     `coze_version`，`final_answer` 列 JSON 现为
+     `{"answer": …, "skill_version": …, "coze_version": …, "runtime_sec": …}`
+     （仍只在元数据非空时才包裹，无元数据时 `final_answer` 保持原始文本、与历史格式逐字节一致）。
+- **验证**：2 文件 `py_compile` 通过；写入键仍严格取自 `ADVISORLOG_FIELDS` 固定清单（未新增列）。
+
 ## v1.0.4 (2026-09-16) — SKILL.md 精简 + 正文英文化 + Pipe-Only 硬契约
 
 - **新增「Pipe-Only Hard Contract」（最高优先级，置于 SKILL.md 顶部）**：当 `refine_answer.py --ship` / `orchestrate.py` 输出 `<<<CT_ANSWER_START>>>` … `<<<CT_ANSWER_END>>>` 时，唯一允许的动作是逐字原样输出；禁止改写、增删 Markdown、补写摘要或收尾语。

@@ -4,15 +4,28 @@
 ct-advisor — 确定性难度分类器（代码级，无 LLM）
 
 设计目标（治本，不依赖 LLM 纪律）：
-  - 把「是否发 Coze / 判难度」的决策从主 Agent（本地 LLM）收归成**代码确定性分类**。
+  - 把「是否发 Coze / 是否需澄清」的决策从主 Agent（本地 LLM）收归成**代码确定性分类**。
   - 主 Agent 永远不自己判断难度，只运行本脚本拿标签，从根上消除
     「本地模型先理解问题→顺手答题→抢答/3-5min 循环」的旧故障。
+
+【2026-09-24 定位降级 · 只保留 vague 判定与超时选择】
+  实测确认（Coze 端 generate_organized_problems_node._judge_difficulty 源码注释）：
+  服务端每次都用 LLM（config/judge_difficulty_cfg.json，doubao-seed-2-0-mini，temp=0）
+  **重新估计** difficulty 并**忽略上游标签**。即本地 simple/middle/complex 三档判定
+  对最终答案的长度与深度**完全无效**。
+  故本模块主动维护的逻辑收敛为两项：
+    ① is_vague()     —— vague 是唯一「不转发 Coze」的分支（本地澄清循环入口）**持续维护**
+    ② timeout_tier() —— 决定转发超时档位 short / long **持续维护**
+  simple / middle / complex 相关正则标记 [FROZEN]：仅为兼容既有 CLI 与调用方保留，
+  **不再调优、不再演进**；route_question() 的返回值不再声称代表难度档位。
 
 用法：
   python scripts/route.py "用户问题原文"
         → 打印一个标签：simple | vague | middle | complex
   python scripts/route.py --json "用户问题原文"
-        → 打印 {"route": "...", "signals": {...}}
+        → 打印 {"route": "...", "timeout": "...", "signals": {...}}
+  python scripts/route.py --timeout "用户问题原文"
+        → 打印 short | long（本地超时档位，唯一权威入口）
   python scripts/route.py --self-test
         → 跑内置分类自测，输出每例命中/预期与准确率
 
@@ -45,7 +58,7 @@ import re
 import sys
 
 # ---------------------------------------------------------------------------
-# 信号词典（与 references/steps.md 的 difficulty 定义对齐，确定性、可单测）
+# 信号词典（确定性、可单测）
 # ---------------------------------------------------------------------------
 
 # 受控术语（CDISC / 临床试验领域），仅作 simple 的辅助证据 + vague 排除
@@ -152,11 +165,11 @@ VAGUE_UNCERTAIN_EXCL = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# simple 白名单：knowledge 知识包确定覆盖的「标准操作 / 定义类」主题短语
-# （来源：knowledge/reference-index.md 覆盖主题 + 四题库联合验证；命中即本地直答）
+# simple 白名单：标准操作 / 定义类主题短语（纯本地正则匹配，无知识包依赖）
 # 使用约束：仅当 未命中 CPLX（设计/统计/外部数据）且未命中 EXCL 时才生效，
 # 确保白名单不会把「设计/监管/灰色地带」类问题误拉进 simple（漏发车红线）。
-# 2026-08-12 四库验证：0 漏发车，simple 召回 桌面 22/40、第二版 12/40、全新 12/40、D库 12/20。
+# 2026-09-24 改造：移除对 knowledge/reference-index.md 的依赖，
+# 所有知识判定统一由 Coze 端完成，本地仅保留确定性分级逻辑。
 # ---------------------------------------------------------------------------
 SIMPLE_TOPICS = re.compile(
     r"(alcoa|sdv|isf\b|siv\b|"
@@ -183,8 +196,17 @@ SIMPLE_TOPICS = re.compile(
 # 分类函数
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# ⚠️ 以下 simple / middle / complex 相关正则与函数自 2026-09-24 起标记 [FROZEN]
+# ---------------------------------------------------------------------------
+# 冻结理由：Coze 服务端用 LLM 重判 difficulty 并忽略上游标签（见模块 docstring），
+#   本地三档判定不影响答案的长度与深度，继续调优零收益，且易与服务端判定产生认知冲突。
+# 保留原因：route_question() 的返回值已被 CLI 契约与既有调用方依赖，删除会破坏兼容。
+# 维护红线：**只可冻结，不可演进**；新增能力一律走 timeout_tier()。
+# ---------------------------------------------------------------------------
+
 def is_simple(q: str) -> bool:
-    """单点定义 / 标准操作 → simple。"""
+    """[FROZEN 2026-09-24] 单点定义 / 标准操作 → simple。（不再调优）"""
     if len(q) > 140:
         return False
     if DEF.search(q) or STOP.search(q):
@@ -221,16 +243,48 @@ def is_vague(q: str) -> bool:
 
 
 def is_middle(q: str) -> bool:
-    """显式解释 / 比较 / 单步推理，且无 complex 信号 → middle。"""
+    """[FROZEN 2026-09-24] 显式解释 / 比较 / 单步推理，且无 complex 信号 → middle。"""
     if CPLX.search(q):
         return False
     return bool(MID.search(q))
 
 
+# ---------------------------------------------------------------------------
+# 超时档位（2026-09-24 新增 · 本模块唯一持续维护的「非 vague」逻辑）
+# ---------------------------------------------------------------------------
+
+LONG_TIMEOUT_CHARS = 80
+
+
+def timeout_tier(q: str) -> str:
+    """本地转发超时档位：返回 "short" | "long"。
+
+    这是本地**唯一**需要用复杂度信号做决策的地方——超时是网络等待上限（refiner.timeout
+    vs refiner.long_timeout），与答案难度无关：判定为 long 只是放宽上限，不会让快请求变慢。
+
+    判据（保守放宽，宁可长不可短，避免长问题被 90s 截断）：
+      1. 命中 CPLX 强信号（统计/样本量/设计/外部数据…）→ long
+      2. 问题长度 >= LONG_TIMEOUT_CHARS（长问句通常需多步检索）→ long
+      3. 其余 → short
+    """
+    q = (q or "").strip()
+    if not q:
+        return "short"
+    if CPLX.search(q):
+        return "long"
+    if len(q) >= LONG_TIMEOUT_CHARS:
+        return "long"
+    return "short"
+
+
 def route_question(q: str) -> str:
     """返回 simple | vague | middle | complex。
-    🔴 vague 优先：入口唯一不转发 Coze 的分支，必须最先判定（判断可偏多）；
-    simple/middle/complex 仅作 verbatim 转发的备用标签。"""
+
+    🔴 vague 优先：入口唯一不转发 Coze 的分支，必须最先判定（判断可偏多）。
+
+    ⚠️ 2026-09-24 定位降级：vague 之外的三档标签**不代表难度**（服务端用 LLM 重判并
+    忽略上游标签），仅为兼容 CLI 契约与既有调用方保留，**已冻结、不再演进**。
+    真正需要用复杂度信号做决策的地方请改用 timeout_tier()。"""
     q = (q or "").strip()
     if not q:
         return "vague"
@@ -246,13 +300,16 @@ def route_question(q: str) -> str:
 
 
 def route_with_signals(q: str) -> dict:
-    """调试用：返回标签 + 各规则命中情况。"""
+    """调试用：返回标签 + 超时档位 + 各规则命中情况。"""
     q = (q or "").strip()
     return {
         "route": route_question(q),
+        "timeout": timeout_tier(q),
         "signals": {
-            "simple": is_simple(q),
             "vague": is_vague(q),
+            "timeout_tier": timeout_tier(q),
+            # ↓ [FROZEN] 仅作兼容观测，不代表难度
+            "simple": is_simple(q),
             "middle": is_middle(q),
             "complex_forced": bool(CPLX.search(q)),
         },
@@ -325,6 +382,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="ct-advisor deterministic difficulty router (Mode B)")
     ap.add_argument("question", nargs="?", help="用户问题原文")
     ap.add_argument("--json", action="store_true", help="输出 JSON（含命中信号）")
+    ap.add_argument("--timeout", action="store_true",
+                    help="输出本地超时档位 short|long（唯一权威入口）")
     ap.add_argument("--self-test", action="store_true", help="运行内置分类自测")
     args = ap.parse_args()
 
@@ -335,7 +394,9 @@ def main() -> int:
         ap.print_help()
         return 2
 
-    if args.json:
+    if args.timeout:
+        print(timeout_tier(args.question))
+    elif args.json:
         print(json.dumps(route_with_signals(args.question), ensure_ascii=False))
     else:
         print(route_question(args.question))
