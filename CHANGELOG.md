@@ -1,5 +1,27 @@
 # Changelog
 
+## [Unreleased] — 2026-09-25 · v1.2.0 框架整理（用户："技能内容复杂了，整理框架使流程更清楚"）
+
+- **文档-代码对齐**：SKILL.md / AGENTS.md 此前仍写旧流程（OOXML 本地转 md 追加 question、
+  4 档难度分级）。重写为 v1.1.0 修正后的**规范 5 步管线**：① 附件门（<5MB 原文件上传→
+  doc_context / >5MB 本地转 md 拼问题）→ ② vague 门（唯一难度判定，is_vague 纯正则）→
+  ③ 澄清循环 → ④ orchestrate 直发 Coze → ⑤ delegate 缝合 + 定界符/sha256 输出。
+  frontmatter `network_note` 同步。
+- **死代码删除（coze-only 重构遗留，主链 0 引用）**：`adapters/backend.py` /
+  `data_context.py` / `qa_store.py`（早期 LocalBackend+QA 日志 seam，与 coze-only 红线冲突）、
+  `_patch14*.py`、`drug_name_resolver / keyword_breadth / landscape_scorer / source_guard /
+  r_libs`、`workflows.json`、`menu.json`、`test_modeB.py`。`adapters/__init__.py` 瘦身为
+  仅 refiner/sanitize 出口（build_backend/build_data_context/build_qa_store 一并删除）。
+- **快照目录清理（~185 MB）**：`_TRASH-20260924-clean`、`scripts.park-20260924-attach/-p2`、
+  `adapters/coze.park-20260924-fixedeps/-v125`、`workbench.park-20260924-wbpatch`（git rm）、
+  `out/`。当前部署源 = `adapters/coze/`（源码）+ `workbench/`（本地壳），park 系列全部是
+  9-24 之前的旧副本。
+- **AGENTS.md 新增模块分层图**（L0 入口 / L1 编排 / L2 适配 / L3 支撑），
+  `scripts/entry.py` 为唯一可调用面的边界声明。
+- **回归**：删除后 6 套测试 155/155 全绿（test_local_doc_payload 的 menu.json 断言改用
+  tool_mapping.json 同扩展名样本）；entry.py 主链 import + 端到端 Coze 问答复测通过。
+- 版本 1.1.0 → **1.2.0**。
+
 ## [Unreleased] — 2026-09-25 · 代理容错全覆盖 + doc_context 透传断链修复
 
 - **代理容错（用户问"以后还会不会错走代理"引出）**：

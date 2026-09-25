@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.1.0
+version: 1.2.0
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性代码分级与附件解码，不保留知识库，不进行本地网络检索。"
@@ -29,7 +29,7 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "controlled-coze-opt-in"
-  network_note: "All questions are forwarded to Coze (single call, internal `scripts/orchestrate.py`). Local side performs NO knowledge base lookup, NO local network retrieval, NO web search. Attachment decoding is done locally via `scripts/office_to_md.py` (stdlib-only), then the decoded text is appended to the payload and forwarded to Coze. The Coze-side knowledge base is the single source of truth."
+  network_note: "All questions are forwarded to Coze (single call, internal `scripts/orchestrate.py`). Local side performs NO knowledge base lookup, NO local network retrieval, NO web search. Attachments under 5 MB are uploaded as original bytes to Coze `/upload_file` and shipped as the top-level `doc_context` field (Coze decodes natively); attachments over 5 MB are converted to Markdown locally via `scripts/office_to_md.py` (stdlib-only) and appended to the question. The Coze-side knowledge base is the single source of truth."
   filesystem: "Read-only to own files; no confidential data leaves locally — Coze payloads sanitized, query_origin is a stable per-machine sha256 hash (non-PII)."
 adapted_from: "https://github.com/A-xin946/clinical-trial-advisor"
 dependencies:
@@ -86,12 +86,29 @@ python scripts/entry.py --q "这个文档和医学有关吗" --attach "/path/to/
 
 **That's it.** The stdout is the final answer — pipe it to the user verbatim.
 
-### What entry.py does internally (all code, zero LLM):
-1. **Attachment decoding** — if `--attach` is provided, decodes OOXML (`docx`/`xlsx`/`pptx`) via `scripts/office_to_md.py` (stdlib-only) and appends the decoded text to the question
-2. **Difficulty labeling** — runs `scripts/route.py` (deterministic regex, LLM-free) → `simple` / `middle` / `complex` / `vague`
-3. **Clarify loop** (if `vague`) — runs `scripts/clarify_loop.py` (pure-local heuristic menu, ≤3 rounds) → asks the user up to 3 clarifying questions, then continues
-4. **Forward to Coze** — calls `scripts/orchestrate.py` internally → parallel Coze fire + ct-skill prefetch → merge → emit `<<<CT_ANSWER_START>>>` ... `<<<CT_ANSWER_END>>>` wrapped answer with sha256 checksum
-5. **Delegate handling** — if Coze returns a `<<<CT_TOOL_DELEGATE>>>` block, entry.py automatically executes `scripts/refine_answer.py --card-inline` (code runs the ct skill, stitches the result, re-wraps in delimiters)
+### What entry.py does internally (all code, zero LLM) — the canonical pipeline
+
+```
+STEP 1  Attachment gate (only if --attach given)
+        ├─ size < 5 MB  → doc_memory.build_file_payload(allow_upload=True)
+        │                 uploads the ORIGINAL file to Coze /upload_file,
+        │                 ships it as top-level `doc_context` (mode=file_id;
+        │                 auto-fallback to base64 forward channel on failure)
+        └─ size > 5 MB  → office_to_md.py converts to Markdown locally and
+                          APPENDS the text into the question (file NOT uploaded),
+                          with a visible ⚠️ notice to the user
+STEP 2  Vague gate (deterministic regex, scripts/route.py — the ONLY difficulty check)
+        ├─ vague      → clarify_loop.py (≤3 rounds) → questions back to user, stop
+        └─ non-vague  → continue
+STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload)
+        parallel: Coze /run fire + local ct-skill prefetch → merge
+STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>,
+        entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
+STEP 5  Output — stdout wrapped in <<<CT_ANSWER_START/END>>> + sha256 checksum
+```
+
+> **LLM-forbidden zone**: every STEP above is executed by code. The local LLM
+> never picks the channel, never judges difficulty, never decides forwarding.
 
 ### Output format:
 ```
@@ -131,16 +148,16 @@ if m:
 
 ## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
 
-**Governance pointer (2026-08-19 rollback):** the layered conversion strategy, user prompts, and confidentiality boundary are consolidated into **ct-base §6.7** (`ct-base/docs/03-interaction-constraints.md`); this skill no longer re-declares them. The shared converter lives in `ct-base/scripts/office_to_md.py` (injected into each skill at publish).
+**Single gate = 5 MB, decided FIRST inside `entry.py` (v1.1.0 workflow correction, 2026-09-25).**
 
-**Format matrix (2026-09-23 · one gate = 5 MB, enforced by `office_to_md.py`)**
-
-| Format | Decoded where | Mechanism |
+| Size | Behavior | Channel |
 |---|---|---|
-| `.docx` / `.xlsx` / `.pptx` | **locally** | `scripts/office_to_md.py` (stdlib-only; no Office needed) → md → appended to question |
-| `.doc` / `.xls` / `.ppt` (**legacy OLE2**) | **on the Coze end** | local forwards the **raw file bytes** (`doc_context.mode=file`); Coze decodes |
-| `.pdf` | local `pdf` skill, else Coze `pypdf` | text layer only; a scanned/image PDF has no text → tell the user |
-| `.txt` / `.md` / `.csv` / `.tsv` / `.json` | locally | read directly |
+| `< 5 MB` | **Upload the original file directly** — never converted locally | `doc_memory.build_file_payload(allow_upload=True)` → Coze `/upload_file` → `doc_context` (`mode=file_id`); on upload failure auto-degrades to the base64 forward channel (`mode=file`) |
+| `> 5 MB` | Convert to Markdown locally, **append text into the question, file NOT uploaded**, with a visible ⚠️ notice | `scripts/office_to_md.py` (stdlib-only; OOXML) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported formats get an explicit user prompt |
+
+Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.xls/.ppt` included), so fidelity is higher than any local conversion — this is why the <5 MB path uploads instead of converting.
+
+**Governance pointer**: layered conversion strategy, user prompts and confidentiality boundary are consolidated in **ct-base §6.7**; the shared converter lives in `ct-base/scripts/office_to_md.py` (vendored copy).
 
 **Deliverable boundary — the revised document is never returned (v1.24).** This skill's deliverable is **text only**: it does not generate, export, or hand back a modified document file. When the user asks for the revised file back, state plainly on the **first line** that **this feature is not available — only written suggestions are provided**, then give the suggestions as text the user can copy.
 
@@ -159,6 +176,14 @@ Runs automatically inside `entry.py` → `scripts/orchestrate.py` before each ou
 On defect detection or explicit user request, `adapters/bug_report.py` offers a sanitized 11-key report to `https://ct-bugreport.coze.site/run`. Two-stage confirmation mandatory.
 
 ## Changelog — full history (0.8.0 → 1.0.0+) → **[CHANGELOG.md](CHANGELOG.md)**
+
+### v1.2.0 (2026-09-25) — Framework consolidation
+
+- **Documented the canonical 5-step pipeline** (attachment gate → vague gate → forward → delegate stitch → wrapped output) matching the actual entry.py code; previous text still described the old "OOXML → local md → append to question" flow.
+- **Deleted dead code** (coze-only leftovers): `adapters/backend.py` / `data_context.py` / `qa_store.py` (legacy LocalBackend + QA-log seams, never on the entry.py chain), `_patch14*.py`, `drug_name_resolver / keyword_breadth / landscape_scorer / source_guard / r_libs / workflows.json / menu.json / test_modeB.py`.
+- **Deleted stale snapshot directories** (~185 MB): `_TRASH-20260924-clean`, `scripts.park-20260924-*`, `adapters/coze.park-20260924-*`, `workbench.park-20260924-wbpatch`, `out/`.
+- **Proxy hardening** (see CHANGELOG): upload probe + `upload_to_coze` now retry direct-bypass on dead-proxy environments (fresh urllib Request per attempt).
+- **doc_context pass-through fix**: `orchestrate._build_request` now forwards doc_context / scope_hint / conversation_history / is_followup to Coze (attachments previously evaporated silently).
 
 ### v1.1.0 (2026-09-24) — Zero-LLM-intervention architecture
 

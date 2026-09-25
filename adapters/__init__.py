@@ -1,45 +1,38 @@
-"""ct-advisor 适配层统一出口 + 后端工厂。
+"""ct-advisor 适配层统一出口。
 
-默认本地执行、不发起网络请求（未配置 Coze 时回退 LocalBackend，不读 token、不发请求）；且默认不写本地文件（未显式开启 QA 日志时 NoOpStore 不落盘）：
-- build_backend() 在未配置 Coze 时回退 LocalBackend（不读 token、不发请求）。
-- build_qa_store() 在未显式配置 qa_store.mode=local/remote 时返回 NoOpStore（不写任何文件）。
-切换后端只需改 config.json 的 backend 字段 + 填 coze.bot_id；启用 QA 日志同理需显式开启。
+v1.2.0（2026-09-25）框架整理：删除三个从未被 entry.py 主链使用的 legacy seam
+（backend / data_context / qa_store —— 早期「本地 LocalBackend 兜底 + QA 日志」
+架构残留，与 coze-only 红线冲突，且仅被同样已删除的 test_modeB 引用）。
+
+现存职责单一：
+- refiner.py  → CozeRefiner（唯一精校后端）+ RefineRequest/RefineResult 契约
+- sanitize.py → 出站 PII 脱敏（ct-base §11）
+- coze_token_embedded.py → 内嵌混淆公开凭据
+- http_probe.py / install_sibling.py / probe_publication.py → 诊断与兄弟技能安装
+- bug_report.py → §20.3 缺陷上报通道
 """
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict
 
-from .backend import (
-    AdvisorBackend,
-    AdvisorRequest,
-    AdvisorResponse,
-    CozeBackend,
-    LocalBackend,
+from .refiner import (
+    CozeRefiner, RefineRequest, RefineResult, Refiner,
+    compute_machine_id, ACCURACY_ENUM, DIFFICULTY_ENUM,
+    _parse_query_meta, strip_display_tags, MissingDependencyError,
 )
-from .data_context import (
-    CozeApiDataContext,
-    DataContextProvider,
-    DataRef,
-    LocalDiskDataContext,
-)
-from .qa_store import JsonlStore, NoOpStore, QARecord, QASessionStore, RemoteDbStore
-from .refiner import CozeRefiner, RefineRequest, RefineResult, Refiner, compute_machine_id, ACCURACY_ENUM, DIFFICULTY_ENUM, _parse_query_meta, strip_display_tags, MissingDependencyError
 from .sanitize import sanitize
 
 __all__ = [
-    "AdvisorBackend", "AdvisorRequest", "AdvisorResponse", "LocalBackend", "CozeBackend",
-    "DataContextProvider", "DataRef", "LocalDiskDataContext", "CozeApiDataContext",
-    "QASessionStore", "QARecord", "JsonlStore", "NoOpStore", "RemoteDbStore", "sanitize",
-    "Refiner", "RefineRequest", "RefineResult", "CozeRefiner", "compute_machine_id",
-    "ACCURACY_ENUM", "DIFFICULTY_ENUM", "_parse_query_meta",
-    "build_backend", "build_data_context", "build_qa_store", "build_refiner", "MissingDependencyError",
+    "Refiner", "RefineRequest", "RefineResult", "CozeRefiner",
+    "compute_machine_id", "ACCURACY_ENUM", "DIFFICULTY_ENUM",
+    "_parse_query_meta", "strip_display_tags", "sanitize",
+    "build_refiner", "MissingDependencyError",
 ]
 
 
 def _load_config(config_path: str = "config.json") -> Dict[str, Any]:
-    # Stdlib-only loader (no PyYAML dependency). Missing/excluded file falls
-    # back to defaults (= local backend, no network call).
+    # Stdlib-only loader (no PyYAML dependency). Missing file falls back to defaults.
     p = Path(config_path)
     if p.exists():
         try:
@@ -50,56 +43,22 @@ def _load_config(config_path: str = "config.json") -> Dict[str, Any]:
     return {}
 
 
-def build_backend(config_path: str = "config.json") -> AdvisorBackend:
-    cfg = _load_config(config_path)
-    coze = cfg.get("coze", {}) or {}
-    if cfg.get("backend") == "coze" and coze.get("bot_id"):
-        return CozeBackend(
-            bot_id=coze.get("bot_id", ""),
-            endpoint=coze.get("endpoint", ""),
-            token_env=coze.get("token_env", "COZE_TOKEN"),
-        )
-    return LocalBackend()
-
-
-def build_data_context(config_path: str = "config.json") -> DataContextProvider:
-    cfg = _load_config(config_path)
-    dc = cfg.get("data_context", {}) or {}
-    if dc.get("mode") == "coze":
-        return CozeApiDataContext()
-    return LocalDiskDataContext(sibling_outputs=dc.get("sibling_outputs"))
-
-
-def build_qa_store(config_path: str = "config.json") -> QASessionStore:
-    cfg = _load_config(config_path)
-    qs = cfg.get("qa_store", {}) or {}
-    mode = qs.get("mode")
-    # 隐私默认：未显式开启则不持久化任何内容（NoOpStore）。
-    if mode == "remote" and qs.get("remote_dsn"):
-        return RemoteDbStore(dsn=qs.get("remote_dsn", ""))
-    if mode == "local":
-        return JsonlStore(path=qs.get("local_path", "data/qa_log.jsonl"))
-    return NoOpStore()
-
-
 def build_refiner(config_path: str = "config.json") -> Refiner:
-    """答案精校出口（第 4 个 seam）。
+    """答案精校出口（唯一 Coze 后端）。
 
-    Coze 是唯一的精校后端：按难度自动分流——simple/middle 后台竞速择优选、complex/vague 前台串行等待，都经此调用
-    Coze 精校，两者都在失败/超时时由 CozeRefiner 内置回退到本地 draft_answer。
+    所有问题经 CozeRefiner 全量直发 Coze（单次调用，90s / 长任务 300s 超时），
+    失败/超时回退 draft（v1.1.0 起 draft 恒为空 → 上层输出"请稍后重试"）。
 
-    token 解析：统一从 adapters/coze_token_embedded.py 内嵌 obfuscated blob 读取（XOR+base64 公开凭据，无参 get_token()）。
+    token 解析：统一从 adapters/coze_token_embedded.py 内嵌 obfuscated blob 读取
+    （XOR+base64 公开凭据，无参 get_token()）。
     """
     cfg = _load_config(config_path)
     rc = cfg.get("refiner", {}) or {}
-    answer_mode = cfg.get("answer_mode", "fast")
-    if answer_mode != "fast":
-        answer_mode = "fast"  # 2026-08-05 起仅保留 fast 模式（precise 已删除）
     return CozeRefiner(
         endpoint=rc.get("endpoint", ""),
         token_env=rc.get("token_env", "CT_ADVISOR_COZE_TOKEN"),
         timeout=float(rc.get("timeout", 90.0)),
         long_timeout=float(rc.get("long_timeout", 300.0)),
         race_window=float(rc.get("race_window", 2.0)),
-        answer_mode=answer_mode,
+        answer_mode="fast",  # 2026-08-05 起仅保留 fast
     )
