@@ -3,11 +3,11 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.2.0
+version: 1.2.2
 invocable: true
 required_commands: [python]
-summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性代码分级与附件解码，不保留知识库，不进行本地网络检索。"
-description: "The single entry point for the ct-series across the full clinical-development lifecycle — a cloud-assisted clinical trial advisor. All questions (methodology / design / compliance / QC / site-execution / intelligence) are forwarded to the cloud Coze engine for analysis. The local side only performs deterministic code-based difficulty labeling and attachment decoding; no knowledge base is retained locally, and no local network retrieval occurs. / 面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性代码分级与附件解码，不保留知识库，不进行本地网络检索。"
+summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。"
+description: "The single entry point for the ct-series across the full clinical-development lifecycle — a cloud-assisted clinical trial advisor. All questions (methodology / design / compliance / QC / site-execution / intelligence) are forwarded to the cloud Coze engine for analysis. The local side only performs a deterministic binary vague-gate (vague | forwarded) and attachment decoding; no knowledge base is retained locally, and no local network retrieval occurs. / 面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。"
 license: MIT
 triggers:
   - "ct-advisor"
@@ -41,6 +41,22 @@ tier: A
 ---
 
 # Clinical Trial Chief Advisor
+
+## Published Application
+
+| Item | Value |
+|---|---|
+| Share link | `https://ct-advisor.app.workbuddy.host/` |
+| appId | `wbapp_FBxILYuXi6yMolY8CsYzA7` |
+| domainPrefix | `ct-advisor` |
+| Deploy metadata | `workbench/app.config.json` |
+| Deployed as | Python HTTP service (`python ct-advisor-proxy.py`) |
+| Payload | `workbench/publish/` — in-skill, workspace-independent |
+
+> **Re-publish rule**: always overwrite with the existing `appId` — the link must stay
+> `https://ct-advisor.app.workbuddy.host/`. Never `createNewApp`. After deploy, assert the returned
+> `shareLink` equals the expected URL (see ct-base §13.5 dirty-binding red line). Last republished
+> 2026-09-26 (two-stage feedback + Coze-cloud transparency notice).
 
 ## Language
 
@@ -76,12 +92,12 @@ tier: A
 
 ### With a question only:
 ```bash
-python scripts/entry.py --q "在 III 期 NSCLC 患者中，对比 pembrolizumab 与化疗，主要终点 OS 的样本量如何估算？"
+python scripts/entry.py --q "In phase III NSCLC patients, comparing pembrolizumab vs chemotherapy, how is the sample size for the primary endpoint OS estimated?"
 ```
 
 ### With an attachment:
 ```bash
-python scripts/entry.py --q "这个文档和医学有关吗" --attach "/path/to/file.docx"
+python scripts/entry.py --q "Is this document related to medicine?" --attach "/path/to/file.docx"
 ```
 
 **That's it.** The stdout is the final answer — pipe it to the user verbatim.
@@ -89,22 +105,12 @@ python scripts/entry.py --q "这个文档和医学有关吗" --attach "/path/to/
 ### What entry.py does internally (all code, zero LLM) — the canonical pipeline
 
 ```
-STEP 1  Attachment gate (only if --attach given) — BOTH paths ship a FILE via doc_context
-        ├─ size < 5 MB  → doc_memory.build_file_payload(allow_upload=True)
-        │                 uploads the ORIGINAL file to Coze /upload_file,
-        │                 ships it as top-level `doc_context` (mode=file_id;
-        │                 auto-fallback to base64 forward channel on failure)
-        └─ size > 5 MB  → convert locally (office_to_md.py for OOXML / direct read
-                          for txt-like), then upload the resulting **.md as the
-                          attachment** through the SAME doc_context channel,
-                          plus an ℹ️ notice that the cloud answers from the md version
-STEP 2  Vague gate (deterministic regex, scripts/route.py — the ONLY difficulty check)
-        ├─ vague      → clarify_loop.py (≤3 rounds) → questions back to user, stop
-        └─ non-vague  → continue
-STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload)
-        parallel: Coze /run fire + local ct-skill prefetch → merge
-STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>,
-        entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
+STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
+        ├─ < 5 MB   → doc_memory.build_file_payload(allow_upload=True): upload ORIGINAL file to Coze /upload_file, ship as `doc_context` (mode=file_id; base64-forward fallback on failure)
+        └─ > 5 MB   → convert locally (office_to_md.py for OOXML / direct read for txt-like), upload the resulting **.md** through the SAME doc_context channel + ℹ️ notice that cloud answers from the md version
+STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
+STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): parallel Coze /run fire + local ct-skill prefetch → merge
+STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
 STEP 5  Output — stdout wrapped in <<<CT_ANSWER_START/END>>> + sha256 checksum
 ```
 
@@ -131,13 +137,28 @@ if m:
     actual_checksum = hashlib.sha256(answer.encode("utf-8")).hexdigest()[:16]
     if actual_checksum != expected_checksum:
         # TAMPER DETECTED — do NOT pass to user
-        print("⚠️ 答案完整性校验失败，请重试。")
+        print("⚠️ answer integrity check failed, please retry.")
     else:
         # OK — pass answer verbatim
         print(answer)
 ```
 
 **If the checksum does not match, the local LLM MUST NOT deliver the answer to the user.** This prevents any silent tampering.
+
+> 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. **The local LLM may call `entry.py` only ONCE per question** and must capture its entire stdout into memory/a variable. The sha256 check MUST run against that SAME captured result — **re-calling `entry.py` purely to perform the check is strictly forbidden** (it sends an identical request to the Coze backend again, doubling the latency; in practice this once caused "the same question sent 2–3 times, a single Q&A dragging to 4 minutes"). If you need to persist output, write the stdout already captured from the first run rather than re-running.
+
+**Verification discipline (L3, 2026-09-25)**: The sha256 integrity check MUST be performed inline against the stdout captured in memory from the SAME `entry.py` call — i.e. immediately after capture, do `re.search` + `hashlib.sha256` comparison in memory. **Forbidden**: writing stdout to a temp file just for the check, extra tool round-trips, or post-hoc temp-file cleanup. One extra file write/read/delete round-trip only adds agent-side latency and contributes nothing to the answer itself.
+
+## Performance Optimization & Deployment Notes (L1/L2/L3, 2026-09-26)
+
+This skill has implemented three performance optimizations; see `PERF_SOP.md` for details:
+- **L1 Resident orchestration service** (`scripts/serve.py` + `entry.py` client): heavy modules are warmed up once, so local overhead → 0.
+- **L2 Parallel warm-up** (`scripts/orchestrate.py`): eliminates stacked serial imports.
+- **L3 Inline verification discipline** (see "Verification discipline" above): sha256 must be done inline in memory; writing temp files is forbidden.
+
+**⚠️ Deployment restriction (important)**: the skill directory lives on a network share whose ACL is creator-owner — you can create new files, but **overwriting pre-installed existing files raises `PermissionError 13`**, and deletion is also blocked by a trash hook. Therefore, any change to `scripts/*.py` / `SKILL.md` should be written as a same-directory `.new` copy, then overwritten on the user's local machine with `move /Y` (command in `PERF_SOP.md` §4, or run `scripts/_perf_deploy.py`).
+
+**Version drift**: the resident service caches code; after updating skill files, the old service still runs old code until its 600s idle timeout. `entry.py` has a built-in `/version` probe that, before reusing an old service, compares the local `orchestrate.py` mtime — if the local copy is newer it auto-shuts-down the old service and launches the new version, with no manual restart needed.
 
 ## Requirements
 
@@ -175,24 +196,3 @@ Runs automatically inside `entry.py` → `scripts/orchestrate.py` before each ou
 ## Bug Report (§20.3 · ct-base)
 
 On defect detection or explicit user request, `adapters/bug_report.py` offers a sanitized 11-key report to `https://ct-bugreport.coze.site/run`. Two-stage confirmation mandatory.
-
-## Changelog — full history (0.8.0 → 1.0.0+) → **[CHANGELOG.md](CHANGELOG.md)**
-
-### v1.2.0 (2026-09-25) — Framework consolidation
-
-- **Documented the canonical 5-step pipeline** (attachment gate → vague gate → forward → delegate stitch → wrapped output) matching the actual entry.py code; previous text still described the old "OOXML → local md → append to question" flow.
-- **Deleted dead code** (coze-only leftovers): `adapters/backend.py` / `data_context.py` / `qa_store.py` (legacy LocalBackend + QA-log seams, never on the entry.py chain), `_patch14*.py`, `drug_name_resolver / keyword_breadth / landscape_scorer / source_guard / r_libs / workflows.json / menu.json / test_modeB.py`.
-- **Deleted stale snapshot directories** (~185 MB): `_TRASH-20260924-clean`, `scripts.park-20260924-*`, `adapters/coze.park-20260924-*`, `workbench.park-20260924-wbpatch`, `out/`.
-- **Proxy hardening** (see CHANGELOG): upload probe + `upload_to_coze` now retry direct-bypass on dead-proxy environments (fresh urllib Request per attempt).
-- **doc_context pass-through fix**: `orchestrate._build_request` now forwards doc_context / scope_hint / conversation_history / is_followup to Coze (attachments previously evaporated silently).
-
-### v1.1.0 (2026-09-24) — Zero-LLM-intervention architecture
-
-- **Removed `knowledge/` directory entirely** — all domain knowledge lives on the Coze side (single source of truth)
-- **Removed `scripts/search_refs.py`, `scripts/update_reference_index.py`, `references/search-sites.md`** — no local knowledge lookup, no local network retrieval, no web search fallback
-- **Added `scripts/entry.py`** — single code entry point that serializes: attachment decode → route.py → clarify_loop (if vague) → orchestrate.py → card-inline auto-execution. The local LLM's only action is to call entry.py and pipe stdout.
-- **Removed all agent-side workflow steps (steps 0–6)** — replaced with the single entry.py call pattern
-- **Removed all agent delegation language ("you must call ...", "you should ...")** — the code now orchestrates itself; the local LLM is a pure pipe
-- **sha256 tamper-check** — entry.py emits a checksum after `<<<CT_ANSWER_END>>>`; the local LLM must verify it before delivering the answer
-- **Eliminated all local fallback paths** — if Coze fails, the answer says "please retry" — the local LLM no longer has any knowledge base to fall back to
-- **Updated AGENTS.md** to reflect the new zero-local-knowledge architecture

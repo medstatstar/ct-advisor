@@ -9,17 +9,20 @@ Variables: query_meta (incl. query_origin machine id), original_question, draft_
 Calls build_refiner().refine() to get the final answer, prints it to stdout.
 
 query_meta is a JSON string with three fields:
-  - difficulty: simple | middle | complex | vague
+  - difficulty: vague | forwarded (2026-09-26 binary gate; legacy simple/middle/complex
+                values are still accepted for payload compatibility but carry no meaning —
+                the Coze server always re-judges difficulty with its own LLM)
   - category:   question category (e.g. methodology:B / design / compliance:D)
   - accuracy:   self-rated accuracy good | normal (good = precise, normal = generic)
 
 Robustness: any exception falls back to printing draft_answer and exits 0, so the agent
 always gets a usable answer and the conversation never breaks due to a script crash.
 By default it calls the Coze refiner with a single call and a conditional timeout — 90s default
-(`refiner.timeout`), widened to 300s (`refiner.long_timeout`) for long tasks (complex difficulty /
-template-type category / follow-up with packed conversation history). On Coze timeout/error it
-degrades to the local draft as a fault fallback — there is no local-only mode; the stderr fallback
-line reports the *actual* resolved timeout, not a hardcoded value.
+(`refiner.timeout`), widened to 300s (`refiner.long_timeout`) for long tasks (route.timeout_tier
+== "long" on the forwarded question / template-type category / follow-up with packed conversation
+history). On Coze timeout/error it degrades to the local draft as a fault fallback — there is no
+local-only mode; the stderr fallback line reports the *actual* resolved timeout, not a hardcoded
+value.
 """
 from __future__ import annotations
 

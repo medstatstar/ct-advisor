@@ -128,3 +128,9 @@ Thumbs.db
 config/doc_store/
 # audit_baseline.json 仅被 scripts/test_*.py（不发布）引用的内部审计基线
 scripts/audit_baseline.json
+
+# ── 发布基础设施显式排除（ct-base §13.5，工作台日后纳入发布时的独立护栏）──
+workbench/publish-kit/
+PERF_SOP.md
+stderr.log
+.write_test

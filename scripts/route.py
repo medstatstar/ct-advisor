@@ -1,55 +1,44 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ct-advisor — 确定性难度分类器（代码级，无 LLM）
+ct-advisor — 确定性入口闸门（代码级，无 LLM · 二值判定）
 
 设计目标（治本，不依赖 LLM 纪律）：
   - 把「是否发 Coze / 是否需澄清」的决策从主 Agent（本地 LLM）收归成**代码确定性分类**。
   - 主 Agent 永远不自己判断难度，只运行本脚本拿标签，从根上消除
     「本地模型先理解问题→顺手答题→抢答/3-5min 循环」的旧故障。
 
-【2026-09-24 定位降级 · 只保留 vague 判定与超时选择】
-  实测确认（Coze 端 generate_organized_problems_node._judge_difficulty 源码注释）：
-  服务端每次都用 LLM（config/judge_difficulty_cfg.json，doubao-seed-2-0-mini，temp=0）
-  **重新估计** difficulty 并**忽略上游标签**。即本地 simple/middle/complex 三档判定
-  对最终答案的长度与深度**完全无效**。
-  故本模块主动维护的逻辑收敛为两项：
-    ① is_vague()     —— vague 是唯一「不转发 Coze」的分支（本地澄清循环入口）**持续维护**
-    ② timeout_tier() —— 决定转发超时档位 short / long **持续维护**
-  simple / middle / complex 相关正则标记 [FROZEN]：仅为兼容既有 CLI 与调用方保留，
-  **不再调优、不再演进**；route_question() 的返回值不再声称代表难度档位。
+【2026-09-26 二值化改造】判定结果只回答一个问题：**是否 vague**。
+  本模块不再输出 simple / middle / complex 三档标签。理由：
+    ① Coze 服务端每次都用 LLM（config/judge_difficulty_cfg.json）**重新估计**
+       difficulty 并忽略上游标签（generate_organized_problems_node._judge_difficulty），
+       本地三档对答案长度与深度完全无效；
+    ② 本地链路（entry.py）早已只消费 is_vague()，非 vague 统一标记 "forwarded"；
+    ③ 三档标签的"兜底 complex"曾误导 Agent 与用户对"难度判定"的预期
+       （未命中任何信号 ≠ 真复杂，只是默认转发）。
+
+  本模块持续维护的两项能力：
+    ① is_vague()     —— vague 是唯一「不转发 Coze、先本地澄清」的分支
+    ② timeout_tier() —— 转发超时档位 short / long（内部信号，不是难度标签，
+                         由 refiner 在 difficulty == "forwarded" 时调用）
 
 用法：
   python scripts/route.py "用户问题原文"
-        → 打印一个标签：simple | vague | middle | complex
+        → 打印一个标签：vague | forwarded
   python scripts/route.py --json "用户问题原文"
-        → 打印 {"route": "...", "timeout": "...", "signals": {...}}
+        → 打印 {"vague": true|false, "route": "...", "timeout": "short|long"}
   python scripts/route.py --timeout "用户问题原文"
-        → 打印 short | long（本地超时档位，唯一权威入口）
+        → 打印 short | long（本地超时档位）
   python scripts/route.py --self-test
-        → 跑内置分类自测，输出每例命中/预期与准确率
+        → 跑内置二值自测，输出每例命中/预期与准确率
 
-【route.py 的核心职责（2026-08-17 明确）】
-  本地代码**最主要用途是拆分出 vague**——指代不明/过短/回指省略的问题在本地拦截、
-  进入 clarify_loop 澄清，绝不转发 Coze。
-  simple / middle / complex 仅作为转发时附带的【提示标签】，Coze 服务端会【一律用 LLM
-  重新估计】difficulty 并写回（见 generate_organized_problems_node._resolve_difficulty），
-  因此本地判定结果不决定最终难度档位，也不作为 Coze 侧硬性路由键。
+分类逻辑（确定性，瞬时，stdlib-only）：
+  1. 空串 / is_vague（指代不明/过短/回指省略，判断**可偏多**）→ vague
+       （进入 clarify_loop 启发式菜单；宁可多澄清也不漏发 Coze）
+  2. 其余 → forwarded（一律 verbatim 转发 Coze；难度与深度由 Coze 端判定）
 
-分类优先级（确定性，瞬时，stdlib-only）：
-  1. 空串                       → vague
-  2. 🔴 is_vague（指代不明/过短/回指省略，判断**可偏多**）→ vague
-                               （进入 clarify_loop 启发式菜单；宁可多澄清也不漏发 Coze）
-  3. is_simple（定义/标准操作） → simple        （附提示标签转发 Coze）
-  4. 命中 complex 强信号        → complex        （含预路由拦截：外部数据/样本量强制 complex）
-  5. is_middle（显式解释/比较）  → middle         （附提示标签转发 Coze）
-  6. 兜底                       → complex        （未命中任何信号一律 complex，绝漏发车）
-
-入口分流（2026-08-14 晚，与 SKILL.md 对齐）：
-  - 🔴 **vague 最先判定（判断可偏多）**：发现 vague 立即进入本地澄清循环
-    scripts/clarify_loop.py（启发式菜单）明确需求，收敛后再转发 Coze；绝不漏发 Coze。
-  - simple / middle / complex → 一律 verbatim 转发 Coze（forward-only），并随 payload 带上
-    query_meta.difficulty 提示标签（Coze 会重新估计，仅作参考）。
+转发 payload 约定：query_meta.difficulty 填 "vague"（经澄清收敛后仍 vague 时）
+或 "forwarded"；与 entry.py 行为一致，refiner 枚举已接受二者。
 """
 
 import argparse
@@ -61,22 +50,20 @@ import sys
 # 信号词典（确定性、可单测）
 # ---------------------------------------------------------------------------
 
-# 受控术语（CDISC / 临床试验领域），仅作 simple 的辅助证据 + vague 排除
+# 受控术语（CDISC / 临床试验领域），仅作 vague 排除锚点（短问句含术语 → 不算含糊）
 TERM = re.compile(
     r"(SDTM|ADaM|AE|SAE|CE|CM|DS|VS|LB|EG|RS|SV|SE|TA|TI|TV|"
     r"CSR|TLF|CRF|EDC|eCRF|SAP|ICH[- ]?GCP|GCP|CDISC|ADSL|BDS|OCCDS|ADTTE|"
-    r"PK|PD|MedDRA|WHODrug|IB|SUSAR|DSUR|ICF|RBM|QbD|ALCOA)"
+    r"PK|PD|MedDRA|WHODrug|IB|SUSAR|DSUR|ICF|RBM|QbD|ALCOA|ITT)"
 )
 
-# 定义意图（仅查询式："X 的定义/定义是/精确定义"；裸「定义」过宽，
-# "如何定义 X 的标准"这类方法论句式会误判 simple → 已排除）
+# 定义意图（vague 排除锚点：短问句含定义句式时不算含糊）
 DEF = re.compile(
     r"(什么是|什么意思|的定义|定义是|定义是什么|精确定义|含义|全称|英文缩写|英文全称|英文是|"
     r"\bmeans\b|\bdefine\b|definition)"
 )
 
-# 标准操作 / 本地 SOP（有明确标准答案，本地可答 → simple）
-# 注意：不含裸「应如何处理 / 如何评估」（这些也出现在 middle/complex，会漏判到 simple）
+# 标准操作句式（vague 排除锚点）
 STOP = re.compile(
     r"(是否符合|正确做法|记录和处理|"
     r"需要完成哪些核心|需要完成哪些关键|哪些关键任务|哪些核心步骤|需要在何时|应在何时|"
@@ -92,85 +79,7 @@ STOP = re.compile(
     r"保存多久|保留多久|是否属于|算不算|是否算|什么手续|正式退出)"
 )
 
-# simple 排除信号（命中任一 → 不是 simple）。聚焦「设计/协调/框架/体系/变更/
-# 前沿/灰色/跨学科/机制/因果/特定主题词」。注意：裸「方案」「系统」过宽（基础题常
-# 提方案偏离/方案规定、HIS系统/EDC系统），已移除，仅用 方案设计/试验设计 等特异性词。
-EXCL = re.compile(
-    r"(设计|规划|策略|计划|区别|差异|对比|\bvs\b|哪个好|哪个更|"
-    r"竞品|文献|为什么|如何保证|这个|那个|它|它们|"
-    r"所有|全面|完整|汇总|综合|多工作流|端到端|最佳|推荐|优劣|利弊|"
-    r"协调|框架|体系|变更|多重|动态|跨学科|前沿|灰色|合并|转移|转至|培训|"
-    r"机制|因果关系|障碍|应急|外推|角色|义务|价值|证据|"
-    r"豁免|弱势|胁迫|利益冲突|保险|稽查|供应链|网络|区块链|联邦|"
-    r"AI|基因|放射性|CMC|附条件|同情|儿科|跨境|数据保护|同时|联合|"
-    r"如何设计|试验设计|随机化设计|体系设计|方案设计)"
-)
-
-# complex 强信号（命中任一 → 强制 complex）。已剔除仅在基础/中等题出现的
-# 注册/应急/附条件/利益冲突（保留 监管/统计/样本量/设计… 等真正复杂专属信号）。
-# 2026-08-12 补跨库稳定复杂主题词（监管设计/前沿/机制/数据完整性，两题库联合验证）。
-CPLX = re.compile(
-    r"(设计终点|试验设计|随机化设计|体系设计|方案设计|如何设计|"
-    r"工艺变更|CMC变更|生产变更|变更评估|"
-    r"框架|体系|多重比较|动态|同时测试|主方案|篮子|平台试验|适应性|贝叶斯|"
-    r"代际|灰色|前沿|跨学科|基因编辑|基因治疗|生殖系|放射性|CAR-T|CMC|同情用药|"
-    r"儿科外推|区块链|联邦学习|AI聊天|AI辅助|AI算法|iRECIST|BICR|网络安全|欺诈|结构性胁迫|"
-    r"弱势群体|豁免|紧急使用|供应链|跨境|数据保护|外推|"
-    r"NDA|CDE|Pre-IND|CIOMS|AESI|敏感性分析|因果关系|突破性治疗|DSMB|"
-    r"勒索软件|地震|RPSFT|交叉调整|继续治疗|维持治疗|退出条件|eCOA|ePRO|PRO数据|PRO终点|"
-    r"统计|假设检验|检验效能|估算|计算|样本量|n\s*=|"
-    r"文献|安全性信号|靶点|适应症|剂量)"
-)
-
-# middle 显式信号（仅在无 complex 信号时生效；放宽以接住中等题，避免坠入兜底→complex）
-MID = re.compile(
-    r"(解释|说明|区别|差异|对比|比较|\bvs\b|为什么|如何|怎么|步骤|流程|"
-    r"如何处理|如何评估|哪些因素|需要考虑|如何协调|如何确定|如何解读|"
-    r"是否允许|需要哪些审批|解读|分析|评估|"
-    r"应启动哪些|是否可接受|如何管理|优先遵循|还需要哪些|还需要完成|"
-    r"是否需要将|是否需要持有|应在多长时间)"
-)
-
-# vague 指代信号（显性代词 + 短句）
-VAGUE_PRON = re.compile(r"(这个|那个|它|它们|这|那)")
-
-# 回指 / 省略线索（指向前文未明说的对象）。偏宽松：用复合形式（如"之前提到"）
-# 避免误伤"之前的药物"这类清晰短句；纯方位词（前面/后面/上面/下面/前者/后者）
-# 几乎总是语篇指代，直接纳入。
-ANAPHORA = re.compile(
-    r"(前面|后面|上面|下面|前者|后者|前边|后边|前述|前述的|上述的|"
-    r"之前提到|之前说|之前讨论|刚才说|刚才提到|刚才问|刚才讨论|"
-    r"上一条|上一个问题|上轮|上一次|您说的|你说的|您讲的|我说的|"
-    r"前面那个|后面那个|上面那个|下面那个)"
-)
-
-# 语义 vague（2026-08-20 修复：README 示例 5 实测判 complex 的根因）：
-# 用户明说「不确定/不知道需要什么」且无明确对象 → 进入本地澄清。
-# 仅命中「不确定 X 是否/能不能…」这类**有明确对象的具体判断**时不判 vague
-# （由 is_vague 内的排除检查处理，避免把「不确定这样做是否合规」误拉进澄清）。
-VAGUE_UNCERTAIN = re.compile(
-    r"(?:不.{0,2}(?:确定|清楚|知道|了解)|没想好|拿不准|没有头绪|毫无头绪)"
-    r".{0,10}(需要什么|要什么|做什么|怎么办|怎么弄|该做什么|该问什么|问什么|"
-    r"怎么开始|从哪(?:里)?开始|什么需求|需求是什么|怎么用|怎么提问)|"
-    r"\b(not sure|not certain|unsure|don'?t know|no idea|not clear|no clue)"
-    r".{0,24}\b(what|how|which|where)\b|"
-    r"\bwhat (?:do|should|can) i (?:need|ask|do|get|want)\b",
-    re.IGNORECASE,
-)
-# 有明确对象的判断句式（命中 → 不算语义 vague）
-VAGUE_UNCERTAIN_EXCL = re.compile(
-    r"(不确定|不清楚|不知道|not sure|not certain|unsure).{0,14}"
-    r"(是否|能不能|可不可以|对不对|合理|合规|正确|appropriate|valid|acceptable|\bif\b)",
-    re.IGNORECASE,
-)
-
-# ---------------------------------------------------------------------------
-# simple 白名单：标准操作 / 定义类主题短语（纯本地正则匹配，无知识包依赖）
-# 使用约束：仅当 未命中 CPLX（设计/统计/外部数据）且未命中 EXCL 时才生效，
-# 确保白名单不会把「设计/监管/灰色地带」类问题误拉进 simple（漏发车红线）。
-# 2026-09-24 改造：移除对 knowledge/reference-index.md 的依赖，
-# 所有知识判定统一由 Coze 端完成，本地仅保留确定性分级逻辑。
-# ---------------------------------------------------------------------------
+# 标准操作主题白名单（vague 排除锚点）
 SIMPLE_TOPICS = re.compile(
     r"(alcoa|sdv|isf\b|siv\b|"
     r"上报时限|报告时限|sa[e]?\s*报告|sae 报告|"
@@ -191,40 +100,60 @@ SIMPLE_TOPICS = re.compile(
     re.IGNORECASE,
 )
 
+# 长耗时信号（仅供 timeout_tier 使用：多步检索/生成类问题放宽等待上限，与难度标签无关）
+CPLX = re.compile(
+    r"(设计终点|试验设计|随机化设计|体系设计|方案设计|如何设计|"
+    r"工艺变更|CMC变更|生产变更|变更评估|"
+    r"框架|体系|多重比较|动态|同时测试|主方案|篮子|平台试验|适应性|贝叶斯|"
+    r"代际|灰色|前沿|跨学科|基因编辑|基因治疗|生殖系|放射性|CAR-T|CMC|同情用药|"
+    r"儿科外推|区块链|联邦学习|AI聊天|AI辅助|AI算法|iRECIST|BICR|网络安全|欺诈|结构性胁迫|"
+    r"弱势群体|豁免|紧急使用|供应链|跨境|数据保护|外推|"
+    r"NDA|CDE|Pre-IND|CIOMS|AESI|敏感性分析|因果关系|突破性治疗|DSMB|"
+    r"勒索软件|地震|RPSFT|交叉调整|继续治疗|维持治疗|退出条件|eCOA|ePRO|PRO数据|PRO终点|"
+    r"统计|假设检验|检验效能|估算|计算|样本量|n\s*=|"
+    r"文献|安全性信号|靶点|适应症|剂量)"
+)
+
+# vague 指代信号（显性代词 + 短句）
+VAGUE_PRON = re.compile(r"(这个|那个|它|它们|这|那)")
+
+# 回指 / 省略线索（指向前文未明说的对象）。偏宽松：用复合形式（如"之前提到"）
+# 避免误伤"之前的药物"这类清晰短句；纯方位词（前面/后面/上面/下面/前者/后者）
+# 几乎总是语篇指代，直接纳入。
+ANAPHORA = re.compile(
+    r"(前面|后面|上面|下面|前者|后者|前边|后边|前述|前述的|上述的|"
+    r"之前提到|之前说|之前讨论|刚才说|刚才提到|刚才问|刚才讨论|"
+    r"上一条|上一个问题|上轮|上一次|您说的|你说的|您讲的|我说的|"
+    r"前面那个|后面那个|上面那个|下面那个)"
+)
+
+# 语义 vague（2026-08-20 修复）：用户明说「不确定/不知道需要什么」且无明确对象
+# → 进入本地澄清。
+VAGUE_UNCERTAIN = re.compile(
+    r"(?:不.{0,2}(?:确定|清楚|知道|了解)|没想好|拿不准|没有头绪|毫无头绪)"
+    r".{0,10}(需要什么|要什么|做什么|怎么办|怎么弄|该做什么|该问什么|问什么|"
+    r"怎么开始|从哪(?:里)?开始|什么需求|需求是什么|怎么用|怎么提问)|"
+    r"\b(not sure|not certain|unsure|don'?t know|no idea|not clear|no clue)"
+    r".{0,24}\b(what|how|which|where)\b|"
+    r"\bwhat (?:do|should|can) i (?:need|ask|do|get|want)\b",
+    re.IGNORECASE,
+)
+# 有明确对象的判断句式（命中 → 不算语义 vague）
+VAGUE_UNCERTAIN_EXCL = re.compile(
+    r"(不确定|不清楚|不知道|not sure|not certain|unsure).{0,14}"
+    r"(是否|能不能|可不可以|对不对|合理|合规|正确|appropriate|valid|acceptable|\bif\b)",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # 分类函数
 # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# ⚠️ 以下 simple / middle / complex 相关正则与函数自 2026-09-24 起标记 [FROZEN]
-# ---------------------------------------------------------------------------
-# 冻结理由：Coze 服务端用 LLM 重判 difficulty 并忽略上游标签（见模块 docstring），
-#   本地三档判定不影响答案的长度与深度，继续调优零收益，且易与服务端判定产生认知冲突。
-# 保留原因：route_question() 的返回值已被 CLI 契约与既有调用方依赖，删除会破坏兼容。
-# 维护红线：**只可冻结，不可演进**；新增能力一律走 timeout_tier()。
-# ---------------------------------------------------------------------------
-
-def is_simple(q: str) -> bool:
-    """[FROZEN 2026-09-24] 单点定义 / 标准操作 → simple。（不再调优）"""
-    if len(q) > 140:
-        return False
-    if DEF.search(q) or STOP.search(q):
-        return not EXCL.search(q)
-    # 白名单：knowledge 标准操作主题，命中且无 complex/排除信号 → simple 本地直答
-    if SIMPLE_TOPICS.search(q) and not CPLX.search(q) and not EXCL.search(q):
-        return True
-    # 纯术语裸词（≤12 字，无排除信号）→ 当定义查，本地快答
-    if TERM.search(q) and len(q) <= 12:
-        return not EXCL.search(q)
-    return False
-
-
 def is_vague(q: str) -> bool:
     """指代不明 / 过短无实体 / 回指省略 → vague。
-    🔴 入口最高优先级（仅次空串）：vague 是唯一「不转发 Coze」的分支，必须最先判定；
-    判断**可偏多**——宁可进本地澄清菜单，也不漏发 Coze。simple/middle/complex
-    仅是 verbatim 转发的备用标签。"""
+    🔴 唯一闸门判据：vague 是唯一「不转发 Coze」的分支（判断**可偏多**——
+    宁可进本地澄清菜单，也不漏发 Coze）。"""
     # 1) 显性指代代词 + 短句（上限放宽到 24，覆盖"这个样本量计算要考虑什么"）
     if VAGUE_PRON.search(q) and len(q) <= 24:
         return True
@@ -242,15 +171,8 @@ def is_vague(q: str) -> bool:
     return False
 
 
-def is_middle(q: str) -> bool:
-    """[FROZEN 2026-09-24] 显式解释 / 比较 / 单步推理，且无 complex 信号 → middle。"""
-    if CPLX.search(q):
-        return False
-    return bool(MID.search(q))
-
-
 # ---------------------------------------------------------------------------
-# 超时档位（2026-09-24 新增 · 本模块唯一持续维护的「非 vague」逻辑）
+# 超时档位（内部信号 · 与 vague 判定共同构成本模块全部职责）
 # ---------------------------------------------------------------------------
 
 LONG_TIMEOUT_CHARS = 80
@@ -259,11 +181,12 @@ LONG_TIMEOUT_CHARS = 80
 def timeout_tier(q: str) -> str:
     """本地转发超时档位：返回 "short" | "long"。
 
-    这是本地**唯一**需要用复杂度信号做决策的地方——超时是网络等待上限（refiner.timeout
-    vs refiner.long_timeout），与答案难度无关：判定为 long 只是放宽上限，不会让快请求变慢。
+    超时是网络等待上限（refiner.timeout vs refiner.long_timeout），与答案难度无关：
+    判定为 long 只是放宽上限，不会让快请求变慢。refiner 在 difficulty == "forwarded"
+    时调用本函数决定等待档位。
 
     判据（保守放宽，宁可长不可短，避免长问题被 90s 截断）：
-      1. 命中 CPLX 强信号（统计/样本量/设计/外部数据…）→ long
+      1. 命中 CPLX 长耗时信号（统计/样本量/设计/外部数据…）→ long
       2. 问题长度 >= LONG_TIMEOUT_CHARS（长问句通常需多步检索）→ long
       3. 其余 → short
     """
@@ -278,88 +201,66 @@ def timeout_tier(q: str) -> str:
 
 
 def route_question(q: str) -> str:
-    """返回 simple | vague | middle | complex。
+    """返回 vague | forwarded —— 本模块唯一对外判定结果。
 
-    🔴 vague 优先：入口唯一不转发 Coze 的分支，必须最先判定（判断可偏多）。
-
-    ⚠️ 2026-09-24 定位降级：vague 之外的三档标签**不代表难度**（服务端用 LLM 重判并
-    忽略上游标签），仅为兼容 CLI 契约与既有调用方保留，**已冻结、不再演进**。
-    真正需要用复杂度信号做决策的地方请改用 timeout_tier()。"""
+    🔴 vague：不直接转发，先进本地澄清循环（clarify_loop.py），收敛后再转发。
+       forwarded：一切非 vague 问题，verbatim 转发 Coze；难度与深度由 Coze 端判定。"""
     q = (q or "").strip()
     if not q:
         return "vague"
-    if is_vague(q):            # 🔴 最高优先级：vague 必须先于 simple/complex 判定
-        return "vague"
-    if is_simple(q):
-        return "simple"
-    if CPLX.search(q):          # 预路由拦截 + 设计/外部数据/选项/复合 → 强制 complex
-        return "complex"
-    if is_middle(q):
-        return "middle"
-    return "complex"            # 兜底：未命中任何信号一律 complex，绝漏发车
+    return "vague" if is_vague(q) else "forwarded"
 
 
 def route_with_signals(q: str) -> dict:
-    """调试用：返回标签 + 超时档位 + 各规则命中情况。"""
+    """调试用：返回二值判定 + 超时档位。"""
     q = (q or "").strip()
+    v = is_vague(q) if q else True
     return {
-        "route": route_question(q),
+        "vague": v,
+        "route": "vague" if v else "forwarded",
         "timeout": timeout_tier(q),
-        "signals": {
-            "vague": is_vague(q),
-            "timeout_tier": timeout_tier(q),
-            # ↓ [FROZEN] 仅作兼容观测，不代表难度
-            "simple": is_simple(q),
-            "middle": is_middle(q),
-            "complex_forced": bool(CPLX.search(q)),
-        },
     }
 
 
 # ---------------------------------------------------------------------------
-# 内置分类自测（用 --self-test 运行；词典调优闭环）
+# 内置二值自测（用 --self-test 运行）
 # ---------------------------------------------------------------------------
 
 SELF_TEST = [
-    # (问题, 期望标签)
-    # ---- simple：定义 / 标准操作 ----
-    ("什么是 SDTM", "simple"),
-    ("AE 的英文全称是什么", "simple"),
-    ("如何提交不良事件报告", "simple"),
-    ("CRF 填写步骤", "simple"),
-    ("SAE 上报时限", "simple"),
-    ("SDTM", "simple"),
-    ("上报时限是多少", "simple"),   # 短而清晰（含 STOP），不误判 vague（精度护栏）
+    # (问题, 期望标签: vague | forwarded)
+    # ---- forwarded：清晰可转发（不区分难度）----
+    ("什么是 SDTM", "forwarded"),
+    ("AE 的英文全称是什么", "forwarded"),
+    ("如何提交不良事件报告", "forwarded"),
+    ("CRF 填写步骤", "forwarded"),
+    ("SAE 上报时限", "forwarded"),
+    ("SDTM", "forwarded"),
+    ("上报时限是多少", "forwarded"),
+    ("ITT今年有什么进展？", "forwarded"),      # 曾因三档兜底误显 complex，二值化后清晰转发
+    ("解释 SDTM 和 ADaM 的区别", "forwarded"),
+    ("为什么 AE 需要分级", "forwarded"),
+    ("如何设计一个抗肿瘤药的随机对照试验方案", "forwarded"),
+    ("样本量计算要考虑哪些因素", "forwarded"),
+    ("不确定下一步怎么办，做法是否合规", "forwarded"),  # 明确对象排除 → 不澄清
+    ("I'm not sure if this design is appropriate", "forwarded"),  # EN 排除 vague
     # ---- vague：指代不明 / 过短 / 回指省略（判断偏多）----
     ("这个怎么弄", "vague"),
     ("那个是什么意思", "vague"),
     ("它是指什么", "vague"),
-    ("这个样本量怎么算", "vague"),            # 含代词 + CPLX 词，仍判 vague（修复漏判）
-    ("那个试验设计要注意什么", "vague"),        # 含代词 + CPLX 词
+    ("这个样本量怎么算", "vague"),              # 含代词仍判 vague（宁可多澄清）
+    ("那个试验设计要注意什么", "vague"),
     ("前面说的统计检验方法该怎么选", "vague"),    # 回指省略
     ("上一条说的不良事件要怎么报", "vague"),      # 复合回指
     ("怎么办", "vague"),
     ("我不太确定自己到底需要什么", "vague"),      # 语义 vague（README 示例 5 ZH）
-    ("I'm not sure what I actually need", "vague"),  # 语义 vague（README 示例 5 EN）
-    ("我不知道该从哪里开始", "vague"),            # 语义 vague 变体
-    # ---- middle：显式解释 / 比较，无 complex 信号 ----
-    ("解释 SDTM 和 ADaM 的区别", "middle"),
-    ("说明 SDTM 的变量命名规则", "middle"),
-    ("为什么 AE 需要分级", "middle"),
-    # ---- complex：设计 / 外部数据 / 选项 / 复合（默认） ----
-    ("如何设计一个抗肿瘤药的随机对照试验方案", "complex"),
-    ("注册库中 PD-1 抑制剂的三期试验有哪些", "complex"),
-    ("推荐一个适合二型糖尿病的终点指标", "complex"),
-    ("样本量计算要考虑哪些因素", "complex"),
-    ("CRF 设计要注意什么", "complex"),
-    ("对比两种统计检验方法的优劣", "complex"),
-    ("不确定下一步怎么办，做法是否合规", "middle"),  # 语义 vague 命中 + 明确对象排除（是否）→ 不澄清，转发（middle）
-    ("I'm not sure if this design is appropriate", "complex"),  # EN 排除 vague
+    ("I'm not sure what I actually need", "vague"),  # 语义 vague（EN）
+    ("我不知道该从哪里开始", "vague"),
+    ("", "vague"),                             # 空串兜底进澄清
 ]
 
 
 def run_self_test() -> int:
-    print("route.py 分类自测")
+    print("route.py 二值自测（vague | forwarded）")
     print("=" * 56)
     ok = 0
     for q, expect in SELF_TEST:
@@ -367,7 +268,7 @@ def run_self_test() -> int:
         mark = "✓" if got == expect else "✗"
         if got == expect:
             ok += 1
-        print(f"  {mark} [{got:<7}] 期望 {expect:<7} | {q}")
+        print(f"  {mark} [{got:<9}] 期望 {expect:<9} | {q}")
     total = len(SELF_TEST)
     print("-" * 56)
     print(f"  准确率: {ok}/{total} = {ok / total * 100:.1f}%")
@@ -379,12 +280,12 @@ def run_self_test() -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="ct-advisor deterministic difficulty router (Mode B)")
+    ap = argparse.ArgumentParser(description="ct-advisor deterministic entry gate (vague | forwarded)")
     ap.add_argument("question", nargs="?", help="用户问题原文")
-    ap.add_argument("--json", action="store_true", help="输出 JSON（含命中信号）")
+    ap.add_argument("--json", action="store_true", help="输出 JSON（含超时档位）")
     ap.add_argument("--timeout", action="store_true",
-                    help="输出本地超时档位 short|long（唯一权威入口）")
-    ap.add_argument("--self-test", action="store_true", help="运行内置分类自测")
+                    help="输出本地超时档位 short|long")
+    ap.add_argument("--self-test", action="store_true", help="运行内置二值自测")
     args = ap.parse_args()
 
     if args.self_test:

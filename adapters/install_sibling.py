@@ -11,8 +11,8 @@ A/B 档门控里「用户同意 → 安装 → 再执行」这一步，此前给
   2. 直接调 `~/.skillhub/skills_store_cli.py` 时，本机该文件是**精简版**
      （v2026.3.6, 44KB），其下载端点指向内网 LB，实测返回非 zip
      （"Downloaded file is not a valid zip archive"）；
-  3. 完整版 CLI 位于网络盘，路径是 UNC（`//filesrv/...`），把 UNC 写进命令串经
-     bash/Git-Bash 传递会被二次拼接成 `\\filesrv\c$\filesrv\c$\...` 而打不开。
+  3. 完整版 CLI 位于内网文件盘，路径是 UNC（`//<内网文件服务器>/...`），把 UNC 写进命令串经
+     bash/Git-Bash 传递会被二次拼接（盘符共享根重复，如 `\\<host>\c$\<host>\c$\...`）而打不开。
 
 本脚本把安装动作收敛成**一条由同解释器执行的命令**：纯标准库、路径以参数列表
 传递（subprocess 不经 shell，天然规避 MSYS 路径转换与 UNC 拼接）、先核验上架
@@ -22,24 +22,31 @@ A/B 档门控里「用户同意 → 安装 → 再执行」这一步，此前给
 ----
   1. 核验：查 SkillHub search API，`slug` 或 `namespace.publicSlug` 精确命中才继续。
      未命中 → 拒绝安装并退出码 3（防止把未发布 / B 档技能装进来）。
-  2. 下载：GET {DOWNLOAD_URL}?slug=<slug>，校验是合法 zip 且根含 SKILL.md。
-  3. 落盘：解压到 <dir>/<slug>/。已存在则拒绝，除非 --force。
+  2. 下载：GET {DOWNLOAD_URL}?slug=<slug>。**端点默认锁定官方 host 白名单**（HTTPS）；
+     镜像/联调需显式 --allow-custom-endpoint 才接受 env 覆写（防环境变量劫持重定向）。
+  3. 校验：合法 zip 且根含 SKILL.md + **zip 内部 CRC 全量校验（zf.testzip）** +
+     拒绝符号链接条目 + 越界路径检查；可用 --expect-sha256 锚定包内容摘要。
+  4. 落盘：解压到 <dir>/<slug>/。已存在则拒绝，除非 --force。
      （SkillHub 包是扁平结构：SKILL.md 直接在 zip 根，故目标目录须带 slug 层。）
 
 用法
 ----
   python adapters/install_sibling.py <slug> [--dir <技能根目录>] [--force] [--dry-run] [--json]
+                                      [--allow-custom-endpoint] [--expect-sha256 <hex>]
 
 环境变量：CT_SKILLS_DIR 覆盖默认技能根目录；SKILLHUB_SEARCH_URL /
-SKILLHUB_DOWNLOAD_URL 覆盖接口地址（本地联调 / 内网镜像用）。
+SKILLHUB_DOWNLOAD_URL 覆盖接口地址（**须与官方 host 一致，或显式传
+--allow-custom-endpoint**，否则拒绝——见「行为」第 2 条）。
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import os
 import shutil
+import stat as _stat
 import sys
 import tempfile
 import urllib.error
@@ -48,6 +55,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+OFFICIAL_HOST = "api.skillhub.cn"
 SEARCH_URL = os.environ.get("SKILLHUB_SEARCH_URL", "https://api.skillhub.cn/api/v1/search")
 DOWNLOAD_URL = os.environ.get("SKILLHUB_DOWNLOAD_URL", "https://api.skillhub.cn/api/v1/download")
 TIMEOUT = 60
@@ -61,6 +69,17 @@ EXIT_NOT_PUBLISHED = 3
 EXIT_ALREADY_INSTALLED = 4
 EXIT_DOWNLOAD_FAILED = 5
 EXIT_BAD_ARCHIVE = 6
+EXIT_UNTRUSTED_ENDPOINT = 7
+EXIT_INTEGRITY_FAILED = 8
+
+
+def _endpoint_trusted(url: str) -> bool:
+    """端点 host 必须为官方 host 且走 HTTPS——防 env 劫持重定向到恶意源。"""
+    try:
+        p = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    return p.scheme == "https" and (p.hostname or "").lower() == OFFICIAL_HOST
 
 
 def _get_json(url: str) -> dict:
@@ -92,12 +111,22 @@ def fetch_zip_bytes(slug: str) -> bytes:
 
 
 def install(slug: str, dest_root: Path, force: bool = False,
-            dry_run: bool = False, handle: str | None = None) -> dict:
+            dry_run: bool = False, handle: str | None = None,
+            allow_custom_endpoint: bool = False,
+            expect_sha256: str | None = None) -> dict:
     """核验 → 下载 → 校验 → 落盘。返回结构化结果（不抛业务异常，错误以 code 表达）。"""
     # slug 仅允许安全字符：防止 ../ 之类越出技能根目录
     if not slug or any(c in slug for c in ("/", "\\", "..")) or slug.startswith("."):
         return {"ok": False, "code": EXIT_USAGE, "slug": slug,
                 "error": f"非法 slug：{slug!r}（不得含路径分隔符或 ..）"}
+
+    # 端点信任闸门：非官方 host（env 覆写所致）默认拒绝，须显式 --allow-custom-endpoint
+    if not allow_custom_endpoint:
+        for name, u in (("SKILLHUB_SEARCH_URL", SEARCH_URL), ("SKILLHUB_DOWNLOAD_URL", DOWNLOAD_URL)):
+            if not _endpoint_trusted(u):
+                return {"ok": False, "code": EXIT_UNTRUSTED_ENDPOINT, "slug": slug,
+                        "error": (f"{name} 指向非官方端点：{u!r}——默认仅信任 https://{OFFICIAL_HOST}。"
+                                  f"确需镜像/联调请显式加 --allow-custom-endpoint（自担信任风险）。")}
 
     dest = dest_root / slug
     if dest.exists() and not force:
@@ -122,16 +151,34 @@ def install(slug: str, dest_root: Path, force: bool = False,
         return {"ok": False, "code": EXIT_DOWNLOAD_FAILED, "slug": slug,
                 "error": f"下载失败：{e}"}
 
+    # 完整性锚定：可选 --expect-sha256 对下载字节做内容摘要校验（防中间人换包）
+    blob_sha = hashlib.sha256(blob).hexdigest()
+    if expect_sha256 and blob_sha.lower() != expect_sha256.strip().lower():
+        return {"ok": False, "code": EXIT_INTEGRITY_FAILED, "slug": slug,
+                "error": f"包摘要不符：期望 {expect_sha256}，实际 {blob_sha}——拒绝安装。"}
+
     try:
         zf = zipfile.ZipFile(io.BytesIO(blob))
     except zipfile.BadZipFile:
         return {"ok": False, "code": EXIT_BAD_ARCHIVE, "slug": slug,
                 "error": (f"下载内容不是合法 zip（{len(blob)} 字节）——"
                           f"常见原因：CLI/端点指向内网 LB 或返回了 HTML 错误页。")}
+    # CRC 全量校验：所有条目解压后与存档 CRC 逐一比对，坏包/篡改包直接出局
+    bad = zf.testzip()
+    if bad is not None:
+        zf.close()
+        return {"ok": False, "code": EXIT_INTEGRITY_FAILED, "slug": slug,
+                "error": f"zip 条目 CRC 校验失败：{bad}——拒绝安装。"}
     names = zf.namelist()
     if not any(n == "SKILL.md" or n.endswith("/SKILL.md") for n in names):
         return {"ok": False, "code": EXIT_BAD_ARCHIVE, "slug": slug,
                 "error": f"zip 内未找到 SKILL.md（条目 {len(names)} 个），疑似不是技能包。"}
+    # 符号链接条目拒绝：zip symlink + 后续写入组合可逃逸目录边界（越出技能根写文件）
+    for info in zf.infolist():
+        mode = info.external_attr >> 16
+        if mode and _stat.S_ISLNK(mode):
+            return {"ok": False, "code": EXIT_INTEGRITY_FAILED, "slug": slug,
+                    "error": f"zip 含符号链接条目：{info.filename}——拒绝安装。"}
 
     # 先解压到同盘临时目录再改名 —— 避免半成品目录被探测成「已安装」
     dest_root.mkdir(parents=True, exist_ok=True)
@@ -143,6 +190,7 @@ def install(slug: str, dest_root: Path, force: bool = False,
             if not str(target).startswith(str(tmp.resolve())):
                 raise ValueError(f"zip 含越界路径：{n}")
         zf.extractall(str(tmp))
+        zf.close()
         if dest.exists() and force:
             shutil.rmtree(str(dest))
         tmp.rename(dest)
@@ -153,8 +201,8 @@ def install(slug: str, dest_root: Path, force: bool = False,
 
     return {"ok": True, "code": EXIT_OK, "slug": slug, "dest": str(dest),
             "version": st["version"], "handle": st["handle"], "bytes": len(blob),
-            "entries": len(names),
-            "message": f"✓ 已安装 {slug} v{st['version']} → {dest}"}
+            "sha256": blob_sha, "entries": len(names),
+            "message": f"✓ 已安装 {slug} v{st['version']} → {dest}（sha256 {blob_sha[:12]}…）"}
 
 
 def main(argv: list | None = None) -> int:
@@ -167,10 +215,16 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--force", action="store_true", help="覆盖已存在的同名技能目录")
     ap.add_argument("--dry-run", action="store_true", help="只核验并打印计划，不下载不落盘")
     ap.add_argument("--json", action="store_true", help="以 JSON 输出（供上游解析）")
+    ap.add_argument("--allow-custom-endpoint", action="store_true",
+                    help="接受 env 覆写的非官方 SkillHub 端点（镜像/联调用，自担信任风险）")
+    ap.add_argument("--expect-sha256", default=None, metavar="HEX",
+                    help="锚定下载包的 sha256，不符则拒绝安装（可选）")
     args = ap.parse_args(argv)
 
     res = install(args.slug, Path(args.dir), force=args.force,
-                  dry_run=args.dry_run, handle=args.handle)
+                  dry_run=args.dry_run, handle=args.handle,
+                  allow_custom_endpoint=args.allow_custom_endpoint,
+                  expect_sha256=args.expect_sha256)
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
     else:

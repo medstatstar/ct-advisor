@@ -27,6 +27,9 @@ import json
 import os
 import sys
 import subprocess
+import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 # UTF-8 强制（三流统一）
@@ -48,7 +51,6 @@ from orchestrate import (
     ANSWER_START, ANSWER_END, _wrap,
     run_orchestrate,
 )
-from doc_memory import build_file_payload
 
 # 定界符常量
 TOOL_DELEGATE_START = "<<<CT_TOOL_DELEGATE>>>"
@@ -165,6 +167,105 @@ def _run_card_inline(card_json: str, config_path: str) -> str:
     return result.stdout
 
 
+# ── L1：常驻编排服务（减少重模块重复导入，2026-09-25）──────────────────────
+_SERVER_PORT = int(os.environ.get("CT_ADVISOR_PORT", "18771"))
+_SERVER_URL = f"http://127.0.0.1:{_SERVER_PORT}"
+
+
+def _server_available() -> bool:
+    try:
+        with urllib.request.urlopen(_SERVER_URL + "/health", timeout=1) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _server_version() -> dict:
+    try:
+        with urllib.request.urlopen(_SERVER_URL + "/version", timeout=2) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def _server_stale() -> bool:
+    """本地 orchestrate.py 比常驻服务启动时记录的更新 -> 需重启服务以加载新代码。"""
+    try:
+        local = os.path.getmtime(os.path.join(SCRIPT_DIR, "orchestrate.py"))
+        remote = _server_version().get("orchestrate_mtime", 0)
+        return local > remote
+    except Exception:
+        return False
+
+
+def _shutdown_server():
+    try:
+        urllib.request.urlopen(_SERVER_URL + "/shutdown", timeout=3)
+    except Exception:
+        pass
+
+
+def _start_server():
+    """best-effort 后台拉起常驻服务；失败不影响主流程（回退内联）。"""
+    try:
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen(
+            [sys.executable, str(SCRIPT_DIR / "serve.py")],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+        sys.stderr.write("[entry] 已后台拉起常驻服务\n")
+    except Exception as e:
+        sys.stderr.write(f"[entry] 常驻服务拉起失败（回退内联）: {e}\n")
+
+
+def _wait_server(timeout: float = 60.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _server_available():
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def _server_ask(payload: str, config: str, timeout: int = 300) -> str:
+    data = json.dumps({"payload": payload, "config": config}).encode("utf-8")
+    req = urllib.request.Request(
+        _SERVER_URL + "/ask",
+        data=data,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8")
+
+
+def _run_orchestrate(payload: str, config: str) -> str:
+    """优先常驻服务（L1），版本漂移时自动重启；不可用时回退内联 run_orchestrate。"""
+    if _server_available():
+        if _server_stale():
+            sys.stderr.write("[entry] 检测到技能代码更新，重启常驻服务\n")
+            _shutdown_server()
+            time.sleep(1.5)  # 等端口释放
+            _start_server()
+            if not _wait_server():
+                return run_orchestrate(payload, config)
+        else:
+            try:
+                return _server_ask(payload, config)
+            except Exception as e:
+                sys.stderr.write(f"[entry] 常驻服务调用失败（回退内联）: {e}\n")
+                return run_orchestrate(payload, config)
+    else:
+        _start_server()
+        if not _wait_server():
+            return run_orchestrate(payload, config)
+    try:
+        return _server_ask(payload, config)
+    except Exception as e:
+        sys.stderr.write(f"[entry] 常驻服务调用失败（回退内联）: {e}\n")
+        return run_orchestrate(payload, config)
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="ct-advisor 唯一代码入口（本地 LLM 唯一允许动作）"
@@ -182,6 +283,8 @@ def main():
 
     # ── 1) 附件判断 ─────────────────────────────────────────────────────────
     if args.attach:
+        # 延迟导入（性能修复）：doc_memory(45KB) 仅在确有附件时才加载，避免无附件提问被拖慢
+        from doc_memory import build_file_payload
         p = Path(args.attach)
         if not p.exists():
             original_question += f"\n\n⚠️ 附件未找到: {args.attach}"
@@ -238,7 +341,7 @@ def main():
     # ── 5) 发往 Coze ────────────────────────────────────────────────────────
     sys.stderr.write("[entry] 发往 Coze...\n")
     try:
-        output = run_orchestrate(payload, args.config)
+        output = _run_orchestrate(payload, args.config)
     except Exception as e:
         sys.stderr.write(f"[entry] orchestrate 异常: {type(e).__name__}: {e}\n")
         output = _safe_wrap_with_checksum(

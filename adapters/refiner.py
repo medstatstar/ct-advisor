@@ -15,7 +15,9 @@
 
 外发 payload（3 变量）：
 - query_meta:   dict，包含 difficulty / category / accuracy 三字段 + query_origin 机器标识
-                - difficulty: 问题难度 simple | middle | complex | vague（gate-0 分流结论）
+                - difficulty: 入口闸门结论 vague | forwarded（2026-09-26 二值化；
+                  旧值 simple | middle | complex 仅为 payload 兼容接受，不携带语义——
+                  服务端一律用 LLM 重新估计难度；转发超时档位改由 route.timeout_tier 判定）
                 - category:   问题类别（如 methodology:B / methodology:C / design / compliance:D，或匹配的 A–J 工作流；样本量用 methodology:C）
                 - accuracy:   自评准确度 good | normal（good = 精确，normal = 一般）
                 - query_origin: 审计元数据——机器标识（sha256(hostname)，主机派生的稳定标识：不含明文主机名/IP，但同设备跨请求稳定；不可逆；《隐私段》已向用户披露），
@@ -174,8 +176,8 @@ def _normalize_coze_message(raw: Any) -> Optional[dict]:
     return None
 
 
-# difficulty 枚举（simple/middle/complex/vague）
-DIFFICULTY_ENUM = ("simple", "middle", "complex", "vague")
+# difficulty 枚举（2026-09-26 二值化：vague | forwarded；旧三档标签仅为历史 payload 兼容保留）
+DIFFICULTY_ENUM = ("vague", "forwarded", "simple", "middle", "complex")
 
 # accuracy 枚举（good/normal）—— good = 精确，normal = 一般
 ACCURACY_ENUM = ("good", "normal")
@@ -320,13 +322,13 @@ class RefineRequest:
         else:
             meta = {}
         changed = False
-        # difficulty 兜底（2026-08-12，2026-08-17 复核）：本地 route.py 的主用途是「拆分出 vague」
-        # （vague 本地拦截、不转发），非 vague 转发时附带 simple/middle/complex 标签仅作提示；
+        # difficulty 兜底（2026-09-26 二值化）：本地 route.py 只回答「是否 vague」——
+        # vague 本地拦截澄清、不转发；转发链路统一携带 "forwarded"（与 entry.py 一致）。
         # 服务端 generate_organized_problems_node 会【一律用 LLM 重新估计】difficulty 并写回，
         # 因此此处兜底默认值不决定最终难度，仅保证出站 query_meta 非空（避免飞书收集空白）。
-        # 缺失/非法一律默认 "complex"（宁保守，绝不空白）。
+        # 缺失/非法一律默认 "forwarded"（转发即转发，不再冒充难度标签）。
         if not meta.get("difficulty") or meta["difficulty"] not in DIFFICULTY_ENUM:
-            meta["difficulty"] = "complex"
+            meta["difficulty"] = "forwarded"
             changed = True
         # category：允许 string 或 string[]（多标签）；缺失/空补空串；多标签去重保序、不裁剪
         cat_raw = meta.get("category", "")
@@ -513,7 +515,7 @@ class CozeRefiner(Refiner):
     _TEMPLATE_TOKENS = ("template", "模板", "doc", "document", "规范", "spec")
 
     def _is_long_running(self, req: "RefineRequest") -> bool:
-        """长任务判定：complex 难度，或 category 命中模板类标记，或当前为类型 B 追问。
+        """长任务判定：本地超时档位 long，或 category 命中模板类标记，或当前为类型 B 追问。
 
         长任务走服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成），或需结合多轮
         上下文，生成/检索耗时长，需用 long_timeout（默认 300s）而非默认 90s。
@@ -522,7 +524,10 @@ class CozeRefiner(Refiner):
         - conversation_history 非空：当前问题处于多轮对话中（refine_answer.py 在有效期内
           有对话历史时打包进 req）。这是比纯文本 is_followup 更稳的追问信号——无文本盲区，
           覆盖「第一针/后续/补充」等承接句式漏判的情况，统一走 long_timeout。
-        - difficulty == "complex"：明确长任务（串行路径前台等 Coze 完整返回）。
+        - difficulty 档位（2026-09-26 二值化）：
+            * "forwarded" / "vague"（新契约，不含难度信息）→ 改由 route.timeout_tier()
+              按问句原文判超时档位（CPLX 长耗时信号或长度 >= 80 字 → long）；
+            * "complex"（旧 payload 兼容）→ 仍等同长任务。
         - category（str 或 list）小写后含模板类 token：模板/文档/规范类问题。
         """
         if getattr(req, "is_followup", False):
@@ -533,8 +538,17 @@ class CozeRefiner(Refiner):
             return True
         meta = req.query_meta if isinstance(req.query_meta, dict) else {}
         diff = str(meta.get("difficulty", "")).strip().lower()
-        if diff == "complex":
+        if diff == "complex":       # 旧 payload 兼容：显式 complex 仍为长任务
             return True
+        if diff != "complex":
+            # 二值化新契约（forwarded/vague/空/旧 simple/middle）：difficulty 不携带
+            # 有效难度信息 → 用 route.timeout_tier 按原文判超时档位
+            try:
+                from route import timeout_tier as _timeout_tier
+                if _timeout_tier(getattr(req, "original_question", "") or "") == "long":
+                    return True
+            except Exception:  # noqa: BLE001  route 不可用时不阻断主流程，落到 category 判定
+                pass
         cat = meta.get("category", "")
         if isinstance(cat, list):
             cat = " ".join(str(c) for c in cat)
@@ -681,26 +695,32 @@ class CozeRefiner(Refiner):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+        # 已知端点已加入 auto_approve_endpoints 白名单，且本机 443 直连可达（实测握手 <1s、
+        # 远快于经注入代理跳板）。故**默认直连**（强制绕过任何系统/注入代理，避免代理拖慢 +
+        # 代理相关重试产生的冗余重复发送——用户实测某次运行出现「两次 28s + 一次 43s 重试」，
+        # 根因即首调用经代理超时后被强制直连重试，而 Coze 早已收到第一次请求）。
+        # 仅在「连接阶段」失败（代理不可用 / DNS / 连接被拒）时，才回退系统代理重试一次；
+        # **ReadTimeout 不重试**：此时 Coze 多半已收到请求并正在处理，重试只会再发一份重复请求。
         try:
             resp = requests.post(
                 self.endpoint, json=payload, headers=_headers, timeout=timeout,
+                proxies={"http": None, "https": None},
             )
-        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
-            # 系统代理残留（Windows：HTTP_PROXY/HTTPS_PROXY 指向无监听端口）→ requests 走死代理
-            # → WinError 10061。自动绕过系统代理直连重试一次：直连可达即恢复（本端点实测直连正常）；
-            # 直连也不可达则继续抛给上层 fallback。
-            # 2026-09-25 扩展：ReadTimeout 也纳入代理绕过重试——本地代理能建 TCP 但无法转发 HTTPS，
-            # 导致 ReadTimeout，此时绕过代理直连即可恢复。
+        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
+            # 直连连接失败（如严格出网环境必须走代理）→ 回退系统代理重试一次
             try:
                 sys.stderr.write(
-                    f"[ct-advisor] 代理连接失败({type(e).__name__})，尝试绕过系统代理直连重试...\n"
+                    f"[ct-advisor] 直连失败({type(e).__name__})，回退系统代理重试一次...\n"
                 )
             except Exception:  # noqa: BLE001
                 pass
             resp = requests.post(
                 self.endpoint, json=payload, headers=_headers, timeout=timeout,
-                proxies={"http": None, "https": None},
             )
+        except requests.exceptions.ReadTimeout:
+            # 读取超时：Coze 很可能已收到请求，重试只会造成重复发送，直接上抛由
+            # refine_forward / 调用方兜底回退本地草稿（draft 为空时给出服务不可用提示）。
+            raise
         # 显式暴露鉴权/服务错误：4xx/5xx 不应被上层 except 静默成「超时/没发」
         # （2026-08-08 加固：此前 TypeError 被静默吞掉，误判为未发送）
         if resp.status_code == 401:

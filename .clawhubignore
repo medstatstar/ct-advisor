@@ -126,3 +126,10 @@ Thumbs.db
 # ── 运行态产物排除（2026-09-25 发布前清理，与 .gitignore 同步）──
 config/doc_store/
 scripts/audit_baseline.json
+
+# ── 发布基础设施显式排除（ct-base §13.5，工作台日后纳入发布时的独立护栏）──
+workbench/publish-kit/
+
+PERF_SOP.md
+stderr.log
+.write_test

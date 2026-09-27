@@ -49,17 +49,14 @@ for _p in (str(SCRIPT_DIR), str(SKILL_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-# 复用 refine_answer.py 的权威包裹 / 执行原语（单一数据源，避免漂移）
-from refine_answer import (  # noqa: E402
-    _merge_answer, _run_handle_need_tool, _render_skill_result, _detect_lang,
-    _check_outbound_authorization, _get_endpoint_from_config,
-    ANSWER_START, ANSWER_END, NEED_PARAMS_MARKER,
-)
-# 复用入口预判（模式 B 前端高置信预取）
-from route_tool import predict as predict_tool, suggest_footer  # noqa: E402
-from adapters import build_refiner, RefineRequest, RefineResult  # noqa: E402
-# 复用 A/B 档登记（单一数据源，避免编排层另立一份档位判定）
-from handle_need_tool import _load_mapping, _resolve_tier, _skill_installed  # noqa: E402
+# ── 延迟导入策略（2026-09-25 性能修复）─────────────────────────────────────
+# refine_answer(57KB) / handle_need_tool(43KB) / adapters.refiner(44KB) 在导入期合计约 12s，
+# 且这些符号绝大多数只在 build_output（Coze 返回之后）或子线程里才用到。
+# 改为「用前再 import」：把它们的加载塞进 Coze 网络等待窗口内并发完成，不再串行堆积在
+# 发请求之前（此前每次冷启动白白烧 ~13s）。ANSWER_START/END 作为定界常量在此本地重定义
+# （与 refine_answer 完全同值），避免仅为两个常量而整体导入 57KB 模块。
+ANSWER_START = "<<<CT_ANSWER_START>>>"
+ANSWER_END = "<<<CT_ANSWER_END>>>"
 
 # 编码统一（与 refine_answer.py 一致）：三流强制 UTF-8，避免 CJK/℃ 在 Windows cp936 下乱码
 for _s in (sys.stdin, sys.stdout, sys.stderr):
@@ -92,6 +89,7 @@ def _enrich_coze_params(orig_q: str, coze_tool: str | None, coze_params: dict) -
     """
     if not coze_tool:
         return dict(coze_params)
+    from route_tool import predict as predict_tool  # 函数级 from-import 仅绑定本函数局部，兄弟函数需各自导入
     pred = predict_tool(orig_q)
     if pred.get("need_tool") != coze_tool:
         return dict(coze_params)
@@ -147,6 +145,7 @@ def _render_delegate(orig_q: str, tool: str, params: dict,
 
 def _unreleased_payload(tool: str) -> dict:
     """构造 B 档 / 未登记技能的 unreleased_b 产物（与 handle_need_tool 同语义，本地无 subprocess）。"""
+    from handle_need_tool import _load_mapping, _resolve_tier  # 函数级 from-import 仅绑定本函数局部
     tier_info = _resolve_tier(_load_mapping(), tool)
     if tier_info["registered"]:
         reason = f"{tool} 属 B 档技能（输入含涉密信息：受试者数据 / 方案 / CRF）"
@@ -172,6 +171,7 @@ def _unreleased_payload(tool: str) -> dict:
 
 def _unpublished_payload(tool: str) -> dict:
     """构造 A 档但尚未发布（如 ct-pipeline）的 unpublished_a 产物（与 handle_need_tool 同语义）。"""
+    from handle_need_tool import _load_mapping, _resolve_tier  # 函数级 from-import 仅绑定本函数局部
     tier_info = _resolve_tier(_load_mapping(), tool)
     return {
         "tool": tool,
@@ -198,6 +198,9 @@ def _unpublished_payload(tool: str) -> dict:
 
 def _fire_coze(req: RefineRequest, config_path: str) -> RefineResult:
     """线程内调用 Coze 全量直发；任何异常回退草稿（不抛，交由决策逻辑处理）。"""
+    # 延迟导入重模块（性能修复）：仅在线程内使用，避免主流程导入期加载
+    from adapters import build_refiner, RefineResult
+    from refine_answer import _check_outbound_authorization, _get_endpoint_from_config
     try:
         return build_refiner(config_path=config_path).refine_forward(req)
     except Exception:  # noqa: BLE001
@@ -206,6 +209,7 @@ def _fire_coze(req: RefineRequest, config_path: str) -> RefineResult:
 
 def _fire_prefetch(card: dict) -> dict:
     """线程内机械执行预判的 ct 技能（代码内 subprocess，无 LLM）。"""
+    from refine_answer import _run_handle_need_tool
     return _run_handle_need_tool(card)
 
 
@@ -229,6 +233,13 @@ def build_output(orig_q: str, coze_result: RefineResult,
       - 无预判但 Coze 要求工具 → 委托。
       - Coze 未要求工具且预判无有效补充 → Coze 答案足够 → 包裹。
     """
+    # 延迟导入重模块（性能修复 + 自测路径兼容）：run_orchestrate 已在 Coze 等待窗口预热
+    # sys.modules，此处为缓存命中；run_self_test 直调本函数时则在此首次加载。
+    # 注意：函数级 from-import 仅绑定本函数局部，兄弟函数（_enrich_coze_params /
+    # _render_skill_text 等）已在各自内部就近导入，避免可见性陷阱。
+    from refine_answer import (_merge_answer, _render_skill_result, _detect_lang)
+    from handle_need_tool import _load_mapping, _resolve_tier
+    from route_tool import suggest_footer
     coze_answer = coze_result.final_answer or ""
     coze_tool = coze_result.need_tool
     # P2 修复（2026-08-15）：对 Coze 判定工具做本地 route_tool 参数富集，
@@ -321,6 +332,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
 
 def _render_skill_text(tool_out: dict) -> str:
     """把技能主产物渲染为可读文本（与 refine_answer._render_skill_result 同逻辑）。"""
+    from refine_answer import _render_skill_result  # 函数级 from-import 仅绑定本函数局部，必须就近导入
     return _render_skill_result(tool_out.get("result"))
 
 
@@ -381,6 +393,7 @@ def _multi_tool_hint(need_tools: list, executed_tool: str, lang: str = "zh-CN") 
 # ---------------------------------------------------------------------------
 
 def _build_request(raw: str) -> RefineRequest:
+    from adapters import RefineRequest  # 函数级 from-import 仅绑定本函数局部，就近导入确保可见
     obj = json.loads(raw)
     req = RefineRequest(
         query_meta=obj.get("query_meta", "") if isinstance(obj, dict) else "",
@@ -397,6 +410,13 @@ def _build_request(raw: str) -> RefineRequest:
 
 
 def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> str:
+    # 性能修复（L2, 2026-09-25）：在启动 Coze 线程前于主线程预预热全部重模块，使
+    # _fire_coze 线程内的延迟导入变为 sys.modules 缓存命中，Coze 网络调用可立即发起，
+    # 不再把 ~8s 的重模块导入串行排在 Coze 等待窗口之外（常驻服务 L1 下此处为缓存命中）。
+    from route_tool import predict as predict_tool, suggest_footer  # noqa: F401
+    from adapters import build_refiner, RefineResult  # noqa: F401
+    import refine_answer  # noqa: F401
+    import handle_need_tool  # noqa: F401
     req = _build_request(raw)
     req.normalize()
 
@@ -415,6 +435,8 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     threads = []
 
     def _coze_job():
+        from adapters import RefineResult
+        from refine_answer import _check_outbound_authorization, _get_endpoint_from_config
         if not _check_outbound_authorization(_get_endpoint_from_config(config_path), config_path):
             coze_result[0] = RefineResult(final_answer=req.draft_answer, need_tool=None)
             return
@@ -450,8 +472,15 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
 # 内置自测（mock Coze / 预判，无网络 / 无本地技能调用）
 # ---------------------------------------------------------------------------
 
-def _mk_coze(final_answer: str, need_tool: str | None = None, params: dict | None = None) -> RefineResult:
-    return RefineResult(final_answer=final_answer, need_tool=need_tool, params=params or {})
+def _mk_coze(final_answer: str, need_tool: str | None = None, params: dict | None = None):
+    """构造 mock 的 Coze 结构化结果（自测用）。
+
+    用标准库 SimpleNamespace 仅承载 build_output 读取的三个字段，避免为自测而在模块导入期
+    加载 adapters.refiner（44KB 重模块）——SELF_TEST 列表在 import 时即调用本函数，
+    故必须保持零重依赖。
+    """
+    import types
+    return types.SimpleNamespace(final_answer=final_answer, need_tool=need_tool, params=params or {})
 
 
 def _mk_prefetch(tool: str, status: str, result=None) -> dict:
@@ -494,6 +523,16 @@ SELF_TEST = [
      "查XX药安全性", _mk_coze("Coze草稿", "ct-safety", {"drug": "XX"}),
      _mk_prefetch("ct-safety", "error", "rc=1"), "ct-safety", {"drug": "XX"},
      "CT_TOOL_DELEGATE"),
+
+    # 2026-09-25 补充回归用例：B 档 / 未发布 A 档分支（此前因自测只覆盖 Tier-A 工具，
+    # 漏掉 _unreleased_payload / _unpublished_payload 的 NameError，真实触发即崩）。
+    ("无预判 + Coze需B档工具(ct-protocol) → unreleased包裹",
+     "审阅试验方案", _mk_coze("草稿", "ct-protocol", {}),
+     None, None, {}, "CT_ANSWER_START"),
+
+    ("无预判 + Coze需未发布A档工具(ct-pipeline) → unpublished包裹",
+     "公开情报编排", _mk_coze("草稿", "ct-pipeline", {}),
+     None, None, {}, "CT_ANSWER_START"),
 ]
 
 

@@ -1,5 +1,80 @@
 # Changelog
 
+## v1.2.2 (2026-09-27) — 发布前检查整改：install_sibling 信任/完整性加固 + 隐私脱敏
+
+### 安全修复（§16.0 ClawHub 审计比对，2 条 CRITICAL 落点）
+
+- **`adapters/install_sibling.py`**：审计判「下载端点可被 `SKILLHUB_DOWNLOAD_URL` 等 env 覆写且 zip
+  无完整性校验 → 可被重定向到恶意源装木马包」成立。整改三层：
+  1. **端点信任闸门**：默认仅信任 `https://api.skillhub.cn`；env 覆写指向非官方 host 时拒绝
+     （exit 7 `EXIT_UNTRUSTED_ENDPOINT`），镜像/联调须显式 `--allow-custom-endpoint` 自担风险；
+  2. **zip 完整性**：`zf.testzip()` 全条目 CRC 校验（exit 8）+ 可选 `--expect-sha256` 内容摘要锚定 +
+     成功后回报 sha256 前 12 位；
+  3. **符号链接条目拒绝**：zip 内 `S_ISLNK` 条目直接出局（exit 8），堵住 symlink 逃逸目录边界。
+  py_compile 通过；实测 env 劫持端点被拒、`--allow-custom-endpoint` 豁免路径行为正确。
+- 其余 31 条 STILL_PRESENT 判定为**脚本误报**（泛化签名 `source`/`reported`/`utf-8` 子串命中 README，
+  及命中物在 `adapters/coze/`、`workbench/` 等 §16.7/§16.12 不发布目录——脚本扫磁盘而非发布副本）；
+  留痕备查，无需整改。
+
+### 隐私脱敏（发布面清理，用户 2026-09-27 指示）
+
+- `CHANGELOG.md` 2 处内网文件服务器主机名 → 「内网文件服务器」占位；
+  `adapters/install_sibling.py` docstring UNC 示例改 `<内网文件服务器>`/`<host>` 占位。
+- 全库终扫口径：git 追踪文件 + publish 载荷目录双扫，用户名/内网主机名两类私人标识 0 命中。
+
+### 随本次发布转公开的历史积压（补记）
+
+- v1.2.1 提交后未推送的改动随本次 push 一并公开：入口二值闸门（route.py 26 例全过）、
+  **L1 常驻编排服务**（`scripts/serve.py`，127.0.0.1 回环、零代码执行面）与部署辅助
+  （`scripts/_perf_deploy.py`，硬编码账户路径已改 `__file__` 动态推导）——均经
+  py_compile + 隐私扫描后入库。
+- 清理测试残留 `scripts/.deltest{,2}` `.nettest`；垃圾路径同步写入两份 ignore（F12 双同步）。
+
+## v1.2.1 (2026-09-26) — 入口闸门二值化：route.py 只判 vague | forwarded（本地不再产三档难度标签）
+
+### 动机（用户直接要求）
+
+- 「ITT今年有什么进展？」被本地闸门判为 `complex`——实为**兜底产物**（未命中任何信号默认 complex），
+  误导用户对"难度判定"的预期；且 Coze 服务端一律用 LLM 重判 difficulty 并忽略上游标签，本地三档纯属僵尸输出。
+- 用户拍板：判定结果只保留「是否 vague」，以此确定后续流程（澄清 or 转发），其他都不需要。
+
+### 变更
+
+- **`scripts/route.py` 重写为二值闸门**：`route_question()` 返回 `vague | forwarded`；删除
+  `is_simple()` / `is_middle()` / `EXCL` / `MID` / `SIMPLE_TOPICS` 的三档用法（后三者降级为 vague 排除锚点）；
+  `TERM` 补 `ITT`；`--self-test` 改为二值用例（26 例全过）；`--json` 输出 `{vague, route, timeout}`。
+  `is_vague()` / `timeout_tier()` 逻辑原样保留（vague 四规则不变，宁可多澄清不漏发车）。
+- **`adapters/refiner.py` 契约同步**：`DIFFICULTY_ENUM` 改为 `(vague, forwarded, simple, middle, complex)`
+  （旧三档仅为历史 payload 兼容接受）；`normalize()` 缺失/非法兜底由 `"complex"` 改为 `"forwarded"`；
+  `_is_long_running()` 中 `difficulty == "complex"` 的超时联动改为：新契约（forwarded/vague/空）下调用
+  `route.timeout_tier(original_question)` 判 long/short（CPLX 长耗时信号或 ≥80 字 → long_timeout 300s），
+  旧 complex 标签仍直通长任务。超时能力不降反升（此前 simple/middle 标签会遮蔽 CPLX 超时信号）。
+- **文档同步**：SKILL.md STEP 2 管线行、frontmatter summary/description（"代码分级"→"二值闸门"）、
+  version 1.2.0→1.2.1；refine_answer.py 与 refiner.py 头部 docstring 的 difficulty 契约说明。
+
+### 验证
+
+- `py_compile` 通过；`route.py --self-test` 26/26 = 100%；CLI 三态输出正确（`ITT今年有什么进展？`→forwarded，`这个怎么弄`→vague）。
+- `_is_long_running` 单测：forwarded+CPLX→long ✓、forwarded 短问→short ✓、legacy complex→long ✓、
+  bogus/空 difficulty→normalize 为 forwarded ✓。
+- 端到端 `--ship`（difficulty=forwarded）Coze 正常返回定界答案——服务端容忍新标签（其本就忽略并重判）。
+- Coze 端 `adapters/coze/src` 无需改动：`generate_organized_problems_node` 本就忽略上游 difficulty。
+
+### 遗留（未动，待用户指示）
+
+- `.20260923c-inplace-skill-park` 技能公园快照仍是旧三档版（且缺 `adapters/`，本就不可独立运行）；
+  其 `scripts/test_modeB.py` 依赖 `route_question()=="simple"` 等三档断言，同步 park 时需一并改。
+
+### 遗留处置（同日补）
+
+- park 快照（`.20260923c/f-inplace-skill-park` = ct-advisor v1.0.4、`.20260923b/c-inplace-ctbase-park` = ct-base）
+  frontmatter `name`/`slug` 与正式技能重名，且 park 排序在前**抢占注册**——导致 `/ct-advisor` 注入 v1.0.4 旧版
+  steps 0–6 流程（agent 手动逐跑 route.py → refine_answer.py，park 副本缺 adapters 还白跑一次失败重试），
+  并继续展示已冻结的三档 complex 标签。修复：4 个 park 的 `name`/`slug` 改为与目录名一致、`invocable: false`、
+  displayName 加 `[park-snapshot]（冻结快照，勿调用）`前缀；`.skill-list-cache.json` watcher 实时重建，
+  ct-advisor / ct-base 注册已恢复唯一。park 内文件本体未动（仍为 v1.0.4 历史快照，其 test_modeB.py 三档断言
+  随 park 一起冻结、不再维护）。
+
 ## v1.2.0 (2026-09-25) — coze-only 框架整理 + file_id 上传通道 + 附件归档飞书表（服务端 coze v1.25–v1.36）
 
 ### 附件归档飞书表（服务端 coze v1.27–v1.36，2026-09-24 深夜–09-25，生产闭环）
@@ -447,9 +522,9 @@
    `system_prompt.md`、`check_deps.py` 都在教用户敲它。
 2. **本机轻量版 CLI 装不了**：`~/.skillhub/skills_store_cli.py` 是 **v2026.3.6（44KB）精简版**，
    索引/下载端点指向**内网 LB**（`http://lb-*.clb.gz-tencentclb.com`），实测下载得到非 zip →
-   `Downloaded file is not a valid zip archive`。而 filesrv 上的完整版是 **v2026.8.5（226KB）**。
+   `Downloaded file is not a valid zip archive`。而内网文件服务器上的完整版是 **v2026.8.5（226KB）**。
 3. **UNC 路径经 shell 会烂**：完整版 CLI 在网络盘，路径是 UNC。把 UNC 写进命令串经
-   bash/Git-Bash 传递会被**二次拼接**（`\\filesrv\c$\filesrv\c$\...`）→
+   bash/Git-Bash 传递会被**二次拼接**（`\\<内网文件服务器>\c$\<内网文件服务器>\c$\...`）→
    `can't open file`。首次修复用 `os.path.abspath(__file__)` **无效** —— Windows 上
    `os.getcwd()` 返回的已是解析后真实路径，拼出来仍是 UNC。
 
