@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.3.0 (2026-10-08) · teal + Docling 外部开源资产引用
+
+> 基于《临床试验Skill推荐》分析，新增 teal 和 Docling 两个外部工具参考。
+
+- **新增 External Tool References 表格**：列出 teal（临床数据交互探索框架）和 Docling（法规文档结构化解析）
+- **teal 参考**：统计师搭建、医学/运营自助审阅的 Shiny 交互模式
+- **Docling 参考**：方案/IB/CSR PDF 结构化解析增强
+
+## v1.2.3 (2026-10-06) · 工作台安全加固：静态文件白名单（P0）
+
+> 已发布工作台应用（`ct-advisor.app.workbuddy.host`）安全加固，阻止源码/凭据被 HTTP 下载。
+
+- **`workbench/ct-advisor-proxy.py` + `workbench/publish/ct-advisor-proxy.py`**：新增 `_STATIC_ALLOWED` 扩展名白名单（12 种：css/js/svg/png/ico/json/woff/woff2/ttf/map/html/htm），非白名单扩展名返回 403 `forbidden type`。
+- **影响**：`.py` / `.env` 等源码/凭据文件（`coze_token_embedded.py`、`config/llm_key.py`、`publish-kit/*.py`）无法通过 HTTP 下载；前端静态资源不受影响。
+- **回归**：`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8900/coze_token_embedded.py` → 403。
+
 ## v1.2.2 (2026-09-27) — 发布前检查整改：install_sibling 信任/完整性加固 + 隐私脱敏
 
 ### 安全修复（§16.0 ClawHub 审计比对，2 条 CRITICAL 落点）

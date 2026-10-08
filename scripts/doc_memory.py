@@ -42,6 +42,12 @@ import re
 import sys
 import time
 
+# §16.9 适配层：Coze 文档上传出站逻辑（urllib）已下沉到 adapters/coze_upload.py，
+# 本模块仅保留本地缓存 / 准入逻辑，不再含任何 urllib 出站调用。
+from adapters import coze_upload
+from adapters.coze_upload import UploadFailedError
+from adapters.coze_token_embedded import get_token as _get_coze_token
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -585,51 +591,19 @@ def _coze_upload_available(force_refresh: bool = False) -> bool:
     if not endpoint:
         _UPLOAD_AVAIL = False
         return False
+    # 出站探测逻辑已下沉到 adapters/coze_upload.py（§16.9）
     try:
-        import urllib.request as _urllib
-        import urllib.error as _uerr
-
-        def _mk_probe_req():
-            r = _urllib.Request(endpoint + UPLOAD_PATH, method="GET")
-            try:
-                from adapters.coze_token_embedded import get_token
-                tok = get_token()
-                if tok:
-                    r.add_header("Authorization", "Bearer %s" % tok)
-            except Exception:               # noqa: BLE001
-                pass
-            return r
-
-        def _probe_once(open_fn):
-            try:
-                with open_fn(_mk_probe_req(), timeout=_UPLOAD_PROBE_TIMEOUT) as resp:
-                    return int(getattr(resp, "status", 0) or 0)
-            except _uerr.HTTPError as e:     # 4xx/5xx 也说明**路由存在**
-                return int(getattr(e, "code", 0) or 0)
-            except Exception:                # noqa: BLE001  网络/超时/死代理 → 0（触发重试）
-                return 0
-
-        # 与 refiner._call_coze 同策略（2026-09-25）：先走系统代理；网络层失败
-        # （死代理/半死代理/超时）→ 绕过代理直连重试一次；仍失败才判不可用。
-        code = _probe_once(_urllib.urlopen)
-        if code == 0:
-            _direct = _urllib.build_opener(_urllib.ProxyHandler({}))
-            code = _probe_once(_direct.open)
-        _UPLOAD_AVAIL = code in (200, 401, 403, 405, 422)
-        return _UPLOAD_AVAIL
+        _UPLOAD_AVAIL = coze_upload.probe_upload_available(
+            endpoint, UPLOAD_PATH, _UPLOAD_PROBE_TIMEOUT, _get_coze_token)
     except Exception:                       # noqa: BLE001
         _UPLOAD_AVAIL = False
-        return False
+    return _UPLOAD_AVAIL
 
 
 def _mark_upload_unavailable() -> None:
     """上传实际失败 → 立即判定通道不可用（供同会话后续调用直接走老通道）。"""
     global _UPLOAD_AVAIL
     _UPLOAD_AVAIL = False
-
-
-class UploadFailedError(ValueError):
-    """上传到 Coze 终端失败（网络/鉴权/端点不可用）。消息可直转用户。"""
 
 
 def upload_to_coze(content: bytes, name: str) -> tuple:
@@ -641,64 +615,9 @@ def upload_to_coze(content: bytes, name: str) -> tuple:
     if not endpoint:
         raise UploadFailedError("未配置文档上传端点，无法上传文件。")
     url = endpoint + UPLOAD_PATH
+    # 出站上传逻辑已下沉到 adapters/coze_upload.py（§16.9）
     try:
-        import io as _io
-        import urllib.request as _urllib
-        import urllib.error as _uerr
-        boundary = "----ctadvisoruploadboundary"
-        crlf = b"\r\n"
-        body = _io.BytesIO()
-        filename = name or "upload.bin"
-        body.write(b"--" + boundary.encode() + crlf)
-        body.write(
-            ('Content-Disposition: form-data; name="file"; filename="%s"'
-             % filename).encode("utf-8") + crlf)
-        body.write(b"Content-Type: application/octet-stream" + crlf + crlf)
-        body.write(content)
-        body.write(crlf + b"--" + boundary.encode() + b"--" + crlf)
-        data = body.getvalue()
-        req = _urllib.Request(url, data=data, method="POST")
-        req.add_header("Content-Type", "multipart/form-data; boundary=%s" % boundary)
-        # 与 /run 同源鉴权：沿用内嵌共享令牌（端点侧由平台前置校验，与 /run 一致）
-        try:
-            from adapters.coze_token_embedded import get_token
-            tok = get_token()
-            if tok:
-                req.add_header("Authorization", "Bearer %s" % tok)
-        except Exception:                   # noqa: BLE001
-            pass
-        # ⚠️ urllib 陷阱（2026-09-25 实测）：Request 对象一旦经历过代理路由的失败尝试，
-        # 内部会残留代理状态——复用同一 req 绕过代理重试仍会打到死代理。
-        # 因此把 headers 暂存，每次尝试用**全新 Request** 对象。
-        _hdrs = dict(req.headers)
-        _hdrs.update(getattr(req, "unredirected_hdrs", {}))
-
-        def _mk_req():
-            r = _urllib.Request(url, data=data, method="POST")
-            for k, v in _hdrs.items():
-                r.add_header(k, v)
-            return r
-
-        def _post_once(open_fn):
-            with open_fn(_mk_req(), timeout=120) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-
-        # 与 refiner._call_coze / 上传探测同策略（2026-09-25）：先走系统代理；
-        # 网络层失败（死代理/半死代理/超时）→ 绕过代理直连重试一次；仍失败才抛错。
-        try:
-            payload = _post_once(_urllib.urlopen)
-        except _uerr.HTTPError:
-            raise  # 服务端明确回了 HTTP 错误码 → 代理链路是通的，重试无意义
-        except Exception:                   # noqa: BLE001
-            _direct = _urllib.build_opener(_urllib.ProxyHandler({}))
-            payload = _post_once(_direct.open)
-        fid = (payload.get("file_id") or "").strip()
-        # 契约：v1.26 服务端回 ``file_url``；老/变体实现可能回 ``url``。两者都认，
-        # 取不到也不致命——信封里 file_id 才是解析依据，file_url 仅作诊断/回溯用。
-        fur = (payload.get("file_url") or payload.get("url") or "").strip()
-        if not fid:
-            raise UploadFailedError("上传端点未返回 file_id（响应：%s）" % str(payload)[:200])
-        return fid, fur
+        return coze_upload.upload_to_coze(content, name, url, _get_coze_token)
     except UploadFailedError:
         raise
     except Exception as e:                    # noqa: BLE001

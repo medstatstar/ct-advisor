@@ -205,6 +205,18 @@ def install(slug: str, dest_root: Path, force: bool = False,
             "message": f"✓ 已安装 {slug} v{st['version']} → {dest}（sha256 {blob_sha[:12]}…）"}
 
 
+def _refresh_registry():
+    """安装/卸载后刷新 sibling_registry。静默失败——注册表过期会有调用侧兜底。"""
+    try:
+        from subprocess import run
+        import subprocess
+        scripts_dir = Path(__file__).resolve().parent.parent / "scripts"
+        run([sys.executable, str(scripts_dir / "discover_siblings.py"), "--force"],
+            capture_output=True, timeout=30)
+    except Exception:
+        pass  # 静默——注册表刷新非关键路径}
+
+
 def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="安装 ct 系列 A 档兄弟技能（SkillHub）。只装已上架技能，先核验后下载。")
@@ -225,6 +237,9 @@ def main(argv: list | None = None) -> int:
                   dry_run=args.dry_run, handle=args.handle,
                   allow_custom_endpoint=args.allow_custom_endpoint,
                   expect_sha256=args.expect_sha256)
+    # 安装成功后刷新 sibling_registry
+    if res.get("ok"):
+        _refresh_registry()
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
     else:

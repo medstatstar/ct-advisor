@@ -352,7 +352,12 @@ def predict_tool(q: str):
 #
 # 文案随提问语言切换；工具名保持 id 原文。供 orchestrate.build_output /
 # refine_answer --ship 复用（单一数据源，避免两处文案漂移）。
+#
+# 2026-09-29（B 项）：suggest_footer 支持动态注册表驱动。
+#   若 sibling_registry.json 存在，则从中读取技能摘要和能力描述，
+#   仅对**已安装**的技能生成建议；未安装技能不主动推荐（避免建议空壳）。
 # ---------------------------------------------------------------------------
+
 _TOOL_DESC = {
     "ct-registry": {"zh": "试验注册库检索（试验格局 / 分期 / 申办方 / 时间线）",
                     "en": "trial-registry search (landscape / phase / sponsor / timeline)"},
@@ -365,23 +370,89 @@ _TOOL_DESC = {
 }
 
 
+def _load_sibling_registry() -> dict:
+    """加载 sibling_registry.json（若存在且新鲜）。
+
+    调用时惰性检查：若注册表过期（>24h 或技能数量变化），自动刷新。
+    刷新开销 ~50ms（20 技能目录 × frontmatter 解析），可接受。
+    """
+    try:
+        # 延迟导入（避免循环：discover_siblings 依赖 route_tool 的 ROOT 常量）
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from discover_siblings import ensure_fresh
+        return ensure_fresh(max_age_hours=24)
+    except Exception:
+        pass
+    return {}
+
+
+def _get_installed_skills(registry: dict) -> set:
+    """从注册表获取已安装的技能名集合。"""
+    skills = registry.get("skills", {})
+    return {name for name, info in skills.items() if info.get("installed", False)}
+
+
+def _build_dynamic_desc(tool: str, registry: dict, lang: str = "zh-CN") -> str | None:
+    """从注册表构建技能描述（优先使用，fallback 到 _TOOL_DESC）。"""
+    skills = registry.get("skills", {})
+    info = skills.get(tool)
+    if not info or not info.get("installed", False):
+        return None
+    summary = info.get("summary", "")
+    # summary 格式可能为 "中文 / English" 或纯中文或纯英文
+    parts = summary.split(" / ")
+    if lang == "zh-CN":
+        desc = parts[0] if parts else summary
+    else:
+        desc = parts[1] if len(parts) > 1 else summary
+    # 智能截断（不超过 60 字符，不在词中间截断）
+    max_len = 60
+    if len(desc) > max_len:
+        desc = desc[:max_len].rsplit(" ", 1)[0].rsplit("，", 1)[0].rsplit("/", 1)[0]
+    return desc if desc else info.get("display_name", tool)
+
+
 def suggest_footer(tools, lang: str = "zh-CN") -> str:
     """构造答案末尾的兄弟技能软建议（无匹配则返回空串）。
 
     🔴 只建议、不阻断：本函数产出的文本追加在**答案之后**，不改变答案本身，
     也不要求用户先补参数 / 先安装。用户想取数时再显式发起。
+
+    2026-09-29：优先使用 sibling_registry.json 动态生成，仅建议已安装技能。
     """
-    tools = [t for t in (tools or []) if t in _TOOL_DESC]
+    tools = [t for t in (tools or ()) if t in _TOOL_DESC]
     if not tools:
         return ""
+
+    registry = _load_sibling_registry()
+    installed = _get_installed_skills(registry) if registry else set()
+
     if lang == "zh-CN":
-        items = "\n".join(f"- `{t}`：{_TOOL_DESC[t]['zh']}" for t in tools)
+        items_parts = []
+        for t in tools:
+            # 检查是否已安装（若有注册表）
+            if registry and t not in installed:
+                continue
+            desc = _build_dynamic_desc(t, registry, "zh-CN") or _TOOL_DESC.get(t, {}).get("zh", t)
+            items_parts.append(f"- `{t}`：{desc}")
+        if not items_parts:
+            return ""
+        items = "\n".join(items_parts)
         return ("\n\n---\n\n💡 *补充：本问题还涉及以下兄弟技能。以上已按本技能自身能力作答；"
                 "如需**真实数据或更深入的分析**，可安装 / 调用后再补充：*\n" + items)
-    items = "\n".join(f"- `{t}`: {_TOOL_DESC[t]['en']}" for t in tools)
-    return ("\n\n---\n\n💡 *Note: this question also touches the following sibling skills. "
-            "The answer above is from this skill's own capability; install / invoke them "
-            "if you'd like **real data or a deeper analysis**:*\n" + items)
+    else:
+        items_parts = []
+        for t in tools:
+            if registry and t not in installed:
+                continue
+            desc = _build_dynamic_desc(t, registry, "en") or _TOOL_DESC.get(t, {}).get("en", t)
+            items_parts.append(f"- `{t}`: {desc}")
+        if not items_parts:
+            return ""
+        items = "\n".join(items_parts)
+        return ("\n\n---\n\n💡 *Note: this question also touches the following sibling skills. "
+                "The answer above is from this skill's own capability; install / invoke them "
+                "if you'd like **real data or a deeper analysis**:*\n" + items)
 
 
 # ---------------------------------------------------------------------------

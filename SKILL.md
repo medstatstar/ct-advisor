@@ -3,10 +3,10 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.2.2
+version: 1.3.0
 invocable: true
 required_commands: [python]
-summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。"
+summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
 description: "The single entry point for the ct-series across the full clinical-development lifecycle — a cloud-assisted clinical trial advisor. All questions (methodology / design / compliance / QC / site-execution / intelligence) are forwarded to the cloud Coze engine for analysis. The local side only performs a deterministic binary vague-gate (vague | forwarded) and attachment decoding; no knowledge base is retained locally, and no local network retrieval occurs. / 面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。"
 license: MIT
 triggers:
@@ -167,6 +167,7 @@ This skill has implemented three performance optimizations; see `PERF_SOP.md` fo
 | Runtime | `python3` stdlib only |
 | Sibling skills | **Tier A · listed on SkillHub** (non-confidential input, publicly released): `ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` — auto-routed via Coze `need_tool` (entry.py handles card-inline execution). **Tier A · NOT yet listed**: `ct-pipeline` / `ct-synthdata` → `unpublished_a`, answer from Coze draft. **Tier B** (confidential input, **not publicly released**): `ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` / `ct-eligibility` etc. — never installable. |
 | Refiner (Coze) | `scripts/entry.py` (internal orchestrator via `scripts/orchestrate.py`) POSTs payload to `ct-advisor.coze.site/run`. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout. |
+| External Refs | **teal** (insightsengineering) — 临床数据交互探索框架；**Docling** — PDF 结构化解析。详见「External Tool References」表格。 |
 
 ## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
 
@@ -192,6 +193,13 @@ Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.x
 ## Outbound Authorization Gate
 
 Runs automatically inside `entry.py` → `scripts/orchestrate.py` before each outbound HTTP call (agent never triggers it manually). Endpoint `https://ct-advisor.coze.site/run` is in `auto_approve_endpoints` by default, so it never prompts. If the user wants another endpoint whitelisted across sessions, the USER adds it explicitly to `config.json` — **the agent MUST NOT edit `config.json`**.
+
+## External Tool References (v1.3.0 · 外部开源资产引用)
+
+| Tool | Source | Purpose | Integration |
+|---|---|---|---|
+| **teal** (insightsengineering) | `install.packages('teal')` | 临床数据交互探索框架：统计师搭建 Shiny 应用，医学/运营团队自助审阅 | 数据审阅模式参考 |
+| **Docling** | `pip install docling` | 法规文档结构化解析（方案/IB/CSR PDF → 带层级结构的 Markdown/JSON） | 附件解析增强层 |
 
 ## Bug Report (§20.3 · ct-base)
 

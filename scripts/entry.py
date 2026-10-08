@@ -28,8 +28,6 @@ import os
 import sys
 import subprocess
 import time
-import urllib.request
-import urllib.error
 from pathlib import Path
 
 # UTF-8 强制（三流统一）
@@ -51,6 +49,28 @@ from orchestrate import (
     ANSWER_START, ANSWER_END, _wrap,
     run_orchestrate,
 )
+
+# ── B1 task 推断（2026-10-08）：payload 增加 suggested_task 辅助 Coze 端标注 ──
+TASK_KEYWORDS = {
+    "pairwise_meta": ["meta分析", "荟萃分析", "meta-analysis", "pooled", "合并效应量", "森林图"],
+    "subgroup_analysis": ["亚组", "subgroup", "分层分析"],
+    "single_group_meta": ["单组率", "单组均值", "metaprop", "metamean"],
+    "nma": ["网状meta", "network meta", "nma", "multiple treatments"],
+    "metareg": ["元回归", "metareg", "meta-regression"],
+    "samplesize": ["样本量", "sample power", "检验效能", "power"],
+    "survival_meta": ["生存meta", "hr", "hazard ratio", "km曲线"],
+    "diagnostic_meta": ["诊断meta", "灵敏度", "特异度", "auc", "roc"],
+}
+
+def _infer_task(question: str) -> str:
+    q = (question or "").lower()
+    for task, kws in TASK_KEYWORDS.items():
+        if any(kw.lower() in q for kw in kws):
+            return task
+    return "unclassified"
+
+# §16.9 适配层：常驻编排服务的本地 HTTP 客户端（出站 urllib 逻辑已下沉）
+from adapters.local_service_client import run_orchestrate_via_server
 
 # 定界符常量
 TOOL_DELEGATE_START = "<<<CT_TOOL_DELEGATE>>>"
@@ -168,102 +188,11 @@ def _run_card_inline(card_json: str, config_path: str) -> str:
 
 
 # ── L1：常驻编排服务（减少重模块重复导入，2026-09-25）──────────────────────
-_SERVER_PORT = int(os.environ.get("CT_ADVISOR_PORT", "18771"))
-_SERVER_URL = f"http://127.0.0.1:{_SERVER_PORT}"
-
-
-def _server_available() -> bool:
-    try:
-        with urllib.request.urlopen(_SERVER_URL + "/health", timeout=1) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
-def _server_version() -> dict:
-    try:
-        with urllib.request.urlopen(_SERVER_URL + "/version", timeout=2) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except Exception:
-        return {}
-
-
-def _server_stale() -> bool:
-    """本地 orchestrate.py 比常驻服务启动时记录的更新 -> 需重启服务以加载新代码。"""
-    try:
-        local = os.path.getmtime(os.path.join(SCRIPT_DIR, "orchestrate.py"))
-        remote = _server_version().get("orchestrate_mtime", 0)
-        return local > remote
-    except Exception:
-        return False
-
-
-def _shutdown_server():
-    try:
-        urllib.request.urlopen(_SERVER_URL + "/shutdown", timeout=3)
-    except Exception:
-        pass
-
-
-def _start_server():
-    """best-effort 后台拉起常驻服务；失败不影响主流程（回退内联）。"""
-    try:
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        subprocess.Popen(
-            [sys.executable, str(SCRIPT_DIR / "serve.py")],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=flags,
-        )
-        sys.stderr.write("[entry] 已后台拉起常驻服务\n")
-    except Exception as e:
-        sys.stderr.write(f"[entry] 常驻服务拉起失败（回退内联）: {e}\n")
-
-
-def _wait_server(timeout: float = 60.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _server_available():
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def _server_ask(payload: str, config: str, timeout: int = 300) -> str:
-    data = json.dumps({"payload": payload, "config": config}).encode("utf-8")
-    req = urllib.request.Request(
-        _SERVER_URL + "/ask",
-        data=data,
-        headers={"Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8")
-
-
+# 出站（urllib）逻辑已全部下沉到 adapters/local_service_client.py（§16.9）；
+# entry.py 仅保留一个薄封装调用，详见该适配器。
 def _run_orchestrate(payload: str, config: str) -> str:
     """优先常驻服务（L1），版本漂移时自动重启；不可用时回退内联 run_orchestrate。"""
-    if _server_available():
-        if _server_stale():
-            sys.stderr.write("[entry] 检测到技能代码更新，重启常驻服务\n")
-            _shutdown_server()
-            time.sleep(1.5)  # 等端口释放
-            _start_server()
-            if not _wait_server():
-                return run_orchestrate(payload, config)
-        else:
-            try:
-                return _server_ask(payload, config)
-            except Exception as e:
-                sys.stderr.write(f"[entry] 常驻服务调用失败（回退内联）: {e}\n")
-                return run_orchestrate(payload, config)
-    else:
-        _start_server()
-        if not _wait_server():
-            return run_orchestrate(payload, config)
-    try:
-        return _server_ask(payload, config)
-    except Exception as e:
-        sys.stderr.write(f"[entry] 常驻服务调用失败（回退内联）: {e}\n")
-        return run_orchestrate(payload, config)
+    return run_orchestrate_via_server(payload, config)
 
 
 def main():
@@ -320,6 +249,7 @@ def main():
         "original_question": original_question,
         "draft_answer": "",
         "doc_context": doc_context,
+        "suggested_task": _infer_task(original_question),
     }, ensure_ascii=False)
 
     # ── 4) vague → 澄清循环 ─────────────────────────────────────────────────
