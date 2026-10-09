@@ -6,7 +6,7 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-advisor logo"/>
 </div>
 
-> **No install needed:** If you'd rather not install this skill and just want to quickly use its core features, visit **https://ct.medstatstar.com** directly.
+> **Works without installation:** If you'd rather not install and just want to quickly use this skill's basic features, you can also visit the ct-series unified web portal **https://ct.medstatstar.com** directly.
 
 > **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor that also routes real-data / competitive-intel needs to the sibling data skills through a local, code-only orchestrator (`orchestrate.py`) and stitches their results back in code.**
 >
@@ -313,7 +313,7 @@ CLI helpers, runtime requirements, the architecture tree, and scanner false-posi
 
 ---
 
-**Version**: v1.0.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v1.3.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at <medstatstar@gmail.com> (Wintone Zhang).
 

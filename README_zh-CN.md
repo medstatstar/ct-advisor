@@ -6,7 +6,7 @@
 <img src="assets/icon.svg" width="240" height="240" alt="ct-advisor 图标"/>
 </div>
 
-> **不想安装也能用：** 如果你不想安装本技能、只想快速使用技能的基础功能，可直接访问网页 **https://ct.medstatstar.com** 使用。
+> **不安装也能用：** 如果你不想安装，只想快速使用本技能的基础功能，也可直接访问ct系列技能的总入口网页 **https://ct.medstatstar.com** 使用。
 
 > **整个 `ct-*` 临床试验技能家族的统一入口 —— 既是方法学与法规证据顾问，也通过本地代码编排器（`orchestrate.py`）把真实数据 / 竞品情报类需求路由到兄弟数据技能并在代码内缝合结果。**
 >
@@ -349,7 +349,7 @@ CLI 助手、运行要求、架构树与扫描器误报说明已迁移至 **[ref
 
 ---
 
-**版本**：v1.0.0 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v1.3.0 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：<medstatstar@gmail.com>（张文彤 / Wintone Zhang）。
 
