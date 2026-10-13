@@ -1,5 +1,18 @@
 # Changelog
 
+## v1.3.1 (2026-10-13) · 修复工作台调用 entry_point 恒为 skill（§1.3 接线）
+
+> ct-base coze_io_contract §1.3 工作台接线三架构之「架构 C · 同源透传代理」。服务端侧早已就绪（`state.py` 两模型声明 `entry_point: Optional[str]`，`cache_check_node` / `full_analysis_node` 读 `getattr(state, "entry_point", None)`，`async_feishu_writer` 写飞书独立列 `entry_point or "skill"`），但**客户端侧零接线**——`workbench/ct-advisor-proxy.py` 对 `/run`、`/stream_run` 是 JSON 原样透传，不注入该字段 → `state.entry_point` 恒 None → 飞书列恒落 `skill`。
+
+- **`workbench/ct-advisor-proxy.py`**：
+  - 新增 `_inject_entry_point(body)`：JSON 载荷注入 `"entry_point": "workbench"`——**仅缺失时写**（显式值优先，不覆盖）；非 JSON / 解析失败 / 非 dict / 空体 → **原样返回，绝不阻断转发**。
+  - `do_POST` 的 `/run`、`/stream_run` 分支转发前调用（本代理只服务工作台页面；agent / 技能路径直连 coze 端点、不经代理 → 不受影响）。
+  - `/api/run-skill` 白名单本地技能运行（ct-registry / ct-safety / ct-literature CLI）的 `subprocess.run` 增加 `env` 透传 `CT_ENTRY_POINT=workbench`——那三个技能的 adapters 已在进程启动期读该变量（2026-10-13 同日修复），此处补齐「从 ct-advisor 页面发起」的来源标记；未实现该变量的技能忽略无感。
+  - `/upload_file`（multipart 文件上传，不带业务信封）不动。
+- **同步**：`workbench/publish/ct-advisor-proxy.py` 与主文件逐字节一致（diff 验证）。
+- **验证**：`_inject_entry_point` 五组用例（注入 / 显式值不覆盖 / 非 JSON / 非 dict / 空体）全过；`py_compile` 两份副本全过。
+- **范式沉淀**：ct-base `references/coze_io_contract.md` §1.3 新增「工作台接线三架构」规范段，本技能为架构 C 范本。
+
 ## v1.3.0 (2026-10-08) · teal + Docling 外部开源资产引用
 
 > 基于《临床试验Skill推荐》分析，新增 teal 和 Docling 两个外部工具参考。
