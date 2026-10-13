@@ -566,3 +566,52 @@ _MESSAGES.update({
     "kw_gate.intent_drug_class": {"en": "Drug class", "zh": "药物类别"},
     "kw_gate.intent_auto": {"en": "Auto-detect", "zh": "自动识别"},
 })
+# ═══════════════════════════════════════════════════════════════════════════
+# [PATCH] 内容级语言检测 —— v1.3.0 i18n 重构误删 detect_text_language /
+# resolve_user_language，而 adapters/refiner.py 仍 `from scripts.i18n import
+# ... resolve_user_language`，导致 entry.py 在 import 阶段崩溃。此处补回
+# refiner 依赖的两个函数（自包含；不含已被有意删除的 session/config 持久化层）。
+# 来源：git show 82e89d1^:scripts/i18n.py（重构前版本）中的对应实现。
+# ═══════════════════════════════════════════════════════════════════════════
+import re as _re
+
+_CJK_RE = _re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]")
+
+_LANG_ALIASES = {
+    "zh": "zh", "chinese": "zh", "中文": "zh", "cn": "zh", "zh-cn": "zh",
+    "zh_cn": "zh", "zh-tw": "zh", "zh_tw": "zh", "zh-hk": "zh", "zh_hk": "zh",
+    "en": "en", "english": "en", "英语": "en", "eng": "en",
+}
+
+
+def _normalize_language(value):
+    """User language -> normalized code (zh/en). None/empty -> _current_lang()."""
+    if not value:
+        return _current_lang()
+    key = (value or "").strip().lower()
+    return _LANG_ALIASES.get(key, key)
+
+
+def detect_text_language(text):
+    """按【输入文本内容】判定语言（内容级），返回 'zh'/'en'/None。"""
+    if not text or not text.strip():
+        return None
+    letters = _re.sub(r"\s+", "", text)
+    if not letters:
+        return None
+    cjk = len(_CJK_RE.findall(text))
+    if cjk == 0:
+        return "en"
+    ratio = cjk / len(letters)
+    return "zh" if (ratio >= 0.05 or cjk >= 2) else "en"
+
+
+def resolve_user_language(query="", override=None):
+    """构造 coze `user_language` 备用入参（归一化 zh/en）。
+
+    优先级：override -> 输入文本检测 -> 系统 locale 回退。coze 端可忽略。
+    """
+    if override:
+        return _normalize_language(override)
+    text_lang = detect_text_language(query if query else "")
+    return text_lang if text_lang else _normalize_language(None)
