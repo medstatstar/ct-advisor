@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.3.2 (2026-10-13) · 三平台版本对齐（companion 修复版本标记）
+
+> 本包内无功能变更——今日全部修复按发布纪律交付在包外（workbench/ 随网页 app 发布、adapters/coze/ 随 coze 代码包人工部署），本版用于三平台版本号对齐与发布记录。
+
+- **coze 侧（部署件，zip 交付，不入技能包）**：v1.36 缓存相似度 containment→Jaccard 0.50（串答案根治）；v1.37 `CacheCheckInput`/`FullAnalysisInput` 补 `entry_point` 声明（langgraph 节点 schema 过滤致飞书列恒落 skill）；v1.38 带附件请求禁用缓存（`has_attachment()` 读 bypass + 写闸，防幻觉答案毒化缓存）。
+- **workbench 侧（网页 app 交付，不入技能包）**：`/async_run`+`/task` 轮询（根治 stgw 60s 硬超时 504）；`query_origin` 契约化 `sha256:<64hex>`（撤销 nonce）；payload 顶层直发 `entry_point:"workbench"`；对话区增量渲染 `_chatSeq` 重播种（新问答不显示根治）；历史记录单击展开完整回答。
+- **经验回写**：ct-base v1.3.13/v1.3.14（coze_io_contract §2.3 节点 schema 红线、§8.6 nonce 禁令、10-coze-engine §20.17 async 标准、workbench_ui §8 重播种红线、learnings LRN-20261013-001~004）。
+- **线上验证**：async 回归 85.3s completed（穿越 stgw 60s）；飞书新行 entry_point=workbench / cache_hit=false / coze_version=1.38 待目视确认。
+
 ## v1.3.1 (2026-10-13) · 修复工作台调用 entry_point 恒为 skill（§1.3 接线）
 
 > ct-base coze_io_contract §1.3 工作台接线三架构之「架构 C · 同源透传代理」。服务端侧早已就绪（`state.py` 两模型声明 `entry_point: Optional[str]`，`cache_check_node` / `full_analysis_node` 读 `getattr(state, "entry_point", None)`，`async_feishu_writer` 写飞书独立列 `entry_point or "skill"`），但**客户端侧零接线**——`workbench/ct-advisor-proxy.py` 对 `/run`、`/stream_run` 是 JSON 原样透传，不注入该字段 → `state.entry_point` 恒 None → 飞书列恒落 `skill`。
