@@ -4,8 +4,11 @@
 ct-advisor — 兄弟技能自动发现与能力匹配注册表（B 项实现）
 
 设计目标（2026-09-29）：
-  - 本地只读扫描 ~/.workbuddy/skills/ct-* 目录的 frontmatter（triggers/summary/description），
-    构建「能力关键词 → 技能」映射注册表，替代 tool_mapping.json 中的硬编码 tiers.registry。
+  - 本地只读扫描技能根目录（默认 ~/.workbuddy/skills，env CT_SKILLS_DIR 可覆盖）下
+    ct-* 目录 + tool_mapping.json tiers.registry 登记的非 ct- 前缀兄弟技能
+    （meta-analysis / statsoft-cli / statdata-transfer）的 frontmatter
+    （triggers/summary/description），构建「能力关键词 → 技能」映射注册表，
+    替代 tool_mapping.json 中的硬编码 tiers.registry。
   - 注册表驱动 route_tool.py 的 suggest_footer：基于实际安装的技能动态生成
     「如需真实数据可调用...」软建议，避免建议未安装/不存在的技能。
   - 不修改 need_tool 的硬判定逻辑（TOOL_TRIGGERS / WEAK_TRIGGERS 不变），控制误报风险。
@@ -77,6 +80,26 @@ YAML_LINE_RE = re.compile(r"^(\w[\w_]*):\s*(.*?)\s*$")
 YAML_LIST_RE = re.compile(r"^-\s+(.*?)\s*$")
 
 
+def _known_sibling_names() -> set:
+    """tool_mapping.json tiers.registry 登记的非 ct- 前缀兄弟技能。
+
+    2026-10-14：meta-analysis / statsoft-cli / statdata-transfer 是合法兄弟
+    （tool_mapping tier=A）但目录名不带 ct- 前缀，被前缀过滤挡在注册表外
+    （--check 报三条「未扫描到」）。此处从 tool_mapping 派生白名单而非硬编码，
+    单一数据源；技能库里大量无关技能（clinical / drug-discovery-search 等）
+    仍不进注册表。
+    """
+    try:
+        mapping = json.loads(TOOL_MAPPING_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    tiers = mapping.get("tiers", {}).get("registry", {})
+    return {
+        name for name, info in tiers.items()
+        if info.get("tier") != "meta" and not name.startswith("ct-")
+    }
+
+
 def _parse_frontmatter(text: str) -> dict:
     """简易 YAML frontmatter 解析（仅处理本项目 SKILL.md 的扁平结构）。"""
     m = FRONTMATTER_RE.match(text)
@@ -106,7 +129,7 @@ def _parse_frontmatter(text: str) -> dict:
     return fm
 
 
-def _scan_skill(skill_dir: Path) -> dict | None:
+def _scan_skill(skill_dir: Path, extra_siblings: set | None = None) -> dict | None:
     """扫描单个技能目录，提取 frontmatter 和能力信息。"""
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.exists():
@@ -118,9 +141,15 @@ def _scan_skill(skill_dir: Path) -> dict | None:
     fm = _parse_frontmatter(text)
     if not fm:
         return None
+    extra = extra_siblings or set()
     name = fm.get("name", skill_dir.name)
-    # 只处理 ct-* 系列
-    if not name.startswith("ct-") and not skill_dir.name.startswith("ct-"):
+    # 只处理 ct-* 系列 + tool_mapping 登记的非 ct- 兄弟技能
+    if (
+        not name.startswith("ct-")
+        and not skill_dir.name.startswith("ct-")
+        and name not in extra
+        and skill_dir.name not in extra
+    ):
         return None
     # 跳过 ct-advisor 自身和元层技能
     if name in ("ct-advisor", "ct-base", "ct-update"):
@@ -209,9 +238,10 @@ def scan_all_skills() -> dict:
     if not skills_dir.is_dir():
         print(f"Warning: skills dir not found: {SKILLS_DIR}", file=sys.stderr)
         return skills
+    extra = _known_sibling_names()
     for entry in sorted(skills_dir.iterdir()):
-        if entry.is_dir() and entry.name.startswith("ct-"):
-            info = _scan_skill(entry)
+        if entry.is_dir() and (entry.name.startswith("ct-") or entry.name in extra):
+            info = _scan_skill(entry, extra)
             if info:
                 skills[info["name"]] = info
     return skills

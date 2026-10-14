@@ -1,6 +1,6 @@
 {
   "version": "2026-09-29",
-  "generated_at": "2026-10-14T15:21:22.682581",
+  "generated_at": "2026-10-14T15:34:41.101731",
   "source_dir": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills",
   "skills": {
     "ct-adam": {
@@ -548,6 +548,96 @@
         "submission",
         "tlg_generation"
       ]
+    },
+    "meta-analysis": {
+      "name": "meta-analysis",
+      "display_name": "Meta Analysis / 医学Meta分析",
+      "version": "2.20.1",
+      "summary": "基于 R 的全方位 Meta 分析技能，覆盖 RevMan + Stata 等价 + esc + RVE + 贝叶斯 NMA + 生存 Meta + TSA + 单组率 Meta + 诊断 Meta + 系统评价流程；输出森林图、漏斗图、异质性(I²)、发表偏倚、亚组分析、元回归、网络 Meta等共 23 种分析图形。所有分析提供可复现 R 代码。还可提供Meta选题方向判断 + 文献检索整理 + 筛选 + 数据提取功能。",
+      "triggers": [
+        "meta分析",
+        "meta-analysis",
+        "系统评价",
+        "森林图",
+        "漏斗图",
+        "异质性",
+        "发表偏倚",
+        "元回归",
+        "network meta",
+        "贝叶斯meta",
+        "效应量转换",
+        "TSA",
+        "诊断meta",
+        "full meta pipeline",
+        "上下文菜单",
+        "对话菜单",
+        "全流程菜单",
+        "flow menu",
+        "论文撰写",
+        "写稿",
+        "初稿",
+        "投稿建议",
+        "发表建议",
+        "writing advisor",
+        "manuscript"
+      ],
+      "tier": "A",
+      "published": true,
+      "installed": true,
+      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\meta-analysis",
+      "capabilities": [
+        "literature_search",
+        "pipeline_intel",
+        "registry_search",
+        "tlg_generation"
+      ]
+    },
+    "statdata-transfer": {
+      "name": "statdata-transfer",
+      "display_name": "Statistical Data Format Converter / 统计数据格式转换器",
+      "version": "2.2.1",
+      "summary": "读入/转存 50+ 统计软件格式，对统计二进制格式完整保留变量标签/值标签/特殊缺失值等元数据。副作用声明（完整）：运行环境检查（scripts/check_env.py）；可应要求 pip 安装缺失包；写入主输出文件的同时可能生成 sidecar 元数据（CSV/TSV 旁 <名>_metadata.json、Parquet/Arrow 内嵌）及覆盖 .hyper 时的 .bak/.bak.1 备份；处理 .rda/.rds/.RData/.mtw/.mpj/.rec 时可调用本地 R 解释器，但该回退默认禁用，需 allow_r_exec=True 显式开启。",
+      "triggers": [
+        "statdata-transfer",
+        "统计数据格式转换",
+        "spss stata sas 格式",
+        ".sav .dta .sas7bdat 读入",
+        "sav转dta 格式转换",
+        "variable labels 变量标签",
+        "metadata-preserved conversion"
+      ],
+      "tier": "A",
+      "published": true,
+      "installed": true,
+      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\statdata-transfer",
+      "capabilities": [
+        "literature_search",
+        "statistical_analysis"
+      ]
+    },
+    "statsoft-cli": {
+      "name": "statsoft-cli",
+      "display_name": "Statsoft-CLI / 统计软件接入助手",
+      "version": "2.8.4",
+      "summary": "跨平台统计软件 CLI 集成，面向 AI Agent；覆盖 34+ 款软件（R/Stata/SAS/SPSS/Python/贝叶斯/ML等），双语。核心价值：激活历史代码资产，用于 AI 工作流自动化。",
+      "triggers": [
+        "SPSS",
+        "SPSS Statistics",
+        "R命令行",
+        "Stata",
+        "SAS",
+        "统计软件",
+        "连接统计软件",
+        "statsoft-cli",
+        "connect statistical software"
+      ],
+      "tier": "A",
+      "published": true,
+      "installed": true,
+      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\statsoft-cli",
+      "capabilities": [
+        "statistical_analysis"
+      ]
     }
   },
   "capability_index": {
@@ -588,25 +678,30 @@
     ],
     "statistical_analysis": [
       "ct-analysis",
-      "ct-statrev"
+      "ct-statrev",
+      "statdata-transfer",
+      "statsoft-cli"
     ],
     "pipeline_intel": [
       "ct-congress",
       "ct-pipeline",
-      "ct-registry"
+      "ct-registry",
+      "meta-analysis"
     ],
     "registry_search": [
       "ct-congress",
       "ct-eligibility",
       "ct-pipeline",
       "ct-publish",
-      "ct-registry"
+      "ct-registry",
+      "meta-analysis"
     ],
     "tlg_generation": [
       "ct-congress",
       "ct-eligibility",
       "ct-samplesize",
-      "ct-tlf"
+      "ct-tlf",
+      "meta-analysis"
     ],
     "eligibility": [
       "ct-csr",
@@ -631,7 +726,9 @@
     "literature_search": [
       "ct-literature",
       "ct-pipeline",
-      "ct-publish"
+      "ct-publish",
+      "meta-analysis",
+      "statdata-transfer"
     ],
     "sample_size": [
       "ct-protocol",
