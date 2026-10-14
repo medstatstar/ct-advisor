@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.4 (2026-10-14) · Coze v1.39 知识底料上线 + 权威外部对标登记（本包仅文档变更）
+
+> 本条记录 coze 侧部署件与文档登记；本地 scripts 代码零改动。sibling_registry 重生成已于 2026-10-14 补齐：以 `CT_SKILLS_DIR=\\filesrv\C$\Users\WintoneFileSrv\.workbuddy\skills`（UNC 指向 filesrv 真实库）重扫，20/20 技能集合与旧表一致（正面回应上轮「沙箱环境扫描完整性存疑」的跳过理由）；上轮留档的 `scripts/sibling_registry.json.new` 已不在，留档机制作废。
+
+- **coze 侧（部署件，zip 交付：`ct-advisor_coze_v1.39_20261014.zip`，120 文件 / 9.13MB，含 md5）**：新增 3 份知识件 `ref-topic-m12-ddi.md` / `ref-topic-p21-data-rules.md` / `ref-topic-tooling-landscape.md`（直落 filesrv knowledge/）；`src/kb/__init__.py::_CATEGORY_KNOWLEDGE` 扩展（d/f+=m12、g+=p21+tooling、h+=p21）；`knowledge/reference-index.md` 增 Topic 专题系列节；`knowledge_index.json` 重建（29 文件 / 1205 章节 / 4688 键）。文件级 + 章节级路由端到端验证 3/3 命中。
+- **权威底料登记（ct-base/references/）**：`m12_thresholds.md`（ICH M12 Step4/5 切点，28 项数值核验 27/28 通过，附官方原文 PDF）+ `pinnacle21_validation_rules/`（SDTM/SEND/ADaM/Define-XML 共 1770 条公开规则 JSON）+ `certara_software_portfolio_analysis.md`（Certara 56 产品 / 8 大族深度分析）。
+- **SKILL.md · External Tool References 扩容（v1.3.0→v1.3.4，`.new` 交付）**：登记 Pinnacle 21 Validation Rules 公开 API 与 ICH M12 DDI 切点两族权威外部资产，指向 ct-base/references 落盘位置与对应 Coze KB topic。
+- **本地数据件 · `scripts/sibling_registry.json` 按 UNC 真实库重扫**：以 `CT_SKILLS_DIR=\\filesrv\C$\Users\WintoneFileSrv\.workbuddy\skills` 重扫（默认值 `~/.workbuddy/skills` 仅在本机恰好等价，换执行上下文即漂移——发布包内 `source_dir`/`install_path` 会留机器相关路径）。结果：技能集合 **20/20 与旧表一致**（回应上轮沙箱完整性疑虑）；**16 个技能版本刷新**（旧表停更于 2026-09-29，如 ct-registry 0.10.0→0.13.3、ct-samplesize 5.7.27→5.10.1、ct-sdtm 0.2.0→1.3.0、ct-literature 1.1.3→1.4.7）；`source_dir`/`install_path` 改记 UNC 形态（纯信息字段，无执行链消费）；capability_index 无变化。**遗留**：tool_mapping 登记的 meta-analysis / statsoft-cli / statdata-transfer 仍缺席（真实库无此三目录，且扫描器只认 `ct-` 前缀目录名，discover_siblings.py:213），`--check` 三条差异维持现状，是否放宽前缀过滤待后续决策。
+- **经评估不需变更**：`tool_mapping.json`（仅覆盖 4 个 Tier-A 执行卡技能，ct-update 属运维型技能不发执行卡）；`kw_lexicon.json`（药物名词典，M12/DDI/P21 话题按架构归 Coze 侧，本地无知识库红线不变）；`entry.py`/`route.py` 等管道代码（HARD GATE 稳定区）。
+
+
 ## v1.3.3 (2026-10-15) · 传输层零依赖 + 结构化错误信号（B+C 分级自愈协议）
 
 > 10-14/15 修复系列收官。系列背景（均已在代码内修复、此前未入 changelog）：① 出站被强制直连、本机却必须经系统代理出网 → Coze 收不到请求、前端空答案；② `requests` 缺失被 `orchestrate._fire_coze` 静默吞掉；③ 连接失败被伪装成「返回为空，请稍后重试」；④ 失败提示笼统不可操作。本条：**C 方案**消灭「依赖缺失」失败类，**B 方案**建立机器可读错误信号与 agent 分级自愈协议。
