@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.3.3 (2026-10-15) · 传输层零依赖 + 结构化错误信号（B+C 分级自愈协议）
+
+> 10-14/15 修复系列收官。系列背景（均已在代码内修复、此前未入 changelog）：① 出站被强制直连、本机却必须经系统代理出网 → Coze 收不到请求、前端空答案；② `requests` 缺失被 `orchestrate._fire_coze` 静默吞掉；③ 连接失败被伪装成「返回为空，请稍后重试」；④ 失败提示笼统不可操作。本条：**C 方案**消灭「依赖缺失」失败类，**B 方案**建立机器可读错误信号与 agent 分级自愈协议。
+
+- **C 方案 · 传输层 stdlib urllib 化（消灭依赖缺失失败类）**：
+  - `adapters/refiner.py::_call_coze`：`requests` → stdlib `urllib.request`。默认 opener 经 `ProxyHandler(getproxies())` 读环境变量代理（HTTP(S)_PROXY 大小写不敏感归一），HTTPS 经 http 代理自动走 CONNECT 隧道（本机实测：经系统代理 POST 端点 200）。
+  - 重试语义与原 requests 版一致：检测到代理 env → 先系统代理、连接阶段失败再回退强制直连（`ProxyHandler({})`）；`TimeoutError` 不重试（Coze 多半已收到，防重复发送）；`HTTPError`（4xx/5xx）是服务端响应，跳出循环单独处理。
+  - `_ensure_requests()` 及三处调用、`_call_coze` 顶部 `import requests` 整体移除；`entry.py` 预检由 fail-fast 退出改为非致命留痕（「未检测到 requests，使用 stdlib urllib 传输」）。`MissingDependencyError` 类与各 `except` 分支保留为防御性死代码。
+- **B 方案 · 结构化错误信号（stderr 机器通道）**：
+  - 新增 `adapters/errsignal.py`：错误码登记表 `ERR_CODES`（`CONN_FAIL_PROXY` / `CONN_FAIL_DIRECT` / `TIMEOUT` / `AUTH_401` / `COZE_HTTP_ERROR` / `ORCH_FAIL`，各带 `auto_fixable` / `retry_safe` / `requires_network` 决策位）+ `emit_err_signal()`。单行格式：`[ct-advisor][ERR] code=… auto_fixable=… retry_safe=… requires_network=… [detail="…"] [fix_cmd="…"]`。**仅失败路径发射；成功路径绝不发射。**
+  - `refiner._classify_connection_error` → `_classify_outbound_error`：返回 `(机器错误码, 人读提示)`；异常 taxonomy 全面转向 urllib（HTTPError / TimeoutError / SSLError / URLError·OSError）；连接失败提示内展示**当前真实代理值**（替代硬编码过期端口）；新增 `_internal_error_msg()`。
+  - `refine_forward` / `_refine_serial` / `refine_fire_only` 兜底 except：双通道透出（人读提示挂 `connection_error` / `internal_error` + ERR 机器信号），非网络异常归类 `ORCH_FAIL`——**不再有任何路径落入「返回为空，请稍后重试」**。
+  - `orchestrate._fire_coze` 兜底 except：`ORCH_FAIL` 信号 + `internal_error` 人读提示；`build_output` 新增 `internal_error` 快速通道。
+- **SKILL.md · 新增 Error Self-Heal Protocol 章节**：信号格式、错误码→agent 动作表、7 条硬规则——**未报错（无 `[ERR]` 信号）严禁进入自愈流程**（不主动探测/安装/改配置/重试）；`fix_cmd` 仅 `auto_fixable=true` 且用户明确授权后**逐字**执行（urllib 化后当前无码 qualifies）；每轮至多一次重试且仅 `retry_safe=true`；自愈仅限传输层修复，**不许可本地作答**（coze-only 红线不变）。
+- **验证**（技能副本实测，线上技能未动）：
+  - 真实端到端（urllib + 系统代理）：exit 0、答案正确、stderr **0 条 ERR 信号**；
+  - **C 证明**：PYTHONPATH 屏蔽 requests（stub 抛 ImportError）后真实端到端仍 exit 0 并返回正确答案；
+  - 失败场景 7/7：`CONN_FAIL_DIRECT`（仅直连 1 次）/ `CONN_FAIL_PROXY`（代理→直连共 2 次）/ `TIMEOUT`（1 次不重试）/ `AUTH_401` / `COZE_HTTP_ERROR` / `ORCH_FAIL` / 成功路径无信号；
+  - `orchestrate --self-test` 11/11 = 100%；`py_compile` 五文件全过。
+- **修复中发现并已堵（测试驱动）**：`_call_coze` 顶部遗留 `import requests`（漏删会使 C 方案在无 requests 环境直接 ImportError，废掉整个方案）；两条 CONN_FAIL 人读文案含 `%HTTPS_PROXY%` 与 `%` 占位格式化冲突（`unsupported format character 'H'`，致错误处理自身崩溃）——均已修复并经场景套件复测通过。
+
 ## v1.3.2 (2026-10-13) · 三平台版本对齐（companion 修复版本标记）
 
 > 本包内无功能变更——今日全部修复按发布纪律交付在包外（workbench/ 随网页 app 发布、adapters/coze/ 随 coze 代码包人工部署），本版用于三平台版本号对齐与发布记录。

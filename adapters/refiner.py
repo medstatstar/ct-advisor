@@ -11,7 +11,14 @@
   Coze（中断本地）；否则直接采用本地草稿（速度优先——本地秒级先出、Coze 实测 9~25s 慢、
   常态本地胜出）。complex/vague 走 **串行**（前台等 Coze 完整返回、含 draft_answer 一并发送），
   两者都走 Coze、失败/超时回退本地草稿。
-- 依赖保障：出站前 `_ensure_requests()` 确保 `requests` 可用。首次缺失时**提示用户手动安装后退出**——不自动执行 `pip install`，避免在用户环境静默引入外部依赖。
+- 传输层（2026-10-15 C 方案）：stdlib `urllib`（`_call_coze` 内），**零第三方依赖**——
+  `requests` 不再是必需依赖，「依赖缺失」作为一类用户可见失败被整体消灭；
+  urllib 同样读取 HTTP(S)_PROXY 环境变量，HTTPS 经 http 代理时自动走 CONNECT 隧道
+  （本机实测：经系统代理 POST 端点返回 200）。
+- 失败双通道（2026-10-15 B 方案）：人读提示挂 `RefineResult.connection_error` /
+  `internal_error` 供 `build_output` 渲染；机器错误码经 `emit_err_signal` 发 stderr
+  `[ct-advisor][ERR]` 信号，供调用方 agent 按 SKILL.md「错误自愈协议」决策。
+  成功路径两通道均静默——未报错时 agent 不得进入自愈流程。
 
 外发 payload（3 变量）：
 - query_meta:   dict，包含 difficulty / category / accuracy 三字段 + query_origin 机器标识
@@ -55,6 +62,7 @@ from scripts.i18n import t, resolve_user_language  # noqa: E402
 # 公共凭据统一从 adapters/coze_token_embedded.py 导入（XOR+base64 混淆内嵌，ct-base §5 合规；
 # .py 后缀不被 SkillHub 文件过滤删除；禁明文 JWT 落盘）。
 from adapters.coze_token_embedded import get_token
+from adapters.errsignal import emit_err_signal  # noqa: E402  结构化错误信号（stderr 机器通道）
 
 # ── §8.6 硬件绑定机器标识：统一从本技能 scripts/hardware_id.py 导入（ct-base 共享件 vendored 副本）──
 import os as _os
@@ -74,28 +82,151 @@ class MissingDependencyError(Exception):
     """
 
 
-def _ensure_requests():
-    """确保 ``requests`` 可用：先导入；缺失则提示用户手动安装并退出。
+# 2026-10-15（C 方案）：传输层切换为 stdlib urllib 后，requests 不再是必需依赖，
+# _ensure_requests() 及其「缺失即提示安装并退出」逻辑整体移除——
+# 「依赖缺失」失败类被消灭（entry.py 预检同步改为非致命留痕）。
+# MissingDependencyError 类保留：adapters/__init__.py 仍导出它；orchestrate /
+# refine_answer 中的 except 分支为防御性死代码（urllib 路径不会抛出它）。
 
-    出站精校（Coze）需要 ``requests`` 发起 HTTPS 请求。首次运行时若本地未装，
-    **必须提示用户手动安装**（不自动执行 pip install，避免在用户环境静默引入外部依赖）。
+def _env_proxy_present() -> bool:
+    """检测运行环境是否配置了系统/环境变量代理（HTTP(S)_PROXY / ALL_PROXY，大小写皆可）。
 
-    交互模式（stdin 为 TTY）：显示手动安装命令并退出；
-    非交互模式（stdin 为管道 / 后台调用 --fire-only）：同样提示手动命令并退出。
+    仅用于决定出站重试顺序：有代理则优先走代理、连接失败再回退直连；无代理则直接直连。
+    读取标准代理环境变量，不依赖任何平台特定 API。
     """
-    try:
-        import requests  # noqa: F401
-        return requests
-    except ImportError:
-        pass
+    for _k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy",
+               "ALL_PROXY", "all_proxy"):
+        if os.environ.get(_k):
+            return True
+    return False
 
-    # 缺失：用 i18n 输出随 locale 切换的安装提示，提示用户手动安装后退出
-    install_cmd = 'python -m pip install "requests==2.32.3"'
-    notice = t("error.requests_missing", cmd=install_cmd)
+_TIMEOUT_HINT = (
+    "⚠️ 请求超时：Coze 服务未在限定时间内响应。请求很可能已送达 Coze，仅是回包较慢。\n\n"
+    "请按以下步骤处理：\n"
+    "  ① 稍等 1–2 分钟，重新运行本技能（多数情况下再次请求即可成功）；\n"
+    "  ② 若持续超时，可能是 Coze 端繁忙或本机到代理链路拥塞，可尝试切换网络/代理后重试；\n"
+    "  ③ 仍不行请间隔 10 分钟后再试，避免短时间高频重试造成请求重复发送。\n"
+    "注意：超时不等于请求失败，请勿为「确认是否送达」而多次重复提问。"
+)
 
-    # 两种模式均提示手动安装后退出（不自动执行 pip install）
-    raise MissingDependencyError(notice)
 
+def _current_proxy() -> str:
+    """读取当前生效的代理值（HTTPS 优先，其次 HTTP）；未配置返回空串。
+
+    用于错误提示里展示**真实**代理配置——避免硬编码过期端口误导用户
+    （本地代理端口会随代理软件重启变化，写死必然过期）。
+    """
+    for _k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        _v = os.environ.get(_k)
+        if _v:
+            return _v
+    return ""
+
+
+def _classify_outbound_error(e: Exception, proxy_attempted: bool = False):
+    """把出站异常分类为 ``(机器错误码, 人读提示)``；非网络类异常返回 ``(None, None)``。
+
+    机器错误码见 adapters/errsignal.py::ERR_CODES（调用方经 emit_err_signal 发
+    stderr 信号）；人读提示挂 RefineResult.connection_error，由 build_output
+    渲染为「编号步骤」式排查指引。两类都绝不静默。
+
+    proxy_attempted: 本次是否尝试过系统代理路径（env 含 HTTP(S)_PROXY）。
+    当本机已配代理却失败时，优先给出「检查/启动代理」的针对性步骤。
+
+    异常 taxonomy（stdlib urllib，2026-10-15 起；requests 版已移除）：
+      - urllib.error.HTTPError        服务端有响应（401/5xx）→ AUTH_401 / COZE_HTTP_ERROR
+      - TimeoutError(socket.timeout)  超时（含 URLError.reason 包装）→ TIMEOUT
+      - ssl.SSLError                  TLS 握手失败（代理 MITM / 证书 / 时间偏差）→ CONN_FAIL_*
+      - urllib.error.URLError / OSError   连接阶段失败 → CONN_FAIL_PROXY / CONN_FAIL_DIRECT
+    """
+    import socket
+    import ssl
+    import urllib.error
+
+    _proxy_hint = _current_proxy() or "未设置（当前环境没有代理变量）"
+
+    # ── HTTP 层：服务端有响应，不是连接问题 ──
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 401:
+            return ("AUTH_401",
+                "⚠️ Coze 鉴权失败（HTTP 401）：访问令牌已失效或被撤销。\n\n"
+                "请按以下步骤处理：\n"
+                "  ① 这不是网络问题，重试无效；\n"
+                "  ② 请向技能维护者索取新的访问令牌（内嵌于 adapters/coze_token_embedded.py）；\n"
+                "  ③ 更新后重新运行本技能。")
+        return ("COZE_HTTP_ERROR",
+            "⚠️ Coze 服务端返回 HTTP %s：服务暂时不可用或请求被拒绝。\n\n"
+            "请按以下步骤处理：\n"
+            "  ① 稍等 1–2 分钟后重新运行本技能；\n"
+            "  ② 若持续出现，请附上本提示联系技能维护者（Coze 工作流可能异常）。" % e.code)
+
+    # ── 超时：Coze 很可能已收到请求，严禁自动重试 ──
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return ("TIMEOUT", _TIMEOUT_HINT)
+    if isinstance(e, urllib.error.URLError) and isinstance(
+            getattr(e, "reason", None), (socket.timeout, TimeoutError)):
+        return ("TIMEOUT", _TIMEOUT_HINT)
+
+    # ── TLS 握手失败：本地代理拦截 / 证书链 / 系统时间偏差 ──
+    if isinstance(e, ssl.SSLError):
+        _code = "CONN_FAIL_PROXY" if proxy_attempted else "CONN_FAIL_DIRECT"
+        return (_code,
+            "⚠️ TLS/SSL 握手失败：无法与 Coze 建立加密连接。\n\n"
+            "请按以下步骤排查：\n"
+            "  ① 若本机使用本地代理（当前值：%s），代理软件可能拦截了 HTTPS 流量——\n"
+            "     检查代理的证书配置，或临时清除代理直连验证：set HTTPS_PROXY=\n"
+            "  ② 检查系统时间是否准确（时间偏差会导致证书校验失败）；\n"
+            "  ③ 检查防火墙 / 杀毒是否对 Python 做 HTTPS 扫描，必要时临时放行；\n"
+            "  ④ 排查完成后重新运行本技能。" % _proxy_hint)
+
+    # ── 连接阶段失败（拒绝 / 无路由 / DNS / 代理不可达） ──
+    if isinstance(e, (urllib.error.URLError, ConnectionError, OSError)):
+        if proxy_attempted:
+            return ("CONN_FAIL_PROXY",
+                "⚠️ 出站连接失败：本机已配置系统代理（当前值：%s），"
+                "但经代理与直连均无法建立到 Coze 的连接。\n\n"
+                "请按以下步骤恢复：\n"
+                "  ① 优先确认代理软件/服务是否正在运行（本机常用 127.0.0.1 端口的本地代理）；\n"
+                "     查看当前代理：PowerShell  $env:HTTPS_PROXY   /   CMD  echo %%HTTPS_PROXY%%\n"
+                "  ② 若代理未启动，先启动它；若地址/端口已变更，更新环境变量：\n"
+                "       set HTTPS_PROXY=http://<代理地址>:<端口>\n"
+                "  ③ 若确无需代理，临时清除后重试（技能会改走直连）：\n"
+                "       set HTTPS_PROXY=\n"
+                "  ④ 用 curl 验证出网是否通畅：\n"
+                "       curl -I https://ct-advisor.coze.site/run\n"
+                "     仍连不通，检查防火墙 / 杀毒软件是否拦截了 Python 出网。\n"
+                "  ⑤ 排查完成后，重新运行本技能即可。" % _proxy_hint)
+        return ("CONN_FAIL_DIRECT",
+            "⚠️ 出站连接失败：无法建立到 Coze 的网络连接（本机无出网路由，或连接被目标拒绝）。\n\n"
+            "请按以下步骤排查并恢复：\n"
+            "  ① 确认本机代理环境变量是否已设置（本机通常需经代理出网）：\n"
+            "       PowerShell：  $env:HTTPS_PROXY\n"
+            "       CMD：         echo %%HTTPS_PROXY%%\n"
+            "     当前值：%s\n"
+            "     若为空，请向网络管理员索取代理地址后设置，或直接在本机终端执行：\n"
+            "       set HTTPS_PROXY=http://<代理地址>:<端口>\n"
+            "  ② 若已配置代理，确认代理软件/服务正在运行且地址端口正确。\n"
+            "  ③ 用 curl 验证出网是否通畅：\n"
+            "       curl -I https://ct-advisor.coze.site/run\n"
+            "     若连不通，检查防火墙 / 杀毒软件是否拦截了 Python 出网。\n"
+            "  ④ 排查完成后，重新运行本技能即可。" % _proxy_hint)
+
+    return (None, None)
+
+
+def _internal_error_msg(e: Exception) -> str:
+    """非网络类失败（配置损坏 / token 解码失败 / 响应解析失败 / 代码缺陷）的人读提示。
+
+    与 connection_error 同理：绝不静默为空答案、绝不伪装成「返回为空，请稍后重试」。
+    """
+    return (
+        "⚠️ 技能内部错误（%s）：未成功连接到 Coze 或响应解析失败，通常与网络无关。\n\n"
+        "请按以下步骤处理：\n"
+        "  ① 重新运行本技能一次（偶发瞬时故障多可自行恢复）；\n"
+        "  ② 若持续出现，请把本提示连同上面的错误信息反馈给技能维护者；\n"
+        "  ③ 排查期间不会返回任何未经精校的占位内容。"
+        % type(e).__name__
+    )
 
 # 展示前剥离 <source> 标签的正则（注意：用字符类 ["'] 避免 \" 在 raw string 中的解析问题）
 _DISPLAY_TAG_RE = re.compile(r'''<source\s+skill=["'][^"]*["']>\s*''', re.IGNORECASE)
@@ -577,9 +708,7 @@ class CozeRefiner(Refiner):
         return self._resolve_timeout(req, timeout)
 
     def refine(self, req: RefineRequest, timeout: float = None) -> RefineResult:
-        # 依赖保障：在出站 try 之外执行。缺失且自动安装失败 → 向上抛 MissingDependencyError，
-        # 由 refine_answer.py 显式退出（绝不静默回退草稿，否则用户误以为答案经 Coze 精校）。
-        _ensure_requests()
+        # 2026-10-15（C 方案）：requests 依赖已移除（urllib 传输），无需预检。
         timeout = self._resolve_timeout(req, timeout)
         # 全量直发（2026-08-14）：不再按难度分流，一律单次转发 Coze，返回结构化结果。
         # 兼容旧调用方：仍可通过 .final_answer 取文本；旧 fire-only/collect（race）保留不删。
@@ -601,15 +730,20 @@ class CozeRefiner(Refiner):
         agent 在 step 2 后台调用此法（run_in_background），step 3 并行写本地草稿 + 
         用 ``--collect`` 读取缓存：命中则 Coze 胜出、中断本地；否则用本地草稿（速度优先）。
         """
-        _ensure_requests()
+        # 2026-10-15（C 方案）：requests 依赖已移除（urllib 传输），无需预检。
         coze_req = copy.copy(req)
         coze_req.draft_answer = ""
         cache = self._race_cache_path(req)
         try:
             text = self._call_coze(coze_req, self._resolve_timeout(coze_req, None))
         except MissingDependencyError:
-            raise  # 致命依赖错误，向上传播（由 refine_answer.py 显式退出）
-        except Exception:  # noqa: BLE001
+            raise  # 致命依赖错误，向上传播（urllib 传输下不会产生，防御性保留）
+        except Exception as e:  # noqa: BLE001
+            # race 语义：失败即返回空串、本地草稿胜出（设计内降级，不阻塞用户）；
+            # 但仍发 ERR 信号留痕，避免「静默」到无法观测。
+            code, _msg = _classify_outbound_error(e, proxy_attempted=_env_proxy_present())
+            emit_err_signal(code or "ORCH_FAIL",
+                            detail="fire-only %s: %s" % (type(e).__name__, e))
             return ""
         if text:
             try:
@@ -680,9 +814,10 @@ class CozeRefiner(Refiner):
           - need_tool 路径：final_answer = Coze 草稿（缝合基底）；need_tool/params 填充
           - 缓存命中：cache_hit=True，final_answer=cached_answer
 
-        requests 已在 refine() 经 _ensure_requests() 保障可用。
+        传输层为 stdlib urllib（零第三方依赖，2026-10-15 起），无需 requests。
         """
-        import requests  # 延迟导入：仅在真正出站时才需要
+        # 2026-10-15（C 方案）：传输层改 stdlib urllib，此处不再需要 requests
+        # （漏删这行会在 requests 缺失时直接 ImportError，废掉整个 C 方案）。
         from .sanitize import sanitize
 
         # 保留 draft_answer 中的 <source skill="xxx"> 标签，原样发给 coze。
@@ -695,41 +830,72 @@ class CozeRefiner(Refiner):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        # 已知端点已加入 auto_approve_endpoints 白名单，且本机 443 直连可达（实测握手 <1s、
-        # 远快于经注入代理跳板）。故**默认直连**（强制绕过任何系统/注入代理，避免代理拖慢 +
-        # 代理相关重试产生的冗余重复发送——用户实测某次运行出现「两次 28s + 一次 43s 重试」，
-        # 根因即首调用经代理超时后被强制直连重试，而 Coze 早已收到第一次请求）。
-        # 仅在「连接阶段」失败（代理不可用 / DNS / 连接被拒）时，才回退系统代理重试一次；
-        # **ReadTimeout 不重试**：此时 Coze 多半已收到请求并正在处理，重试只会再发一份重复请求。
-        try:
-            resp = requests.post(
-                self.endpoint, json=payload, headers=_headers, timeout=timeout,
-                proxies={"http": None, "https": None},
+        # ── 出站传输层（2026-10-15 C 方案：stdlib urllib，零第三方依赖） ──
+        # urllib 默认 opener 经 ProxyHandler(getproxies()) 读取环境变量代理
+        # （HTTP(S)_PROXY，大小写不敏感归一）；HTTPS 经 http 代理时自动走 CONNECT
+        # 隧道——本机实测：经系统代理 POST 本端点返回 200。
+        # 重试顺序（与 requests 版语义一致）：
+        #   1) 检测到系统代理 env → 先走系统代理（默认 opener，等价 proxies=None）；
+        #   2) 仅「连接阶段」失败（URLError / OSError：代理不可达、DNS、连接被拒）
+        #      才回退强制直连重试一次（ProxyHandler({}) 空代理表）；
+        #   3) 超时（TimeoutError）不重试：无论哪条路径，Coze 多半已收到请求，
+        #      重试只会造成重复发送；
+        #   4) HTTPError（4xx/5xx）是服务端响应而非连接问题：跳出循环单独处理。
+        import urllib.error as _urlerr
+        import urllib.request as _urlreq
+
+        _env_proxy = _env_proxy_present()
+        _try_orders = (
+            [("system-proxy", None), ("direct", "direct")]
+            if _env_proxy else
+            [("direct", "direct")]
+        )
+        _body = json.dumps(payload).encode("utf-8")
+        _resp_raw = None        # 成功响应体（bytes）
+        _http_error = None      # 非 2xx：urllib.error.HTTPError（本身也是响应对象）
+        _last_exc = None
+        for _label, _proxies in _try_orders:
+            # None → 默认 opener（读 env 代理）；"direct" → 空 ProxyHandler 强制直连
+            _opener = (_urlreq.build_opener() if _proxies is None
+                       else _urlreq.build_opener(_urlreq.ProxyHandler({})))
+            _request = _urlreq.Request(
+                self.endpoint, data=_body, method="POST", headers=dict(_headers)
             )
-        except (requests.exceptions.ProxyError, requests.exceptions.ConnectionError) as e:
-            # 直连连接失败（如严格出网环境必须走代理）→ 回退系统代理重试一次
             try:
-                sys.stderr.write(
-                    f"[ct-advisor] 直连失败({type(e).__name__})，回退系统代理重试一次...\n"
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            resp = requests.post(
-                self.endpoint, json=payload, headers=_headers, timeout=timeout,
-            )
-        except requests.exceptions.ReadTimeout:
-            # 读取超时：Coze 很可能已收到请求，重试只会造成重复发送，直接上抛由
-            # refine_forward / 调用方兜底回退本地草稿（draft 为空时给出服务不可用提示）。
-            raise
+                with _opener.open(_request, timeout=timeout) as _r:
+                    _resp_raw = _r.read()
+                break
+            except _urlerr.HTTPError as _e:
+                # 服务端有响应（401/5xx 等）：不是连接问题，跳出重试循环
+                _http_error = _e
+                break
+            except (socket.timeout, TimeoutError):
+                # 超时：Coze 很可能已收到请求，重试只会造成重复发送，直接上抛
+                raise
+            except (_urlerr.URLError, OSError) as _e:
+                # 连接阶段失败（代理不可达 / DNS / 连接被拒）→ 尝试下一路径
+                _last_exc = _e
+                try:
+                    sys.stderr.write(
+                        f"[ct-advisor] {_label} 连接失败({type(_e).__name__})，尝试下一路径...\n"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+        if _resp_raw is None and _http_error is None:
+            # 所有可用路径均连接失败 → 上抛最后一次异常，交由上层兜底
+            raise _last_exc if _last_exc is not None else RuntimeError("all outbound paths failed")
         # 显式暴露鉴权/服务错误：4xx/5xx 不应被上层 except 静默成「超时/没发」
         # （2026-08-08 加固：此前 TypeError 被静默吞掉，误判为未发送）
-        if resp.status_code == 401:
-            try:
-                sys.stderr.write(t("error.coze_401") + "\n")
-            except Exception:
-                pass
-        resp.raise_for_status()
-        data = resp.json()
+        if _http_error is not None:
+            if _http_error.code == 401:
+                try:
+                    sys.stderr.write(t("error.coze_401") + "\n")
+                except Exception:
+                    pass
+            # 上抛由 _classify_outbound_error 分类为 AUTH_401 / COZE_HTTP_ERROR
+            raise _http_error
+        data = json.loads(_resp_raw.decode("utf-8"))
         # 全量直发（2026-08-14）：解析结构化返回，透出 need_tool 分支
         # 兼容（2026-09-09）：新版 Coze 工作流返回顶层 `final_answer`；老版本仍返回 `answer`。
         # 两 key 都认（final_answer 优先），任一命中即采用，都不命中才回退本地草稿。
@@ -756,15 +922,28 @@ class CozeRefiner(Refiner):
 
         本地大模型原则上不回答——本方法只负责「转发 + 结果结构化」，不生成草稿。
         """
-        _ensure_requests()
+        # 2026-10-15（C 方案）：requests 依赖已移除（urllib 传输），无需预检。
         timeout = self._resolve_timeout(req, timeout)
         try:
             return self._call_coze(req, timeout)
         except MissingDependencyError:
-            raise  # 致命依赖错误，向上传播
+            raise  # 致命依赖错误，向上传播（urllib 传输下不会产生，防御性保留）
         except Exception as e:  # noqa: BLE001
             self._log_fallback(e, timeout)
-            return RefineResult(final_answer=req.draft_answer, need_tool=None)
+            res = RefineResult(final_answer=req.draft_answer, need_tool=None)
+            # 出站失败双通道透出（2026-10-15 B 方案）：机器错误码经 emit_err_signal
+            # 发 stderr [ct-advisor][ERR] 信号；人读提示挂 res.connection_error
+            # （网络/超时类）或 res.internal_error（其余），交由 build_output 渲染。
+            # 两类都绝不静默，均不再伪装成「返回为空，请稍后重试」。
+            code, msg = _classify_outbound_error(e, proxy_attempted=_env_proxy_present())
+            if msg:
+                res.connection_error = msg
+            if code:
+                emit_err_signal(code, detail="%s: %s" % (type(e).__name__, e))
+            else:
+                emit_err_signal("ORCH_FAIL", detail="%s: %s" % (type(e).__name__, e))
+                res.internal_error = _internal_error_msg(e)
+            return res
 
     def _refine_serial(self, req: RefineRequest, timeout: float) -> RefineResult:
         """⚠️ 已废弃（2026-08-14 全量直发改造）：保留仅为旧调用方兼容，返回 RefineResult。
@@ -774,10 +953,23 @@ class CozeRefiner(Refiner):
         try:
             return self._call_coze(req, timeout)
         except MissingDependencyError:
-            raise  # 致命依赖错误，向上传播
+            raise  # 致命依赖错误，向上传播（urllib 传输下不会产生，防御性保留）
         except Exception as e:  # noqa: BLE001
             self._log_fallback(e, timeout)
-            return RefineResult(final_answer=req.draft_answer, need_tool=None)
+            res = RefineResult(final_answer=req.draft_answer, need_tool=None)
+            # 出站失败双通道透出（2026-10-15 B 方案）：机器错误码经 emit_err_signal
+            # 发 stderr [ct-advisor][ERR] 信号；人读提示挂 res.connection_error
+            # （网络/超时类）或 res.internal_error（其余），交由 build_output 渲染。
+            # 两类都绝不静默，均不再伪装成「返回为空，请稍后重试」。
+            code, msg = _classify_outbound_error(e, proxy_attempted=_env_proxy_present())
+            if msg:
+                res.connection_error = msg
+            if code:
+                emit_err_signal(code, detail="%s: %s" % (type(e).__name__, e))
+            else:
+                emit_err_signal("ORCH_FAIL", detail="%s: %s" % (type(e).__name__, e))
+                res.internal_error = _internal_error_msg(e)
+            return res
 
     @staticmethod
     def _log_fallback(exc: Exception, timeout: float) -> None:

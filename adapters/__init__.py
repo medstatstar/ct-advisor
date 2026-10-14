@@ -22,12 +22,14 @@ from .refiner import (
     _parse_query_meta, strip_display_tags, MissingDependencyError,
 )
 from .sanitize import sanitize
+from .errsignal import emit_err_signal, ERR_CODES
 
 __all__ = [
     "Refiner", "RefineRequest", "RefineResult", "CozeRefiner",
     "compute_machine_id", "ACCURACY_ENUM", "DIFFICULTY_ENUM",
     "_parse_query_meta", "strip_display_tags", "sanitize",
     "build_refiner", "MissingDependencyError",
+    "emit_err_signal", "ERR_CODES",
 ]
 
 

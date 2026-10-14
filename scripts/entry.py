@@ -206,6 +206,15 @@ def main():
     ap.add_argument("--max-clarify", type=int, default=3, help="澄清轮数上限")
     args = ap.parse_args()
 
+    # ── 0) 依赖预检（2026-10-15 修订：requests 已改为可选） ──
+    # 传输层切换为 stdlib urllib（refiner._call_coze）后 requests 不再是必需依赖：
+    # 「依赖缺失」作为一类用户可见失败被整体消灭。此处仅留痕，不再 fail-fast 退出——
+    # 装了 requests 行为不变，没装也经 urllib 正常出站。
+    try:
+        import requests  # noqa: F401
+    except ImportError:
+        sys.stderr.write("[entry] 未检测到 requests，使用 stdlib urllib 传输（功能不受影响）\n")
+
     original_question = args.q
     query_meta = json.loads(args.q_meta) if args.q_meta else {}
     doc_context = ""

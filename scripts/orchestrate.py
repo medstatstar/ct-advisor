@@ -197,14 +197,39 @@ def _unpublished_payload(tool: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def _fire_coze(req: RefineRequest, config_path: str) -> RefineResult:
-    """线程内调用 Coze 全量直发；任何异常回退草稿（不抛，交由决策逻辑处理）。"""
+    """线程内调用 Coze 全量直发。
+
+    依赖缺失（MissingDependencyError）**绝不静默回退**：把安装提示挂到
+    RefineResult.dependency_error 上交给 build_output 渲染，否则用户会误以为
+    拿到的是 Coze 精校答案，实则连请求都没发出去。
+    （2026-10-15 注：传输层已改 stdlib urllib，requests 缺失不再触发本分支，
+     此处作为防御性死代码保留。）
+
+    其余异常分两类透出，均**不伪装成「返回为空，请稍后重试」**：
+      - 网络/超时类：refine_forward 内部已分类为 connection_error + ERR 信号；
+      - 调用前异常（配置损坏 / token 解码失败 / 代码缺陷）：逃逸到本层，
+        归类 ORCH_FAIL 并挂 internal_error 人读提示。
+    """
     # 延迟导入重模块（性能修复）：仅在线程内使用，避免主流程导入期加载
-    from adapters import build_refiner, RefineResult
+    from adapters import build_refiner, RefineResult, MissingDependencyError, emit_err_signal
+    from adapters.refiner import _internal_error_msg
     from refine_answer import _check_outbound_authorization, _get_endpoint_from_config
     try:
         return build_refiner(config_path=config_path).refine_forward(req)
-    except Exception:  # noqa: BLE001
-        return RefineResult(final_answer=req.draft_answer, need_tool=None)
+    except MissingDependencyError as e:
+        # 依赖缺失：挂上安装提示，交由 build_output 透传给用户（不伪装成空答案）
+        sys.stderr.write(f"[ct-advisor][DEP-MISS] {e}\n")
+        res = RefineResult(final_answer=req.draft_answer, need_tool=None)
+        res.dependency_error = str(e)  # 动态属性；build_output 用 getattr 读取
+        return res
+    except Exception as e:  # noqa: BLE001
+        # 调用前/配置类异常：ORCH_FAIL 机器信号 + internal_error 人读提示。
+        # （网络/超时类异常已在 refine_forward 内部分类，不会到达这里。）
+        emit_err_signal("ORCH_FAIL", detail="%s: %s" % (type(e).__name__, e))
+        sys.stderr.write(f"[ct-advisor][COZE-FALLBACK] {type(e).__name__}: {e}\n")
+        res = RefineResult(final_answer=req.draft_answer, need_tool=None)
+        res.internal_error = _internal_error_msg(e)  # 动态属性；build_output 用 getattr 读取
+        return res
 
 
 def _fire_prefetch(card: dict) -> dict:
@@ -233,6 +258,34 @@ def build_output(orig_q: str, coze_result: RefineResult,
       - 无预判但 Coze 要求工具 → 委托。
       - Coze 未要求工具且预判无有效补充 → Coze 答案足够 → 包裹。
     """
+    # ── 依赖缺失快速通道（2026-10-15 修复）：绝不静默失败 ──
+    # _fire_coze 在 requests 缺失时把安装提示挂在 dependency_error 上；此处直接
+    # 渲染为用户可见的「请先安装」提示，避免冒充 Coze 空答案。
+    dep_err = getattr(coze_result, "dependency_error", None)
+    if dep_err:
+        return _wrap(
+            "⚠️ 答案精校服务依赖缺失，无法连接 Coze。\n\n"
+            f"{dep_err}\n\n"
+            "安装完成前本技能无法提供精校答案（不会返回任何未经精校的占位内容）。"
+        )
+    # ── 出站连接/超时失败快速通道（2026-10-15 修复）：绝不静默为「返回为空」 ──
+    # 与 dependency_error 同理：连接失败必须明确告知用户检查网络/代理，
+    # 而非误导为「Coze 返回空、请稍后重试」。仅当 Coze 真正返回空答案时才走原提示。
+    conn_err = getattr(coze_result, "connection_error", None)
+    if conn_err:
+        return _wrap(
+            "精校服务连接失败，无法获取 Coze 答案。\n\n"
+            f"{conn_err}\n\n"
+            "完成上述排查并恢复网络/代理后，重新运行本技能即可（连接恢复前本技能不会返回任何未经精校的占位内容）。"
+        )
+    # ── 技能内部错误快速通道（2026-10-15）：配置/代码类失败，不伪装成「返回为空」 ──
+    internal_err = getattr(coze_result, "internal_error", None)
+    if internal_err:
+        return _wrap(internal_err)
+    # coze_result 为 None（线程异常崩溃兜底）：降级为空结果，避免 AttributeError 连环崩溃
+    if coze_result is None:
+        coze_result = _mk_coze("", None, {})
+
     # 延迟导入重模块（性能修复 + 自测路径兼容）：run_orchestrate 已在 Coze 等待窗口预热
     # sys.modules，此处为缓存命中；run_self_test 直调本函数时则在此首次加载。
     # 注意：函数级 from-import 仅绑定本函数局部，兄弟函数（_enrich_coze_params /
