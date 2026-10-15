@@ -10,8 +10,8 @@ route_tool / orchestrate 等，冷导入合计约 24s）在进程启动期一次
 安全边界：
   - 仅监听 127.0.0.1（回环），外部不可达，不接受任何代码执行或文件副作用。
   - 仅暴露 /health、/ask、/shutdown 三个端点；/ask 只接受 {payload, config} 并返回
-    run_orchestrate 的原始字符串（含 <<<CT_ANSWER_START/END>>> + sha256），与 entry.py
-    内联路径输出格式完全一致——HARD GATE 与输出契约不变。
+    run_orchestrate 的原始字符串（含 <<<CT_ANSWER_B64_START/END>>> + sha256，base64
+    ASCII-safe 载荷），与 entry.py 内联路径输出格式完全一致——HARD GATE 与输出契约不变。
   - 空闲超时自动退出（默认 600s），避免孤儿进程常驻。
 """
 from __future__ import annotations

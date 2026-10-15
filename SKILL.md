@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.4
+version: 1.3.11
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -72,9 +72,9 @@ tier: A
 - ❌ **NEVER** perform any local network retrieval or web search (`references/search-sites.md` has been removed)
 - ❌ **NEVER** answer the question from the LLM's own knowledge — all domain expertise lives on the Coze side
 - ❌ **NEVER** bypass `entry.py` by calling `route.py`, `refine_answer.py`, `orchestrate.py`, or any other script directly
-- ❌ **NEVER** rewrite, rephrase, reorder, summarize, or "polish" the text between `<<<CT_ANSWER_START>>>` and `<<<CT_ANSWER_END>>>`
-- ❌ **NEVER** append a summary, lead-in, closing remark, or "key takeaways" before or after the delimiters
-- ❌ **NEVER** strip or alter the `checksum:` line that follows `<<<CT_ANSWER_END>>>`
+- ❌ **NEVER** rewrite, rephrase, reorder, summarize, or "polish" the answer text obtained by base64-decoding the payload between `<<<CT_ANSWER_B64_START>>>` and `<<<CT_ANSWER_B64_END>>>`
+- ❌ **NEVER** append a summary, lead-in, closing remark, or "key takeaways" before or after the decoded answer
+- ❌ **NEVER** strip or alter the `checksum:` line that follows `<<<CT_ANSWER_B64_END>>>`
 - ❌ **NEVER** translate or align language (the code already handles that)
 - ❌ **NEVER** inject process narration ("Step 2", "Coze returned", "assembling payload")
 - ❌ **NEVER** decide whether to forward to Coze — ALL questions are forwarded (entry.py handles routing internally)
@@ -104,7 +104,7 @@ STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
 STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
 STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): parallel Coze /run fire + local ct-skill prefetch → merge
 STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
-STEP 5  Output — stdout wrapped in <<<CT_ANSWER_START/END>>> + sha256 checksum
+STEP 5  Output — stdout carries a base64 ASCII-safe payload in <<<CT_ANSWER_B64_START/END>>> + sha256 checksum
 ```
 
 > **LLM-forbidden zone**: every STEP above is executed by code. The local LLM
@@ -112,24 +112,34 @@ STEP 5  Output — stdout wrapped in <<<CT_ANSWER_START/END>>> + sha256 checksum
 
 ### Output format:
 ```
-<<<CT_ANSWER_START>>>
-{answer text from Coze}
-<<<CT_ANSWER_END>>>
-checksum: {sha256[:16]}
+<<<CT_ANSWER_B64_START>>>
+{base64 of the LF-normalized answer}
+<<<CT_ANSWER_B64_END>>>
+checksum: {sha256[:16] of the LF-normalized answer}
 ```
+
+> 🔴 **base64 ASCII-safe payload (v1.3.9)**: the answer is base64-encoded before output — the delimiters, payload and checksum line are pure ASCII (a subset of every console code page, incl. cp936/GBK). PowerShell 5.1 decoding captured stdout with the wrong code page therefore **cannot** corrupt the payload: this structurally closes the "GBK mojibake → byte-level checksum false-alarm → agent misreads it as encoding loss/tampering → pointless Coze re-run" loop. **Decode FIRST, then verify** (see the check code below). The checksum is still computed over the LF-normalized answer text (CRLF-tolerance retained). A plain-text `<<<CT_ANSWER_START>>>` (non-b64) block is legacy/debug output only — if you ever see one, apply the same decode-then-verify discipline but treat mojibake as possible.
 
 ### 🔴 sha256 Anti-tamper Check (HARD GATE):
 After receiving the stdout from `entry.py`, the local LLM **MUST** verify the checksum before passing the answer to the user:
 
 ```python
-import hashlib, re
+import base64, hashlib, re
 stdout = "...(entry.py output)..."
-m = re.search(r'<<<CT_ANSWER_START>>>\n(.*?)\n<<<CT_ANSWER_END>>>\nchecksum: (.+)', stdout, re.DOTALL)
+m = re.search(r'<<<CT_ANSWER_B64_START>>>\r?\n(.*?)\r?\n<<<CT_ANSWER_B64_END>>>\r?\nchecksum: (.+)', stdout, re.DOTALL)
 if m:
-    answer, expected_checksum = m.group(1), m.group(2).strip()
-    actual_checksum = hashlib.sha256(answer.encode("utf-8")).hexdigest()[:16]
+    # Decode the base64 payload FIRST (v1.3.9): the b64 charset is pure ASCII,
+    # so the payload survives ANY console code page (cp936 included) byte-for-byte.
+    # Strip ALL whitespace before decoding (2026-10-15 audit): PowerShell
+    # `Out-String` wraps long payloads (>80 display cols — a 1000-char answer is
+    # ~1.3k+ b64 chars) with mid-payload newlines; Python's b64decode tolerates
+    # them but strict decoders (e.g. .NET FromBase64String) do not. Then hash the
+    # LF-normalized answer (CRLF-tolerance retained).
+    answer = base64.b64decode(re.sub(r"\s+", "", m.group(1))).decode("utf-8")
+    expected_checksum = m.group(2).strip()
+    actual_checksum = hashlib.sha256(answer.replace("\r\n", "\n").encode("utf-8")).hexdigest()[:16]
     if actual_checksum != expected_checksum:
-        # TAMPER DETECTED — do NOT pass to user
+        # DO NOT blindly re-run — work the "Checksum-mismatch decision table" below first.
         print("⚠️ answer integrity check failed, please retry.")
     else:
         # OK — pass answer verbatim
@@ -138,7 +148,26 @@ if m:
 
 **If the checksum does not match, the local LLM MUST NOT deliver the answer to the user.** This prevents any silent tampering.
 
-> 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. **The local LLM may call `entry.py` only ONCE per question** and must capture its entire stdout into memory/a variable. The sha256 check MUST run against that SAME captured result — **re-calling `entry.py` purely to perform the check is strictly forbidden** (it sends an identical request to the Coze backend again, doubling the latency; in practice this once caused "the same question sent 2–3 times, a single Q&A dragging to 4 minutes"). If you need to persist output, write the stdout already captured from the first run rather than re-running.
+> 🔴 **Capture stdout BYTE-FAITHFULLY (Windows PowerShell · 2026-10-15)**: since v1.3.9 the answer payload is base64 (pure ASCII), so the **checksum-relevant bytes survive any console code page** — verified end-to-end on a Chinese Windows with the default `gb2312`/cp936 `[Console]::OutputEncoding` (payload intact, checksum matched). Two residual notes: (1) setting `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` before invoking `entry.py` is still **recommended** — it keeps stderr diagnostics (Chinese log lines) readable, but is no longer load-bearing for the gate; (2) if you ever capture a legacy plain-text `<<<CT_ANSWER_START>>>` block (debug output), GBK mojibake IS possible again — decode-then-verify per the decision table. In Git Bash / `cmd /c` with file redirection / WSL the byte stream is faithful — no action needed. Do NOT "fix" encoding by writing stdout to a temp file (see the L3 discipline below).
+
+> 🔴 **Checksum-mismatch decision table (HARD GATE · 2026-10-15)**: a mismatch is NOT a licence to re-run. Work the table IN ORDER and stop at the first hit:
+>
+> | # | Check | Action |
+> |---|---|---|
+> | 1 | Re-hash after CRLF normalization (`.replace("\r\n", "\n")` — see code above) | Match → deliver verbatim. Done. |
+> | 1b | `b64decode` raised (e.g. strict decoder met mid-payload newlines from PowerShell `Out-String` line-wrapping of a long payload) | Strip ALL whitespace from the b64 field (`re.sub(r"\s+", "", m.group(1))`) and decode again — the verify code above already does this. Only if it still fails treat it as a corrupted capture → step 2. Never re-run Coze for this. |
+> | 1c | stdout ends with a truncation marker (e.g. `…[输出截断]`) or the trailing `checksum:` line is missing entirely | The capture tool truncated the echo (PowerShell tool ≈20k chars; the absolute worst case — coze 1000-char answer + 4000-char skill result both maxed — is ~20,150 b64 chars, verified intact on Bash). **Switch to the Bash / Git Bash tool and re-capture — do NOT re-run Coze.** |
+> | 2 | Is the captured answer visibly mojibake (CJK rendered as `鏈熶复…`-style garbage) or truncated? | With the v1.3.9 base64 payload this should no longer happen for the answer block — if it does, you are looking at legacy/debug plain-text output or a corrupted capture pipeline. **The corrupted text is NOT repairable in place** — cp936 mis-decodes some UTF-8 byte pairs as illegal (e.g. `0x9A`) and replaces them with U+FFFD, permanently destroying the original bytes (both deterministic byte-reversal and any LLM rewrite were tested and cannot restore them). Fix the capture (set `[Console]::OutputEncoding` to UTF-8, or re-capture in Git Bash reading the FULL stdout into a variable) and re-send Coze **at most once**, stating the reason to the user. Cost note: on the serial path the re-run hits the **local dedup short-circuit** (30-min window, ≥0.90 similarity) and replays the clean cached answer with **no new Coze call** — stderr shows `dedup short-circuit: replayed local cached answer`. Even a genuine re-send is cheap: the Coze backend has a 4-gate server-side cache (cross-request hit, verified). |
+> | 3 | Regex found NO `<<<CT_ANSWER_B64_START>>>` block at all (stdout structure destroyed, or empty stdout) | First rule out a real endpoint fault — check stderr for `[ct-advisor][ERR]` and run `check_coze.py` (token / dead proxy / network / unreachable). If the endpoint is healthy this is still a capture-layer failure → same repair as step 2, re-send ≤1. If the endpoint itself is down, report the diagnosis to the user and stop — do not re-send into a dead endpoint. |
+> | 4 | Still mismatched, text looks clean | Treat as potential tampering: do NOT deliver; do NOT loop re-runs; report expected vs actual checksums to the user and stop. |
+>
+> Re-running without evidence from steps 2–3 is a protocol violation (it caused the observed incident: the same question fired 2–3 times, a single Q&A dragging to minutes).
+
+> 🔴 **No host-model fallback (HARD GATE · 2026-10-15)**: ct-advisor is coze-only **by design** — there is no local knowledge base or database, so a host-model direct answer on a clinical question has no domain substrate and is **forbidden as a fallback** (a bare host-model answer was evaluated and rejected: quality cannot be guaranteed without the cloud knowledge base and tool chain). The same tiering rule means attachment / `doc_context` content must **never** leave the Coze channel. The ONLY sanctioned recovery for a broken capture is: **repair the capture → re-send once (≤1, dedup-cached in the common case)**. Everything else stops and reports.
+
+> 🔴 **Short-circuit output is also GATE-wrapped (2026-10-15)**: the dedup short-circuit path emits its cached answer through the same `<<<CT_ANSWER_B64_START/END>>> + checksum` wrapper as a fresh Coze call (stderr marks `dedup short-circuit`). If your regex matches the block, decode-and-verify it like any other answer — a cached answer is a legitimate delivery, not an error.
+
+> 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. The default is **one call per question**: capture the entire stdout into memory/a variable and run the sha256 check against that SAME captured result — **re-calling `entry.py` purely to perform the check is strictly forbidden** (it sends an identical request to the Coze backend again, doubling the latency; in practice this once caused "the same question sent 2–3 times, a single Q&A dragging to 4 minutes"). The single exception is decision-table steps 2–3: **at most one re-send to repair a broken CAPTURE** (mojibake/truncation/destroyed structure), with the reason stated to the user — never for a clean-text mismatch (step 4 → stop) and never without capture evidence. If you need to persist output, write the stdout already captured from the first run rather than re-running.
 
 **Verification discipline (L3, 2026-09-25)**: The sha256 integrity check MUST be performed inline against the stdout captured in memory from the SAME `entry.py` call — i.e. immediately after capture, do `re.search` + `hashlib.sha256` comparison in memory. **Forbidden**: writing stdout to a temp file just for the check, extra tool round-trips, or post-hoc temp-file cleanup. One extra file write/read/delete round-trip only adds agent-side latency and contributes nothing to the answer itself.
 
@@ -179,7 +208,7 @@ Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.x
 
 ## Quality Gate & Stop Rules
 
-**Presentation rules (user-mandated, hard)** — deliver only the answer text between `<<<CT_ANSWER_START>>>` and `<<<CT_ANSWER_END>>>`. **Never emit any workflow / process narration to the user.**
+**Presentation rules (user-mandated, hard)** — deliver only the answer text obtained by base64-decoding the payload between `<<<CT_ANSWER_B64_START>>>` and `<<<CT_ANSWER_B64_END>>>`. **Never emit any workflow / process narration to the user.**
 
 **🔔 Forward-mode user notice (the ONLY allowed process message)** — entry.py emits a brief notice to stderr before firing the Coze call. The local LLM should not add any additional process chatter.
 
@@ -201,7 +230,7 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 
 ## Error Self-Heal Protocol (stderr machine signals · 2026-10-15)
 
-**Scope — failure paths ONLY.** On a successful run (well-formed `<<<CT_ANSWER_START>>>`…`<<<CT_ANSWER_END>>>` + `checksum:` on stdout, and **no `[ct-advisor][ERR]` line on stderr**), the agent delivers the answer and stops. **The agent MUST NOT enter self-healing when no error was reported** — no proactive health checks, no proactive dependency installs, no proactive config/env edits, no speculative retries. The `[ct-advisor][ERR]` signal is the **only** trigger.
+**Scope — failure paths ONLY.** On a successful run (well-formed `<<<CT_ANSWER_B64_START>>>`…`<<<CT_ANSWER_B64_END>>>` + `checksum:` on stdout, and **no `[ct-advisor][ERR]` line on stderr**), the agent delivers the answer and stops. **The agent MUST NOT enter self-healing when no error was reported** — no proactive health checks, no proactive dependency installs, no proactive config/env edits, no speculative retries. The `[ct-advisor][ERR]` signal is the **only** trigger.
 
 **Signal format (single line, stderr):**
 

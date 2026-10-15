@@ -1,5 +1,81 @@
 # Changelog
 
+## v1.3.11 (2026-10-15) · base64 长度审计：worst case 实测 + 15000 观测线 + PowerShell 截断决策行
+
+> 用户提出「base64 后长度几乎翻倍确实是个问题，有没有更好的办法？代码中会撞长度限制吗？」。审计结论：**保留 base64**（论证见下），新增长度观测线与决策表 1c 行。
+
+- **膨胀量化**：base64 = UTF-8 字节的 1.33 倍；中文 1 字符 = 3 字节 → 按字符数约 **4×**（比体感更甚）。绝对 worst case = coze `complex` 档硬天花板 1000 中文字（`answer_postprocess._LENGTH_CAPS`）+ 工具结果 `MAX_RESULT_CHARS=4000` 字符（`handle_need_tool` 硬截断）同时打满 → 答案 ~5000 字符 → **base64 载荷 20072 字符、总出口 20150 字符**（实测值）。
+- **长度限制全链清点**：① workbench proxy `_OUTPUT_CAP=30000`——**不拦 ct-advisor**（`/api/run-skill` 白名单仅 ct-registry/ct-safety/ct-literature）；② `handle_need_tool` `combined[:2000]` / `refine_answer` `stderr[:1500]` 均为**错误路径**截断，不影响正常答案；③ coze 侧 1000 字天花板是**答案上限的保护**而非风险。实测 Bash 工具完整回传 20150 字符（尾部 checksum 行完好）——**真实链路无截断**。
+- **替代方案四维评估（免疫性/膨胀/复杂度/兼容）**：base85 仅省 6%（1.33→1.25）且 JS 无内置解码，未根本解决；gzip+base64 长答案可净压缩至 ~1-2×、根本解决，但需改 4 个生产/消费点 + 2 个前端 + 全部测试 + SKILL.md 校验代码，且收益只在「两个独立上限同时打满」的窄场景（正常 complex 答案仅 ~4050 字符，3 倍余量）；UTF-8 原文+OutputEncoding 协议零膨胀但不免疫（v1.3.6 已否决）；文件通道违反 SKILL.md L3 明令禁令。**结论：保留 base64。**
+- **新增长度观测线（`_wrap` / `_emit_wrapped` 双实现对称）**：base64 载荷 >15000 字符时 stderr 提示 `[ct-advisor][warn]`——**只观测不截断**（截断会破坏完整性校验），用于定位「agent 侧 decode 失败」类问题。
+- **决策表新增 1c 行**：stdout 尾部出现截断标记或 checksum 行缺失 → 捕获工具截了回传（PowerShell 工具 ≈20k 字符上限）→ **换 Bash/Git Bash 重新捕获，不重跑 coze**。
+
+## v1.3.10 (2026-10-15) · 全面审计修复：B64 协议文档同步 + 校验代码抗折行加固 + coze 端零改动四层实证
+
+> 对 v1.3.1–v1.3.9 系列修复做「正确性 + 完备性」全面审计后的收尾版本。审计方法：全仓 spawn 点扫描、B64 出口生产/消费链清点、16 项边界测试、最坏场景（gb2312 + Out-String 折行 + 1200 字长答案）端到端复测。
+
+- **coze 端零改动（四层实证，回应用户「是否需要改 coze」）**：① 契约层——`adapters/coze/subagent_prompt.md` 输出约定为「纯答案文本、无任何前缀/后缀」，coze 从设计上不碰协议层；② 代码层——v1.39 部署 zip 120 个条目全文本扫描，`CT_ANSWER`/`checksum`/`<<<` 在代码中零命中（唯几处命中均为 knowledge 目录 PDF 文档内容中的巧合字样；sha256/base64 命中全部是文档解析与缓存键用途，与答案出口无关）；③ 副本层——`orchestrate.py`/`refine_answer.py` 全仓仅 `scripts/` 一份、zip 不含，无镜像副本漂移；④ 行为层——本地包装改动不动请求内容，coze 文档缓存键行为不变，线上零差异、无需部署后回归。**根因在捕获层（PowerShell 按 cp936 解码），coze 侧做任何事都隔一层——未动 coze 镜像。**
+- **校验代码抗折行加固（审计新发现）**：1000 字答案 base64 后 ~1.3k+ 字符，超过 PowerShell `Out-String` 显示宽度会插入**载荷中部换行**。实测 Python `b64decode`（默认 `validate=False`）丢弃非字母字符故现行代码可过，但严格解码器（.NET `FromBase64String`）遇空白即抛。SKILL.md agent 校验代码改为 `re.sub(r"\s+", "", m.group(1))` 先移除所有空白再解码，兼容一切消费方；决策表新增 **1b 行**（decode 失败 → 去空白重试，**绝不因此重跑 coze**）。前端 JS `stripDelimiters` 本已去空白（`m[1].replace(/\s+/g,"")`），无需改。
+- **8 处文档/注释陈旧引用同步为 B64 表述**（实现已 B64、文档仍写旧定界符，属正确性缺口）：`orchestrate.py` 头部 docstring ×2、`refine_answer.py` `--ship` help + 主链路注释 + 短路注释 ×3、`PERF_SOP.md` 验证说明、`README.md` / `README_zh-CN.md` 管道安全条。旧 `ANSWER_START/END` 常量**刻意保留**（注释明示：供 legacy/debug 识别，生产一律 B64）；SKILL.md 与前端 `index.html` ×2 的 legacy 提示为有意保留。
+- **审计结论**：spawn 点 8/8 带无窗口处置（entry×3 / handle_need_tool / refine_answer / r_libs / hardware_id ioreg / proxy×2）+ local_service_client 常驻服务 DETACHED_PROCESS；hardware_id 6 副本、r_libs 14 副本字节级一致（各 1 唯一 md5）；16/16 边界测试过（空答案/纯换行/emoji/制表符/仅\r/10 万字/混入 base64 样文本/定界符字样/NUL 控制字符/subprocess 出口/双实现对称/损坏载荷拒绝）；回归 orchestrate 11/11、seven_flows 8/8、tool_router 63/63、local_guards ALL PASS、doc_payload 32/0；hardware_id 基线 `sha256:0c52a234…` 逐字节不变；最坏场景（gb2312 捕获 + 1200 字长答案 + UTF-8 设/不设两路）checksum 双侧一致。
+
+## v1.3.9 (2026-10-15) · base64 ASCII-safe 出口：GBK 捕获乱码结构性免疫（协议级根治）
+
+> 用户追问「PowerShell cp936 乱码是否彻底解决」。结论：v1.3.6 的 `[Console]::OutputEncoding=UTF8` 是 agent 行为协议（依赖每次遵守，换模型/harness 即漏），LF 归一化只治 CRLF 半边——均不彻底。v1.3.9 把答案载荷改 base64，定界符/载荷/校验行全 ASCII（cp936 子集），**任何编码页捕获逐字节无损**，乱码→校验失败→误判损耗→重跑的链路从协议层根断，不依赖任何 agent 纪律。本地方案即可，**未动 coze 镜像**。
+
+- **`scripts/orchestrate.py` `_wrap`（真源）**：输出 `<<<CT_ANSWER_B64_START>>>\n{base64(LF归一化答案)}\n<<<CT_ANSWER_B64_END>>>\nchecksum: {sha256[:16]}`；新增 `_b64_decode_payload` / `_b64_roundtrip_ok` 辅助。checksum 仍按 LF 归一化答案计算（CRLF 容差保留）。self-test 断言升级：marker 改 B64 + 载荷可解码 + checksum 双向一致（11/11）。
+- **`scripts/refine_answer.py` `_emit_wrapped`**：同格式同步（双实现同口径）；新增 `ANSWER_B64_*` 常量，旧 `ANSWER_*` 保留供 legacy 识别。
+- **`scripts/entry.py` / `serve.py`**：`_safe_wrap_with_checksum` 经 orchestrate._wrap 自动继承；文档字符串同步（import 链 smoke：entry 输出含 B64 定界符 ✓）。
+- **`SKILL.md` 协议同步**：校验代码改「先 b64decode 再归一化重算」；透传禁令/Presentation rules/Scope 段/决策表第 3 步全部改引 B64 定界符；Capture 段重写——base64 出口后 `[Console]::OutputEncoding=UTF8` 降级为「建议但非承重」（stderr 中文日志仍受益），legacy 纯文本块乱码可能性保留提示；新增 base64 出口说明段（含 legacy/debug 块识别）。
+- **`workbench/index.html` + `publish/index.html`**：`stripDelimiters` 增强——识别 B64 定界符 → `atob` + `decodeURIComponent(escape())` UTF-8 安全解码；legacy 纯文本块行为**改前改后逐字节一致**（node 对照验证无回归）；CRLF 化输入同样通过。
+- **决定性实证（中文 Windows，`[Console]::OutputEncoding`=gb2312，故意不设 UTF-8）**：base64 载荷捕获无损 → 解码后中文（`期临床试验`）/`℃`/换行全部完好 → checksum 两侧一致（`14624dc7ecb6b416`）。
+- **回归**：orchestrate self-test 11/11、test_seven_flows 8/8（断言同步升级）、test_tool_router 63/63、test_local_guards ALL PASS、test_local_doc_payload 32/0、import 链 smoke OK、JS 解码 5 场景 4 PASS + 1 对照无回归。
+
+## v1.3.8 (2026-10-15) · 收回宿主模型兜底：降级路径收敛为「修捕获 → 重发 ≤1」（用户决策）
+
+> 用户裁决：4b 直答式不成立——ct-advisor 本地无知识库/数据库，宿主模型直答临床问题无质量保证；4a「修复」经实测亦不可行（GBK 损坏不可逆）。唯一 sanctioned 兜底 = 修复捕获链路后重发 coze（≤1）。
+
+- **`SKILL.md` 删除 Host-model fallback protocol（4a/4b）整段**：v1.3.7 引入的宿主模型受控兜底（修复式重写 / 直答式声明）**整体收回**。依据：① 本地零知识库，宿主模型直答无领域底料，质量悬崖不可接受；② 实测证明 cp936 损坏不可逆（`0x9A` → U+FFFD），「修复受损文本」即便由 LLM 执行也只是重写、不恢复原始字节——兜底的客体从来只能是捕获链路而非答案文本；③ 附件/doc_context 内容不得流出 Coze 通道（数据分级）。
+- **决策表重构为 4 步**：① 归一化重算 → ② 乱码/截断 → 修捕获 + 重发 ≤1（串行路径大概率 dedup 本地短路零成本）→ ③ **结构全毁/空 stdout → 先跑 `check_coze.py` 排除端点真故障**（token/死代理/断网），端点健康才按第 ② 步修捕获重发，端点真死则报告诊断停发 → ④ 文本干净仍不符 → 疑似篡改停发。
+- **新增 No host-model fallback 红线（HARD GATE）**：明记「coze-only by design、宿主模型兜底已评估并否决、唯一 sanctioned 恢复 = 修捕获 → 重发一次」，防止后续会话重新引入同类回退（与 v5 coze-only 重构删除 local-R 回退同一纪律）。
+- 回归：orchestrate self-test 11/11、test_seven_flows 8/8、test_tool_router 63/63、test_local_guards ALL PASS（PYTHONPATH 修正后）。
+
+## v1.3.7 (2026-10-15) · 校验失败分层降级：短路出口纳入 HARD GATE + 宿主模型受控兜底（附件红线）
+
+> 承接 v1.3.6 的「无谓重跑」根治：把「Coze 结果不可恢复」场景的处置从「重跑或停」升级为**分层降级协议**，并按用户提案引入宿主模型兜底（带数据分级红线）。
+
+- **`scripts/refine_answer.py`（短路出口盲区修复）**：dedup 短路此前裸输出旧答案（无 `<<<CT_ANSWER_START/END>>>` + checksum），agent 侧 HARD GATE 正则匹配不到、形成完整性盲区。现改走 `_emit_wrapped` 统一包裹——缓存答案在脚本侧内存生成、未过捕获通道，包裹后校验必过；来源提示 `dedup short-circuit: replayed local cached answer` 走 stderr，不破坏 stdout 定界结构。实测：定界符/正则/校验/答案完好四断言全过；GBK 捕获场景乱码可自动识别；CRLF+UTF-8 场景归一化后通过。
+- **`SKILL.md` 决策表升级为分层降级（HARD GATE）**：① 归一化重算 → ② 乱码/截断 → 修捕获后**至多重跑一次**（实测 cp936 对 `0x9A` 类 UTF-8 字节非法 → U+FFFD **永久损坏、就地修复不可能**；串行路径重跑命中 dedup 本地短路 = 零 coze 成本；即便真发，Coze 服务端四闸缓存已验证）→ ③ 文本干净仍不符 → 疑似篡改停发 → ④ **stdout 结构全毁 → 宿主模型受控兜底**：4a 修复式（仅重写受损段落 + `⚡ 局部为本地模型修复` 标记）或 4b 直答式（强制 `⚠️ 云端引擎结果不可恢复…仅供参考` 声明）。**红线：带附件/doc_context 的请求禁止 4a/4b**——附件内容不得流向宿主模型通道（数据分级：公开数据走 Coze）。硬规则：单问题 coze 重发 ≤1、无证据循环 = 协议违规、兜底必须显式披露。
+- **协议措辞协调**：single-run discipline 精确化为「默认一发 + 仅捕获修复可多重一发」，消除与决策表第 2 步的措辞冲突。
+- **回归**：orchestrate self-test 11/11、test_seven_flows 8/8、test_tool_router 63/63、test_local_guards ALL PASS（该文件直跑需 PYTHONPATH 含技能根，存量路径问题，与本次无关）。
+
+## v1.3.6 (2026-10-15) · hardware_id 零子进程化（ctypes SMBIOS）+ 校验协议换行归一化（根治无谓重跑）
+
+> 两条修复均源自新装机实测：① 进一步消灭 hardware_id 的 powershell.exe 依赖；② 修复「校验值不一致 → agent 重跑 Coze」的协议级误报循环（同一问题被真实发送 2-3 次）。
+
+- **`scripts/hardware_id.py`（6 技能共用共享件，ct-base 真源修复后字节级同步）**：Windows SMBIOS UUID 改由 **ctypes 调 `kernel32!GetSystemFirmwareTable('RSMB')` 纯进程内解析**（Type 1 结构 offset 0x08 起 16 字节，按 WMI/CIM 口径前三组小端反转、大写 8-4-4-4-12 输出），**彻底移除 powershell.exe 子进程**——连同 v1.3.5 的 CREATE_NO_WINDOW 一起，硬件 ID 路径不再起任何外部进程。本机三方交叉实证（ctypes 原始字节 / CIM 复跑两次 / WMI 字节序规则）输出逐字节一致，**hardware_id 值不变**（`sha256:0c52a234…`，query_origin 契约零漂移，dedup_store 既有记录不失配）。失败自动回退注册表 MachineGuid → 主机名（回退链单测：打桩 SMBIOS 失败 / SMBIOS+注册表全失败两条路径均按预期降级，永不崩）。`_hidden_kwargs()` 保留服务 macOS ioreg（非 Windows 空操作）。
+- **校验协议换行归一化（根治「控制台回传编码损耗」误报 → 无谓重跑）**：
+  - 根因实证：Windows Python stdout text 模式把 `\n` 写为 `\r\n`；PowerShell 5.1 捕获 native 命令 stdout 时按 `[Console]::OutputEncoding`（中文 Windows 默认 cp936）解码 → UTF-8 答案变 mojibake（`期临床试验`→`鏈熶复搴婅瘯`）。字节级 sha256 必败 → agent 误判「编码损耗/篡改」→ 重跑（= 再发一次 Coze）→ 再败 → 再重跑。复现脚本实测：未修前 match=False，修复后 match=True。
+  - `scripts/orchestrate.py::_wrap` 与 `scripts/refine_answer.py::_emit_wrapped`：checksum 改按 **LF 归一化口径**计算（`text.replace("\r\n", "\n")` 后 hash），对通道引入的 CRLF 转换免疫（entry._safe_wrap_with_checksum 转调 _wrap 自动继承）。
+  - 三脚本 stdout `reconfigure(..., newline="\n")`：源头输出 LF，减少转换面（重定向文件场景亦为 LF）。
+  - **SKILL.md Anti-tamper Check 段重写**：① agent 侧校验代码同步归一化（正则容差 `\r?\n`）；② 新增 **PowerShell 捕获编码修正**（调用前 `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`，本机实证修复 mojibake）；③ 新增 **校验不一致决策表**（HARD GATE）：先归一化重算 → 一致即交付；文本乱码/截断 → 修捕获方式后**至多重跑一次**并向用户说明；仍不一致且文本干净 → 按疑似篡改处理、禁止循环重跑；④ Single-run discipline 补强——「校验失败绝不是无条件重跑的理由」，无决策表证据的重跑属协议违规。
+- **验证**：orchestrate `--self-test` 11/11 = 100%；PowerShell UTF-8 捕获 + CRLF 端到端归一化校验 match=True（checksum c16fbd4e 两侧一致）；未设 UTF-8 的 GBK 场景 match=False 且乱码可检测（决策表第 2 步可操作）；pythonw 无控制台端到端 + 回退链两条路径单测通过；py_compile 全过；hardware_id 6 副本 md5 唯一。
+
+
+## v1.3.5 (2026-10-15) · Windows 子进程无控制台弹窗修复（CREATE_NO_WINDOW）
+
+> 新装机 WorkBuddy 桌面端运行本技能时，屏幕会闪出「PowerShell 运行代码」前台弹窗（部分场景还会连闪 python.exe 黑窗）。根因：Windows 上 powershell.exe / python.exe / Rscript.exe 均为**控制台子系统程序**，当父进程自身没有控制台（WorkBuddy 桌面端宿主、pythonw 等 GUI 场景）时，直接 spawn 会让 Windows 为子进程新建控制台 → 弹出可见窗口。修复：所有 spawn 点传 `CREATE_NO_WINDOW`（+ `STARTF_USESHOWWINDOW` / `SW_HIDE` 双保险），子进程完全后台运行；各调用均为 `capture_output` 管道捕获，**取值逻辑零变化**。
+
+- **`scripts/hardware_id.py`（6 技能共用共享件，ct-base 真源修复后字节级同步）**：SMBIOS UUID 的 `powershell.exe` 调用（macOS `ioreg` 同步加，非 Windows 为空操作）增加 `_hidden_kwargs()`。**修复前后 hardware_id 输出逐字节一致**（本机实测 `sha256:0c52a234…` 不变）——`query_origin` 契约（ct-base §8.6）不受影响。
+- **`scripts/entry.py`（3 处）**：`office_to_md.py` / `clarify_loop.py` / `refine_answer.py` 子进程同案修复。
+- **`scripts/refine_answer.py`（1 处）**：`handle_need_tool.py` 子进程同案修复。
+- **`scripts/handle_need_tool.py`（1 处）**：本地技能 CLI（ct-registry / ct-safety / ct-literature 等）子进程同案修复。
+- **`workbench/ct-advisor-proxy.py` + `workbench/publish/` 副本（1 处×2 文件）**：`/api/run-skill` 本地技能 CLI 子进程同案修复；两份副本 diff 验证逐字节一致。
+- **`scripts/r_libs.py`（14 技能共用共享件，ct-base 真源修复后字节级同步）**：`run_r()` 的 `Rscript.exe` 子进程同案修复。
+- **`adapters/local_service_client.py` 无需改动**：常驻服务 Popen 已带 `DETACHED_PROCESS`，本身即无控制台无窗口。
+- **验证**：① 9 个改动文件 `py_compile` 全过；② `pythonw`（无控制台父进程，弹窗复现环境）端到端跑 `hardware_id()` exit 0 且值不变；③ `_hidden_kwargs()` 单测——Windows 返回 `creationflags=0x08000000` + `dwFlags=STARTF_USESHOWWINDOW` + `wShowWindow=SW_HIDE`，非 Windows 返回 `{}`；④ 管道捕获回归 `pipe-ok`；⑤ `shared_sync_check.py` 对 13 个携带 r_libs.py 的叶子技能 **r_libs 零漂移**（存量 i18n.py / term_map.json 漂移与本次无关，系历史遗留，待发布前另行处理）；⑥ 6 个 hardware_id.py 副本、14 个 r_libs.py 副本 md5 分组唯一。
+
+
 ## v1.3.4 (2026-10-14) · Coze v1.39 知识底料上线 + 权威外部对标登记 + sibling_registry UNC 重扫（含扫描器改动）
 
 > 本条记录 coze 侧部署件与文档登记；本地 scripts 有一处扫描器改动（`discover_siblings.py` 纳入非 ct- 前缀兄弟技能，见下）。sibling_registry 重生成已于 2026-10-14 补齐：以 `CT_SKILLS_DIR=\\filesrv\C$\Users\WintoneFileSrv\.workbuddy\skills`（UNC 指向 filesrv 真实库）重扫，技能集合 20→23，`--check` 由 3 条差异转为全绿（正面回应上轮「沙箱环境扫描完整性存疑」的跳过理由）；上轮留档的 `scripts/sibling_registry.json.new` 已不在，留档机制作废。

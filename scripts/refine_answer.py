@@ -27,6 +27,7 @@ value.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import re
@@ -35,9 +36,38 @@ import sys
 from pathlib import Path
 from typing import Set
 
+# ── Windows 子进程无控制台窗口（2026-10-15）─────────────────────────────────
+# python.exe 是控制台子系统程序：父进程自身没有控制台时（如 WorkBuddy 桌面端
+# 宿主直接拉起本脚本），下方 handle_need_tool 子进程会让 Windows 新建控制台
+# → 屏幕闪出前台弹窗。CREATE_NO_WINDOW（+ STARTF_USESHOWWINDOW / SW_HIDE
+# 双保险）令子进程完全后台运行；capture_output 管道捕获不受影响。
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _hidden_kwargs() -> dict:
+    """返回抑制控制台弹窗的 subprocess 关键字参数（非 Windows 平台返回 {}）。"""
+    if not sys.platform.startswith("win"):
+        return {}
+    kw = {"creationflags": _CREATE_NO_WINDOW}
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kw["startupinfo"] = si
+    except Exception:
+        pass
+    return kw
+
 # 代码旁路模式（--ship）最终答案定界符：脚本输出唯一权威答案，agent 只做原样透传。
 ANSWER_START = "<<<CT_ANSWER_START>>>"
 ANSWER_END = "<<<CT_ANSWER_END>>>"
+# 2026-10-15（v1.3.9）：base64 ASCII-safe 出口。PowerShell 5.1 按
+# [Console]::OutputEncoding（中文机默认 cp936）捕获 native stdout，UTF-8 答案被
+# 误解码成乱码 → 字节级 sha256 必败 → 误判「编码损耗/篡改」→ 无谓重跑。
+# base64 字符集全 ASCII（cp936 子集），任何编码页捕获逐字节无损，结构性免疫。
+# 旧 ANSWER_START/END 保留供历史引用识别，生产输出一律走 B64 定界符。
+ANSWER_B64_START = "<<<CT_ANSWER_B64_START>>>"
+ANSWER_B64_END = "<<<CT_ANSWER_B64_END>>>"
 NEED_PARAMS_MARKER = "<<<CT_NEED_PARAMS>>>"
 INSTALL_MARKER = "<<<CT_INSTALL_REQUIRED>>>"
 
@@ -91,9 +121,11 @@ def _check_outbound_authorization(endpoint: str, config_path: str) -> bool:
 #  - stdin decoded as cp936 would corrupt the UTF-8 JSON piped in (the agent's main usage is piping JSON);
 #  - stdout encoded as cp936 may raise UnicodeEncodeError on CJK/emoji/℃, and the consumer decoding as UTF-8 would get garbage.
 # Fix all three standard streams to UTF-8 for consistent cross-platform, cross-console encoding behaviour.
+# stdout 恒 LF（2026-10-15）：控制台回传链路会把 \n 转 \r\n，源头输出 LF +
+# 校验和按 LF 口径计算，双保险免疫 CRLF 损耗（见 _emit_wrapped）。
 for _s in (sys.stdin, sys.stdout, sys.stderr):
     try:
-        _s.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        _s.reconfigure(encoding="utf-8", errors="replace", newline="\n")  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -423,7 +455,7 @@ def _run_handle_need_tool(card: dict) -> dict:
             [sys.executable, str(ROOT / "scripts" / "handle_need_tool.py"),
              "--card", json.dumps(card, ensure_ascii=False)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=300,
+            timeout=300, **_hidden_kwargs()
         )
         if proc.returncode != 0:
             return {"tool": card.get("need_tool"), "status": "error",
@@ -438,9 +470,23 @@ def _run_handle_need_tool(card: dict) -> dict:
 
 
 def _emit_wrapped(text: str) -> None:
-    """把最终答案用定界符包裹 + sha256 校验和输出，供 agent 原样透传并自检。"""
-    checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    sys.stdout.write(f"{ANSWER_START}\n{text}\n{ANSWER_END}\nchecksum: {checksum}\n")
+    """把最终答案包裹为 base64 ASCII-safe 载荷 + sha256 校验和输出，供 agent 解码透传并自检。
+
+    双归一化口径（2026-10-15）：
+    1) 换行归一化：校验和按 LF 口径计算，免疫控制台回传链路的 \\n→\\r\\n 转换；
+    2) base64 载荷（v1.3.9）：定界符/载荷/校验行全 ASCII（cp936 子集），
+       PowerShell 按任何编码页捕获都逐字节无损，从根上消除「GBK 乱码 →
+       校验失败 → 误判损耗/篡改 → 无谓重跑」链路。agent 侧先 b64decode
+       再归一化重算（见 SKILL.md Anti-tamper Check 段）。
+    """
+    norm = text.replace("\r\n", "\n")
+    checksum = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+    b64 = base64.b64encode(norm.encode("utf-8")).decode("ascii")
+    # 长度观测（与 orchestrate._wrap 同口径，2026-10-15 审计）：只观测不截断。
+    if len(b64) > 15000:
+        sys.stderr.write(f"[ct-advisor][warn] base64 载荷 {len(b64)} 字符（答案 {len(norm)} 字符），"
+                         f"超出观测线 15000——agent 捕获若见截断痕迹请换 Bash/Git Bash 通道\n")
+    sys.stdout.write(f"{ANSWER_B64_START}\n{b64}\n{ANSWER_B64_END}\nchecksum: {checksum}\n")
 
 
 def _extract_draft(raw: str) -> str:
@@ -502,8 +548,9 @@ def main() -> None:
                          "失败/超时回退 draft_answer（final_answer 字段），由调用方判定本地兜底")
     ap.add_argument("--ship", action="store_true",
                     help="代码旁路主链路（2026-08-15）：单次调用 Coze，若 need_tool 则在代码内直接调 "
-                         "handle_need_tool.py 执行并对结果做确定性缝合；最终答案以 <<<CT_ANSWER_START>>> "
-                         "定界包裹输出。本地大模型只做原样透传（pipe），不重写/重排/补充。此模式用于跳过大模型重组。")
+                         "handle_need_tool.py 执行并对结果做确定性缝合；最终答案以 "
+                         "<<<CT_ANSWER_B64_START>>> base64 包裹输出（v1.3.9 起全 ASCII 载荷，"
+                         "免疫控制台编码页损耗）。本地大模型只做原样透传（pipe），不重写/重排/补充。此模式用于跳过大模型重组。")
     ap.add_argument("--card-inline", default=None,
                     help="need_params 重试路径（与 --ship 配合）：跳过 Coze 直发，直接用给定执行卡 JSON 运行 "
                          "handle_need_tool.py 并缝合（用于补齐参数后重试，避免重复调用 Coze）")
@@ -686,14 +733,23 @@ def main() -> None:
         if _go.notes:
             sys.stderr.write("[ct-advisor] forward_guards: " + "; ".join(_go.notes) + "\n")
         if _go.short_circuit:
-            sys.stdout.write(_go.answer)
+            # 缓存重放同样走 HARD GATE 包裹（2026-10-15）：此前裸输出无
+            # <<<CT_ANSWER_B64_START/END>>> + checksum，agent 侧校验正则匹配不到，
+            # 形成完整性盲区。缓存答案在脚本侧内存中生成，未经捕获通道污染，
+            # 包裹后校验必过。来源提示走 stderr，不破坏 stdout 定界结构。
+            sys.stderr.write(
+                "[ct-advisor] dedup short-circuit: replayed local cached answer "
+                "(no new Coze call sent)\n"
+            )
+            _emit_wrapped(_go.answer)
             sys.exit(0)
     except Exception as _ge:  # noqa: BLE001
         sys.stderr.write(f"[ct-advisor] forward_guards skipped: {_ge}\n")
 
     if args.ship:
         # 代码旁路主链路（2026-08-15）：单次调用 Coze；need_tool 分支在代码内执行 + 确定性缝合；
-        # 最终答案以 <<<CT_ANSWER_START>>> 定界包裹输出，本地大模型只做原样透传（pipe）。
+        # 最终答案以 <<<CT_ANSWER_B64_START/END>>> base64 包裹 + checksum 输出（v1.3.9），
+        # 本地大模型先 b64decode 再校验透传（pipe），不重写。
         if not _check_outbound_authorization(
             _get_endpoint_from_config(args.config), args.config
         ):

@@ -17,7 +17,8 @@ ct-advisor — 唯一代码入口（本地 LLM 唯一允许的动作）
   python scripts/entry.py --q "用户问题"
   python scripts/entry.py --q "用户问题" --attach "/path/to/file.docx"
 
-  输出：stdout = <<<CT_ANSWER_START>>> ... <<<CT_ANSWER_END>>> + sha256
+  输出：stdout = <<<CT_ANSWER_B64_START>>> {base64 载荷} <<<CT_ANSWER_B64_END>>> + sha256
+  （v1.3.9：base64 ASCII-safe 出口，免疫 PowerShell cp936 捕获乱码；agent 先解码再校验）
 """
 from __future__ import annotations
 
@@ -30,10 +31,11 @@ import subprocess
 import time
 from pathlib import Path
 
-# UTF-8 强制（三流统一）
+# UTF-8 强制（三流统一）+ stdout 恒 LF（2026-10-15：控制台回传链路会把 \n
+# 转 \r\n，源头输出 LF + 校验和按 LF 口径计算，双保险免疫 CRLF 损耗）
 for _s in (sys.stdin, sys.stdout, sys.stderr):
     try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
+        _s.reconfigure(encoding="utf-8", errors="replace", newline="\n")
     except Exception:
         pass
 
@@ -42,6 +44,29 @@ SKILL_ROOT = SCRIPT_DIR.parent
 for _p in (str(SCRIPT_DIR), str(SKILL_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
+
+# ── Windows 子进程无控制台窗口（2026-10-15）─────────────────────────────────
+# python.exe 是控制台子系统程序：父进程自身没有控制台时（如 WorkBuddy 桌面端
+# 宿主直接拉起本脚本），下方 office_to_md / clarify_loop / refine_answer 等
+# 子进程会让 Windows 新建控制台 → 屏幕闪出前台弹窗。CREATE_NO_WINDOW
+# （+ STARTF_USESHOWWINDOW / SW_HIDE 双保险）令子进程完全后台运行；
+# 三处调用均为 capture_output 管道捕获，取值不受影响。
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _hidden_kwargs() -> dict:
+    """返回抑制控制台弹窗的 subprocess 关键字参数（非 Windows 平台返回 {}）。"""
+    if not sys.platform.startswith("win"):
+        return {}
+    kw = {"creationflags": _CREATE_NO_WINDOW}
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kw["startupinfo"] = si
+    except Exception:
+        pass
+    return kw
 
 # ── 下游代码模块 ──────────────────────────────────────────────────────────────
 from route import is_vague
@@ -99,7 +124,7 @@ def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
     if ext in (".docx", ".xlsx", ".pptx"):
         result = subprocess.run(
             [sys.executable, str(SCRIPT_DIR / "office_to_md.py"), str(p)],
-            capture_output=True, text=True, timeout=120
+            capture_output=True, text=True, timeout=120, **_hidden_kwargs()
         )
         if result.returncode != 0:
             return question + f"\n\n⚠️ 附件《{p.name}》解析失败，未能上传: {result.stderr[:200]}", ""
@@ -154,7 +179,7 @@ def _run_clarify(original_question: str, max_rounds: int = 3) -> dict:
     result = subprocess.run(
         [sys.executable, str(SCRIPT_DIR / "clarify_loop.py"),
          "--payload-inline", payload],
-        capture_output=True, text=True, timeout=30
+        capture_output=True, text=True, timeout=30, **_hidden_kwargs()
     )
     try:
         return json.loads(result.stdout)
@@ -182,7 +207,7 @@ def _run_card_inline(card_json: str, config_path: str) -> str:
         [sys.executable, str(SCRIPT_DIR / "refine_answer.py"),
          "--card-inline", card_json,
          "--config", config_path],
-        capture_output=True, text=True, timeout=300
+        capture_output=True, text=True, timeout=300, **_hidden_kwargs()
     )
     return result.stdout
 

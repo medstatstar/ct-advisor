@@ -56,6 +56,28 @@ import sys
 import time
 from pathlib import Path
 
+# ── Windows 子进程无控制台窗口（2026-10-15）─────────────────────────────────
+# 本地技能 CLI（python.exe 等）是控制台子系统程序：父进程自身没有控制台时
+# （如 WorkBuddy 桌面端宿主直接拉起本脚本），子进程会让 Windows 新建控制台
+# → 屏幕闪出前台弹窗。CREATE_NO_WINDOW（+ STARTF_USESHOWWINDOW / SW_HIDE
+# 双保险）令子进程完全后台运行；capture_output 管道捕获不受影响。
+_CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def _hidden_kwargs() -> dict:
+    """返回抑制控制台弹窗的 subprocess 关键字参数（非 Windows 平台返回 {}）。"""
+    if not sys.platform.startswith("win"):
+        return {}
+    kw = {"creationflags": _CREATE_NO_WINDOW}
+    try:
+        si = subprocess.STARTUPINFO()
+        si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        si.wShowWindow = 0  # SW_HIDE
+        kw["startupinfo"] = si
+    except Exception:
+        pass
+    return kw
+
 # 技能根目录（WorkBuddy skills 目录），可用环境变量覆盖
 SKILLS_DIR = os.environ.get(
     "CT_SKILLS_DIR",
@@ -773,6 +795,7 @@ def execute_card(card: dict) -> dict:
             errors="replace",
             cwd=str(workdir),
             env=call_env,
+            **_hidden_kwargs()
         )
         elapsed = round(time.time() - t0, 1)
         combined = (proc.stdout or "") + ("\n" + proc.stderr if proc.stderr else "")

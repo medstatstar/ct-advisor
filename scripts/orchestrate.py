@@ -14,8 +14,8 @@ ct-advisor — 代码全自动编排器（2026-08-15，模式 B + 委托本地�
   - 本地大模型**不**判断「信息是否足够」、**不**重写 Coze 文本。
 
 与既有协议的关系：
-  - 信息足够 → 复用 refine_answer.py 的 <<<CT_ANSWER_START>>>…<<<CT_ANSWER_END>>> 定界包裹
-    （含 sha256 校验和），本地大模型只做原样透传（pipe），与 --ship 同协议。
+  - 信息足够 → 复用 refine_answer.py 的 <<<CT_ANSWER_B64_START>>>…<<<CT_ANSWER_B64_END>>> base64 包裹
+    （含 sha256 校验和；v1.3.9 起载荷全 ASCII，对控制台编码页免疫），本地大模型只做原样透传（pipe），与 --ship 同协议。
   - 仍需 ct 技能 → 输出 <<<CT_TOOL_DELEGATE>>>…<<<CT_TOOL_DELEGATE_END>>> 结构化块，
     本地大模型读取后执行（见下方「委托协议」），最终仍由 --card-inline 走代码缝合。
 
@@ -27,7 +27,8 @@ ct-advisor — 代码全自动编排器（2026-08-15，模式 B + 委托本地�
 
 用法：
   python scripts/orchestrate.py --payload-inline '<3变量 JSON>'
-        → 输出 <<<CT_ANSWER_START>>>…<<<CT_ANSWER_END>>>（信息足够，pipe 透传）
+        → 输出 <<<CT_ANSWER_B64_START>>>…<<<CT_ANSWER_B64_END>>> + checksum（信息足够，pipe 透传；
+          载荷为 base64 ASCII-safe，任何编码页捕获无损——agent 先 b64decode 再校验）
           或 <<<CT_TOOL_DELEGATE>>>…<<<CT_TOOL_DELEGATE_END>>>（委托大模型调 ct 技能）
   python scripts/orchestrate.py --payload-inline '<JSON>' --no-prefetch
         → 跳过前端预判预取，仅走 Coze；Coze 判定需工具时仍委托大模型
@@ -37,8 +38,10 @@ ct-advisor — 代码全自动编排器（2026-08-15，模式 B + 委托本地�
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
+import re
 import sys
 import threading
 from pathlib import Path
@@ -55,13 +58,23 @@ for _p in (str(SCRIPT_DIR), str(SKILL_ROOT)):
 # 改为「用前再 import」：把它们的加载塞进 Coze 网络等待窗口内并发完成，不再串行堆积在
 # 发请求之前（此前每次冷启动白白烧 ~13s）。ANSWER_START/END 作为定界常量在此本地重定义
 # （与 refine_answer 完全同值），避免仅为两个常量而整体导入 57KB 模块。
+# 2026-10-15（v1.3.9）：答案载荷改 base64 ASCII-safe 出口（ANSWER_B64_*）——控制台
+# 回传链路（PowerShell 5.1 按 [Console]::OutputEncoding，中文机默认 cp936）会把
+# UTF-8 字节误解码成乱码，字节级 sha256 必败 → agent 误判「编码损耗/篡改」→ 无谓
+# 重跑。base64 字符集全在 ASCII（cp936 子集）内，任何编码页捕获均逐字节无损，
+# 结构性免疫、不依赖 agent 记得切 OutputEncoding。旧 ANSWER_START/END 常量保留供
+# 历史引用与调试识别，生产输出一律走 B64 定界符。
 ANSWER_START = "<<<CT_ANSWER_START>>>"
 ANSWER_END = "<<<CT_ANSWER_END>>>"
+ANSWER_B64_START = "<<<CT_ANSWER_B64_START>>>"
+ANSWER_B64_END = "<<<CT_ANSWER_B64_END>>>"
 
-# 编码统一（与 refine_answer.py 一致）：三流强制 UTF-8，避免 CJK/℃ 在 Windows cp936 下乱码
+# 编码统一（与 refine_answer.py 一致）：三流强制 UTF-8 + stdout 恒 LF，
+# 避免 CJK/℃ 在 Windows cp936 下乱码；LF 输出 + LF 口径校验和双保险
+# 免疫控制台回传链路的 \n→\r\n 转换（2026-10-15，见 _wrap）。
 for _s in (sys.stdin, sys.stdout, sys.stderr):
     try:
-        _s.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        _s.reconfigure(encoding="utf-8", errors="replace", newline="\n")  # type: ignore[attr-defined]
     except Exception:
         pass
 
@@ -75,9 +88,50 @@ TOOL_DELEGATE_END = "<<<CT_TOOL_DELEGATE_END>>>"
 # ---------------------------------------------------------------------------
 
 def _wrap(text: str) -> str:
-    """把最终答案用定界符包裹 + sha256 校验和（与 refine_answer._emit_wrapped 同格式）。"""
-    checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return f"{ANSWER_START}\n{text}\n{ANSWER_END}\nchecksum: {checksum}\n"
+    """把最终答案包裹为 base64 ASCII-safe 载荷 + sha256 校验和（与 refine_answer._emit_wrapped 同格式）。
+
+    双归一化口径（2026-10-15）：
+    1) 换行归一化：校验和按 LF 口径计算——控制台回传链路（Windows Python stdout
+       text 模式 / PowerShell 捕获）不可避免地把 \\n 转成 \\r\\n，若按原始字节算，
+       agent 侧重算必败。
+    2) base64 载荷（v1.3.9）：答案文本先 base64 编码再输出，定界符/载荷/校验行
+       全 ASCII（cp936 子集），PowerShell 按任何编码页捕获都逐字节无损，从根上
+       消除「GBK 乱码 → 校验失败 → 误判损耗/篡改 → 无谓重跑」链路。agent 侧
+       先 b64decode 再归一化重算（见 SKILL.md Anti-tamper Check 段）。
+    """
+    norm = text.replace("\r\n", "\n")
+    checksum = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+    b64 = base64.b64encode(norm.encode("utf-8")).decode("ascii")
+    # 长度观测（2026-10-15 审计）：base64 使出口约为 UTF-8 字节的 1.33 倍——中文字符
+    # 场景约 4×。绝对 worst case（coze complex 1000 字 + 工具结果 MAX_RESULT_CHARS
+    # 4000 字符全打满）≈ 20150 字符，已实测 Bash 工具回传完整无截断；PowerShell 工具
+    # 回传上限 ~20000，极端场景可能贴边。此处只观测不截断（截断会破坏完整性校验），
+    # 超线时 stderr 提示，便于定位「agent 侧 decode 失败/checksum 不符」类问题。
+    if len(b64) > 15000:
+        sys.stderr.write(f"[ct-advisor][warn] base64 载荷 {len(b64)} 字符（答案 {len(norm)} 字符），"
+                         f"超出观测线 15000——agent 捕获若见截断痕迹请换 Bash/Git Bash 通道\n")
+    return f"{ANSWER_B64_START}\n{b64}\n{ANSWER_B64_END}\nchecksum: {checksum}\n"
+
+
+def _b64_decode_payload(out: str) -> str:
+    """从 _wrap 输出中解码 base64 答案载荷（自测 / 调试辅助；消费方见 SKILL.md 协议）。"""
+    m = re.search(re.escape(ANSWER_B64_START) + r"\s*\n(.*?)\n\s*" + re.escape(ANSWER_B64_END),
+                  out, re.DOTALL)
+    if not m:
+        return ""
+    try:
+        return base64.b64decode(m.group(1).strip()).decode("utf-8")
+    except Exception:
+        return ""
+
+
+def _b64_roundtrip_ok(out: str) -> bool:
+    """自测：载荷可解码、checksum 与解码后答案（LF 口径）一致。"""
+    m = re.search(r"checksum:\s*([0-9a-f]{16})", out)
+    ans = _b64_decode_payload(out)
+    if not (m and ans):
+        return False
+    return hashlib.sha256(ans.replace("\r\n", "\n").encode("utf-8")).hexdigest()[:16] == m.group(1)
 
 
 def _enrich_coze_params(orig_q: str, coze_tool: str | None, coze_params: dict) -> dict:
@@ -544,11 +598,11 @@ SELF_TEST = [
     # (描述, orig_q, coze, prefetch_out, prefetch_tool, prefetch_params, 期望标记)
     ("预判ok且Coze无需工具 → 包裹答案",
      "算样本量 ORR 30% vs 45%", _mk_coze("Coze说算一下"), _mk_prefetch("ct-samplesize", "ok", {"n": 120}),
-     "ct-samplesize", {"p1": 0.3, "p2": 0.45}, "CT_ANSWER_START"),
+     "ct-samplesize", {"p1": 0.3, "p2": 0.45}, "CT_ANSWER_B64_START"),
 
     ("Coze需同工具且预判ok → 包裹答案（不重复调）",
      "算样本量", _mk_coze("Coze草稿", "ct-samplesize", {}), _mk_prefetch("ct-samplesize", "ok", {"n": 99}),
-     "ct-samplesize", {}, "CT_ANSWER_START"),
+     "ct-samplesize", {}, "CT_ANSWER_B64_START"),
 
     ("预判need_params → 委托（列出缺失）",
      "算样本量", _mk_coze("Coze草稿", "ct-samplesize", {}),
@@ -566,11 +620,11 @@ SELF_TEST = [
 
     ("Coze答案足够且无预判 → 包裹",
      "什么是SDTM", _mk_coze("SDTM是...", None, {}),
-     None, None, {}, "CT_ANSWER_START"),
+     None, None, {}, "CT_ANSWER_B64_START"),
 
     ("Coze空 + 无工具 → 兜底警告包裹",
      "边缘问题", _mk_coze("", None, {}),
-     None, None, {}, "CT_ANSWER_START"),
+     None, None, {}, "CT_ANSWER_B64_START"),
 
     ("预判error但Coze需同工具 → 委托重试",
      "查XX药安全性", _mk_coze("Coze草稿", "ct-safety", {"drug": "XX"}),
@@ -581,11 +635,11 @@ SELF_TEST = [
     # 漏掉 _unreleased_payload / _unpublished_payload 的 NameError，真实触发即崩）。
     ("无预判 + Coze需B档工具(ct-protocol) → unreleased包裹",
      "审阅试验方案", _mk_coze("草稿", "ct-protocol", {}),
-     None, None, {}, "CT_ANSWER_START"),
+     None, None, {}, "CT_ANSWER_B64_START"),
 
     ("无预判 + Coze需未发布A档工具(ct-pipeline) → unpublished包裹",
      "公开情报编排", _mk_coze("草稿", "ct-pipeline", {}),
-     None, None, {}, "CT_ANSWER_START"),
+     None, None, {}, "CT_ANSWER_B64_START"),
 ]
 
 
@@ -600,8 +654,9 @@ def run_self_test() -> int:
         if hit:
             ok += 1
         # 校验包裹格式 / 委托格式之一
-        if expect_marker == "CT_ANSWER_START":
-            valid = ANSWER_START in out and ANSWER_END in out and "checksum:" in out
+        if expect_marker == "CT_ANSWER_B64_START":
+            valid = (ANSWER_B64_START in out and ANSWER_B64_END in out
+                     and "checksum:" in out and _b64_roundtrip_ok(out))
         else:
             valid = TOOL_DELEGATE_START in out and TOOL_DELEGATE_END in out
         print(f"  {mark} [{('OK' if valid else 'BADFMT'):<6}] {desc}")
@@ -609,7 +664,8 @@ def run_self_test() -> int:
     # 先自身作答，再在答案**末尾**建议可安装 / 调用（弱命中 / 咨询意图路径）。
     prog = build_output("样本量计算要注意什么", _mk_coze("样本量取决于效应量与把握度。")
                         , None, None, {}, suggest_tools=["ct-samplesize"])
-    sug_ok = (ANSWER_START in prog) and ("兄弟技能" in prog) and ("ct-samplesize" in prog)
+    sug_ok = (ANSWER_B64_START in prog) and ("兄弟技能" in _b64_decode_payload(prog)) \
+        and ("ct-samplesize" in _b64_decode_payload(prog))
     print(f"  {'✓' if sug_ok else '✗'} [{'OK' if sug_ok else 'BADFMT'}] 软建议：先作答 + 末尾建议 ct-samplesize")
     ok += 1 if sug_ok else 0
 
