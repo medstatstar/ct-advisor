@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.13 (2026-10-16) · 流式输出功能移除 + 线上错误诊断增强
+
+- **删除流式输出功能**：`workbench/index.html` + `workbench/publish/index.html` 全面清理流式输出相关代码（`streamChk` HTML 控件、`useStream` 变量、`/stream_run` 调用分支、`readCozeResponse` 函数、`streamLabel` i18n 条目、`cfg.stream` 配置项）。该功能无实际价值——后端 `/stream_run` 走同样链路撞 60s 超时，并非真流式。
+- **线上错误诊断增强**：`errEmpty`（已收到响应但未包含答案字段）后追加 `JSON.stringify(data).slice(0,500)` 实际 JSON 片段，便于定位线上返回结构异常问题。
+
+## v1.3.12 (2026-10-16) · 工作台 UI 美化 + pending-chip 关闭按钮
+
+- **工作台前端 L2 美化**：`workbench/index.html` + `workbench/publish/index.html` 追加 ~80 行增强 CSS（毛玻璃面板、品牌渐变背景三层、侧栏活跃条、用户气泡品牌渐变色、bot 顶部品牌边线、技能卡片图标渐变、空状态居中引导图、模态 backdrop 模糊、自定义滚动条、发送区聚焦光晕、字数变色预警、视图转场 slideIn 动画）；澄清气泡 `border-top:none` 修正
+- **pending-chip 关闭按钮**：`renderPending()` 为「需本地技能跟进」横条内的残留 need_tool 历史条目右上角加 `×` 按钮，点击清除 `need_tool=null` 并刷新，防止历史残留卡住
+- 两文件同步：`workbench/index.html` / `workbench/publish/index.html` 内联 `<style>` 块、`renderPending()` 逻辑完全一致
+
 ## v1.3.11 (2026-10-15) · base64 长度审计：worst case 实测 + 15000 观测线 + PowerShell 截断决策行
 
 > 用户提出「base64 后长度几乎翻倍确实是个问题，有没有更好的办法？代码中会撞长度限制吗？」。审计结论：**保留 base64**（论证见下），新增长度观测线与决策表 1c 行。
@@ -133,15 +144,11 @@
 
 ## v1.3.0 (2026-10-08) · teal + Docling 外部开源资产引用
 
-> 基于《临床试验Skill推荐》分析，新增 teal 和 Docling 两个外部工具参考。
-
 - **新增 External Tool References 表格**：列出 teal（临床数据交互探索框架）和 Docling（法规文档结构化解析）
 - **teal 参考**：统计师搭建、医学/运营自助审阅的 Shiny 交互模式
 - **Docling 参考**：方案/IB/CSR PDF 结构化解析增强
 
 ## v1.2.3 (2026-10-06) · 工作台安全加固：静态文件白名单（P0）
-
-> 已发布工作台应用（`ct-advisor.app.workbuddy.host`）安全加固，阻止源码/凭据被 HTTP 下载。
 
 - **`workbench/ct-advisor-proxy.py` + `workbench/publish/ct-advisor-proxy.py`**：新增 `_STATIC_ALLOWED` 扩展名白名单（12 种：css/js/svg/png/ico/json/woff/woff2/ttf/map/html/htm），非白名单扩展名返回 403 `forbidden type`。
 - **影响**：`.py` / `.env` 等源码/凭据文件（`coze_token_embedded.py`、`config/llm_key.py`、`publish-kit/*.py`）无法通过 HTTP 下载；前端静态资源不受影响。

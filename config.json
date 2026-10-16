@@ -1,6 +1,7 @@
 {
   "backend": "local",
   "answer_mode": "fast",
+  "_comment_coze_legacy": "以下 coze 字段已废弃（2026-10-16）：端点已迁移到 refiner 段落（ct-advisor.coze.token / .site/run）。保留供历史参考，不再被任何代码读取。",
   "coze": {
     "bot_id": "",
     "endpoint": "https://api.coze.cn/v1/chat",

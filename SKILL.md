@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.11
+version: 1.3.13
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -57,15 +57,24 @@ tier: A
 - **English guide** → [README.md](https://github.com/medstatstar/ct-advisor/blob/main/README.md) · **中文指南** → [README_zh-CN.md](https://github.com/medstatstar/ct-advisor/blob/main/README_zh-CN.md)
 - **This SKILL.md body is English-only, agent-facing.** Bilingual walkthroughs live in the two READMEs; the answer language follows the user's question language.
 
-## 🔴 HIGHEST PRIORITY: entry.py is the ONLY permitted action
+## 🔴 HIGHEST PRIORITY: scripts/ask.py is the ONLY permitted action
 
 > **The local LLM is FORBIDDEN from making any decisions in this skill. Its ONE AND ONLY allowed action is:**
 >
 > ```bash
-> python scripts/entry.py --q "<user question>" [--attach "<path>"]
+> python scripts/ask.py --q "<user question>" [--attach "<path>"]
 > ```
 >
 > **and then pipe the stdout to the user verbatim.**
+>
+> `ask.py` runs `entry.py` internally, then **decodes the base64 payload and verifies the
+> sha256 checksum inside the script**. Its stdout is already the plain-text answer. The LLM
+> never sees, copies, or transcribes the base64 payload — doing that by hand is what caused
+> the 2026-10-16 incident (one character mistyped in a 2.6k-char payload → "checksum
+> mismatch" → three Coze calls for one question).
+>
+> `entry.py` remains the underlying engine and the only Coze entry point. `ask.py` is a
+> thin, contract-preserving wrapper: it generates nothing and rewrites nothing.
 
 **HARD GATE — the following are absolutely PROHIBITED for the local LLM:**
 - ❌ **NEVER** read, search, or reference any local knowledge base (the `knowledge/` directory has been removed)
@@ -78,6 +87,8 @@ tier: A
 - ❌ **NEVER** translate or align language (the code already handles that)
 - ❌ **NEVER** inject process narration ("Step 2", "Coze returned", "assembling payload")
 - ❌ **NEVER** decide whether to forward to Coze — ALL questions are forwarded (entry.py handles routing internally)
+- ❌ **NEVER** hand-copy, transcribe, or re-type the base64 payload into another command — a 2–3k-char random string cannot survive manual transcription, and a mismatch produced this way is a **false alarm**, not tampering (2026-10-16 incident)
+- ❌ **NEVER** discard stderr with `2>$null` / `2>/dev/null` — stderr carries the answer-cache-hit / resident-service / `[ct-advisor][ERR]` signals that tell you whether a Coze call actually happened
 
 **Why this rule exists:** The local LLM's "helpful" instincts (answering from its own knowledge, pre-reading files, post-formatting answers) have repeatedly violated the pipeline contract, destroyed Coze-delivered content formatting, altered numeric precision, injected unsolicited content, and bypassed the cloud analysis entirely. This rule eliminates ALL local LLM decision space.
 
@@ -85,15 +96,19 @@ tier: A
 
 ### With a question only:
 ```bash
-python scripts/entry.py --q "In phase III NSCLC patients, comparing pembrolizumab vs chemotherapy, how is the sample size for the primary endpoint OS estimated?"
+python scripts/ask.py --q "In phase III NSCLC patients, comparing pembrolizumab vs chemotherapy, how is the sample size for the primary endpoint OS estimated?"
 ```
 
 ### With an attachment:
 ```bash
-python scripts/entry.py --q "Is this document related to medicine?" --attach "/path/to/file.docx"
+python scripts/ask.py --q "Is this document related to medicine?" --attach "/path/to/file.docx"
 ```
 
 **That's it.** The stdout is the final answer — pipe it to the user verbatim.
+
+> **Debugging / advanced**: `python scripts/ask.py --q "..." --raw` prints entry.py's raw
+> (still base64-wrapped) stdout; `python scripts/entry.py --q "..." --out <file>` writes the
+> full raw stdout to a file so it can be re-verified **without re-running Coze**.
 
 ### What entry.py does internally (all code, zero LLM) — the canonical pipeline
 
@@ -104,13 +119,23 @@ STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
 STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
 STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): parallel Coze /run fire + local ct-skill prefetch → merge
 STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
-STEP 5  Output — stdout carries a base64 ASCII-safe payload in <<<CT_ANSWER_B64_START/END>>> + sha256 checksum
+STEP 5  Output — entry.py stdout carries a base64 ASCII-safe payload in <<<CT_ANSWER_B64_START/END>>> + sha256 checksum
+STEP 6  Unwrap + verify (scripts/ask.py) — decode the payload, re-hash, compare checksum; stdout becomes the plain-text answer (exit code 2 on mismatch, reason on stderr)
 ```
 
 > **LLM-forbidden zone**: every STEP above is executed by code. The local LLM
 > never picks the channel, never judges difficulty, never decides forwarding.
 
-### Output format:
+### Output format
+
+`scripts/ask.py` (what the LLM calls) — stdout is the **plain-text answer**:
+
+```
+{the verified answer text}
+```
+
+`scripts/entry.py` (internal protocol, wrapped by ask.py) — stdout is the ASCII-safe envelope:
+
 ```
 <<<CT_ANSWER_B64_START>>>
 {base64 of the LF-normalized answer}
@@ -121,7 +146,13 @@ checksum: {sha256[:16] of the LF-normalized answer}
 > 🔴 **base64 ASCII-safe payload (v1.3.9)**: the answer is base64-encoded before output — the delimiters, payload and checksum line are pure ASCII (a subset of every console code page, incl. cp936/GBK). PowerShell 5.1 decoding captured stdout with the wrong code page therefore **cannot** corrupt the payload: this structurally closes the "GBK mojibake → byte-level checksum false-alarm → agent misreads it as encoding loss/tampering → pointless Coze re-run" loop. **Decode FIRST, then verify** (see the check code below). The checksum is still computed over the LF-normalized answer text (CRLF-tolerance retained). A plain-text `<<<CT_ANSWER_START>>>` (non-b64) block is legacy/debug output only — if you ever see one, apply the same decode-then-verify discipline but treat mojibake as possible.
 
 ### 🔴 sha256 Anti-tamper Check (HARD GATE):
-After receiving the stdout from `entry.py`, the local LLM **MUST** verify the checksum before passing the answer to the user:
+**Since 2026-10-16 this check is performed by `scripts/ask.py`, not by the LLM.** `ask.py`
+decodes the payload, re-hashes the LF-normalized answer and compares it against the
+`checksum:` line; on mismatch it exits with code 2, prints nothing on stdout and puts the
+reason on stderr. **A non-zero exit from `ask.py` means: deliver nothing, re-run nothing,
+relay the stderr reason and stop.**
+
+The equivalent logic (kept for debugging / manual reproduction only — never the normal path):
 
 ```python
 import base64, hashlib, re
@@ -157,7 +188,7 @@ if m:
 > | 1 | Re-hash after CRLF normalization (`.replace("\r\n", "\n")` — see code above) | Match → deliver verbatim. Done. |
 > | 1b | `b64decode` raised (e.g. strict decoder met mid-payload newlines from PowerShell `Out-String` line-wrapping of a long payload) | Strip ALL whitespace from the b64 field (`re.sub(r"\s+", "", m.group(1))`) and decode again — the verify code above already does this. Only if it still fails treat it as a corrupted capture → step 2. Never re-run Coze for this. |
 > | 1c | stdout ends with a truncation marker (e.g. `…[输出截断]`) or the trailing `checksum:` line is missing entirely | The capture tool truncated the echo (PowerShell tool ≈20k chars; the absolute worst case — coze 1000-char answer + 4000-char skill result both maxed — is ~20,150 b64 chars, verified intact on Bash). **Switch to the Bash / Git Bash tool and re-capture — do NOT re-run Coze.** |
-> | 2 | Is the captured answer visibly mojibake (CJK rendered as `鏈熶复…`-style garbage) or truncated? | With the v1.3.9 base64 payload this should no longer happen for the answer block — if it does, you are looking at legacy/debug plain-text output or a corrupted capture pipeline. **The corrupted text is NOT repairable in place** — cp936 mis-decodes some UTF-8 byte pairs as illegal (e.g. `0x9A`) and replaces them with U+FFFD, permanently destroying the original bytes (both deterministic byte-reversal and any LLM rewrite were tested and cannot restore them). Fix the capture (set `[Console]::OutputEncoding` to UTF-8, or re-capture in Git Bash reading the FULL stdout into a variable) and re-send Coze **at most once**, stating the reason to the user. Cost note: on the serial path the re-run hits the **local dedup short-circuit** (30-min window, ≥0.90 similarity) and replays the clean cached answer with **no new Coze call** — stderr shows `dedup short-circuit: replayed local cached answer`. Even a genuine re-send is cheap: the Coze backend has a 4-gate server-side cache (cross-request hit, verified). |
+> | 2 | Is the captured answer visibly mojibake (CJK rendered as `鏈熶复…`-style garbage) or truncated? | With the v1.3.9 base64 payload this should no longer happen for the answer block — if it does, you are looking at legacy/debug plain-text output or a corrupted capture pipeline. **The corrupted text is NOT repairable in place** — cp936 mis-decodes some UTF-8 byte pairs as illegal (e.g. `0x9A`) and replaces them with U+FFFD, permanently destroying the original bytes (both deterministic byte-reversal and any LLM rewrite were tested and cannot restore them). Fix the capture (set `[Console]::OutputEncoding` to UTF-8, or re-capture in Git Bash reading the FULL stdout into a variable) and re-send Coze **at most once**, stating the reason to the user. Cost note: a re-run is now short-circuited locally by **`answer_cache.py`** (30-min TTL, keyed on the question + doc_context + difficulty fingerprint) — stderr shows `answer-cache hit: replayed local cached answer` and **no Coze call is made**. *(Before 2026-10-16 this note was wrong for the entry.py path: `dedup_guard` was wired only into the `refine_answer.py` CLI, and `entry.py` never set `query_origin`, so re-runs went straight to Coze — the exact defect that made one question cost three Coze calls.)* Even a genuine re-send is cheap: the Coze backend has a 4-gate server-side cache (cross-request hit, verified). |
 > | 3 | Regex found NO `<<<CT_ANSWER_B64_START>>>` block at all (stdout structure destroyed, or empty stdout) | First rule out a real endpoint fault — check stderr for `[ct-advisor][ERR]` and run `check_coze.py` (token / dead proxy / network / unreachable). If the endpoint is healthy this is still a capture-layer failure → same repair as step 2, re-send ≤1. If the endpoint itself is down, report the diagnosis to the user and stop — do not re-send into a dead endpoint. |
 > | 4 | Still mismatched, text looks clean | Treat as potential tampering: do NOT deliver; do NOT loop re-runs; report expected vs actual checksums to the user and stop. |
 >
@@ -165,22 +196,25 @@ if m:
 
 > 🔴 **No host-model fallback (HARD GATE · 2026-10-15)**: ct-advisor is coze-only **by design** — there is no local knowledge base or database, so a host-model direct answer on a clinical question has no domain substrate and is **forbidden as a fallback** (a bare host-model answer was evaluated and rejected: quality cannot be guaranteed without the cloud knowledge base and tool chain). The same tiering rule means attachment / `doc_context` content must **never** leave the Coze channel. The ONLY sanctioned recovery for a broken capture is: **repair the capture → re-send once (≤1, dedup-cached in the common case)**. Everything else stops and reports.
 
-> 🔴 **Short-circuit output is also GATE-wrapped (2026-10-15)**: the dedup short-circuit path emits its cached answer through the same `<<<CT_ANSWER_B64_START/END>>> + checksum` wrapper as a fresh Coze call (stderr marks `dedup short-circuit`). If your regex matches the block, decode-and-verify it like any other answer — a cached answer is a legitimate delivery, not an error.
+> 🔴 **Short-circuit output is also GATE-wrapped (2026-10-15 · cache layer updated 2026-10-16)**: both short-circuit paths — `answer_cache.py` on the entry.py main chain, `dedup_guard` on the refine_answer.py serial path — emit their cached answer through the same `<<<CT_ANSWER_B64_START/END>>> + checksum` wrapper as a fresh Coze call (stderr marks `answer-cache hit` / `dedup short-circuit`). `ask.py` verifies it like any other answer — a cached answer is a legitimate delivery, not an error.
 
-> 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. The default is **one call per question**: capture the entire stdout into memory/a variable and run the sha256 check against that SAME captured result — **re-calling `entry.py` purely to perform the check is strictly forbidden** (it sends an identical request to the Coze backend again, doubling the latency; in practice this once caused "the same question sent 2–3 times, a single Q&A dragging to 4 minutes"). The single exception is decision-table steps 2–3: **at most one re-send to repair a broken CAPTURE** (mojibake/truncation/destroyed structure), with the reason stated to the user — never for a clean-text mismatch (step 4 → stop) and never without capture evidence. If you need to persist output, write the stdout already captured from the first run rather than re-running.
+> 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. The default is **one call per question**; with `ask.py` this is structural — decode + sha256 happen inside the same script invocation, so there is nothing left for the LLM to "verify again". **Re-calling `ask.py` / `entry.py` purely to perform the check is strictly forbidden** (in practice this once caused "the same question sent 2–3 times, a single Q&A dragging to 4 minutes"). The single exception is decision-table steps 2–3: **at most one re-send to repair a broken CAPTURE** (mojibake/truncation/destroyed structure), with the reason stated to the user — never for a clean-text mismatch (step 4 → stop) and never without capture evidence. If you need to persist output, use `entry.py --out <file>` instead of re-running.
 
-**Verification discipline (L3, 2026-09-25)**: The sha256 integrity check MUST be performed inline against the stdout captured in memory from the SAME `entry.py` call — i.e. immediately after capture, do `re.search` + `hashlib.sha256` comparison in memory. **Forbidden**: writing stdout to a temp file just for the check, extra tool round-trips, or post-hoc temp-file cleanup. One extra file write/read/delete round-trip only adds agent-side latency and contributes nothing to the answer itself.
+**Verification discipline (L3 · superseded by ask.py 2026-10-16)**: the sha256 integrity check MUST happen against the stdout of the SAME `entry.py` call, in memory. Since 2026-10-16 `scripts/ask.py` performs it inside the script, in one process, with zero LLM round-trips — the strongest form of this discipline. **Forbidden**: writing stdout to a temp file just for the check, extra tool round-trips, post-hoc temp-file cleanup, and (new) any attempt by the LLM to transcribe or re-type the base64 payload.
 
 ## Performance Optimization & Deployment Notes (L1/L2/L3, 2026-09-26)
 
-This skill has implemented three performance optimizations; see `PERF_SOP.md` for details:
-- **L1 Resident orchestration service** (`scripts/serve.py` + `entry.py` client): heavy modules are warmed up once, so local overhead → 0.
+This skill has implemented four performance optimizations; see `PERF_SOP.md` for details:
+- **L1 Resident orchestration service** (`scripts/serve.py` + `entry.py` client): heavy modules are warmed up once, so local overhead → 0. Idle window raised 600s → 3600s (2026-10-16).
 - **L2 Parallel warm-up** (`scripts/orchestrate.py`): eliminates stacked serial imports.
-- **L3 Inline verification discipline** (see "Verification discipline" above): sha256 must be done inline in memory; writing temp files is forbidden.
+- **L3 Inline verification discipline**: sha256 is done inline in memory — since 2026-10-16 fully inside `scripts/ask.py`, with zero LLM round-trips.
+- **L4 Single-command + local answer cache (2026-10-16)**: `scripts/ask.py` merges run + decode + verify + print into one call (the LLM never touches the base64 payload), and `scripts/answer_cache.py` gives the entry.py main chain a 30-min answer cache so a re-run costs **0 Coze calls**. Root cause fixed: the `dedup_guard` short-circuit had never been reachable from `entry.py` (guard wired only into the `refine_answer.py` CLI; `query_origin` never set by entry.py), so every re-run was a real Coze round-trip — three of them for a single question in the 2026-10-16 log.
 
 **⚠️ Deployment restriction (important)**: the skill directory lives on a network share whose ACL is creator-owner — you can create new files, but **overwriting pre-installed existing files raises `PermissionError 13`**, and deletion is also blocked by a trash hook. Therefore, any change to `scripts/*.py` / `SKILL.md` should be written as a same-directory `.new` copy, then overwritten on the user's local machine with `move /Y` (command in `PERF_SOP.md` §4, or run `scripts/_perf_deploy.py`).
 
-**Version drift**: the resident service caches code; after updating skill files, the old service still runs old code until its 600s idle timeout. `entry.py` has a built-in `/version` probe that, before reusing an old service, compares the local `orchestrate.py` mtime — if the local copy is newer it auto-shuts-down the old service and launches the new version, with no manual restart needed.
+**Version drift**: the resident service caches code; after updating skill files, the old service still runs old code until its idle timeout (3600s since 2026-10-16; override with `CT_ADVISOR_IDLE`). `entry.py` has a built-in `/version` probe that, before reusing an old service, compares a **code fingerprint** — the max mtime across `scripts/*.py` + `adapters/**/*.py`, computed by `scripts/code_fingerprint.py` — against the value the service recorded at startup. If the local copy is newer it auto-shuts-down the old service and launches the new version. **No manual restart is ever required.** *(Before 2026-10-16 the probe compared only `orchestrate.py`'s mtime, so updating just `serve.py` or `adapters/**` silently failed to take effect — fixed in the same release.)*
+
+`curl http://127.0.0.1:18771/shutdown` remains available as a manual escape hatch (e.g. the port is held by a stuck service), but it is **not part of any deployment procedure** — end users never need it.
 
 ## Requirements
 
@@ -188,7 +222,7 @@ This skill has implemented three performance optimizations; see `PERF_SOP.md` fo
 |---|---|
 | Runtime | `python3` stdlib only |
 | Sibling skills | **Tier A · listed on SkillHub** (non-confidential input, publicly released): `ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` — auto-routed via Coze `need_tool` (entry.py handles card-inline execution). **Tier A · NOT yet listed**: `ct-pipeline` / `ct-synthdata` → `unpublished_a`, answer from Coze draft. **Tier B** (confidential input, **not publicly released**): `ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` / `ct-eligibility` etc. — never installable. |
-| Refiner (Coze) | `scripts/entry.py` (internal orchestrator via `scripts/orchestrate.py`) POSTs payload to `ct-advisor.coze.site/run`. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout. |
+| Refiner (Coze) | `scripts/ask.py` (LLM-facing wrapper) → `scripts/entry.py` (internal orchestrator via `scripts/orchestrate.py`) POSTs payload to `ct-advisor.coze.site/run`. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout. |
 | External Refs | **teal** (insightsengineering) — clinical-data interactive exploration framework; **Docling** — structured PDF parsing. See "External Tool References". |
 
 ## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
@@ -208,7 +242,7 @@ Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.x
 
 ## Quality Gate & Stop Rules
 
-**Presentation rules (user-mandated, hard)** — deliver only the answer text obtained by base64-decoding the payload between `<<<CT_ANSWER_B64_START>>>` and `<<<CT_ANSWER_B64_END>>>`. **Never emit any workflow / process narration to the user.**
+**Presentation rules (user-mandated, hard)** — deliver only the plain-text answer printed by `scripts/ask.py` (which is the verified decode of the payload between `<<<CT_ANSWER_B64_START>>>` and `<<<CT_ANSWER_B64_END>>>`). **Never emit any workflow / process narration to the user.**
 
 **🔔 Forward-mode user notice (the ONLY allowed process message)** — entry.py emits a brief notice to stderr before firing the Coze call. The local LLM should not add any additional process chatter.
 
@@ -230,7 +264,9 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 
 ## Error Self-Heal Protocol (stderr machine signals · 2026-10-15)
 
-**Scope — failure paths ONLY.** On a successful run (well-formed `<<<CT_ANSWER_B64_START>>>`…`<<<CT_ANSWER_B64_END>>>` + `checksum:` on stdout, and **no `[ct-advisor][ERR]` line on stderr**), the agent delivers the answer and stops. **The agent MUST NOT enter self-healing when no error was reported** — no proactive health checks, no proactive dependency installs, no proactive config/env edits, no speculative retries. The `[ct-advisor][ERR]` signal is the **only** trigger.
+**Scope — failure paths ONLY.** On a successful run (`scripts/ask.py` exits 0 and prints the answer, and **no `[ct-advisor][ERR]` line on stderr**), the agent delivers the answer and stops. **The agent MUST NOT enter self-healing when no error was reported** — no proactive health checks, no proactive dependency installs, no proactive config/env edits, no speculative retries. The `[ct-advisor][ERR]` signal is the **only** trigger.
+
+> **Where signals live (2026-10-16)**: the resident service (`scripts/serve.py`) is spawned with `stderr=DEVNULL`, so anything written inside the service process — including an `[ct-advisor][ERR]` emitted on the service path — is redirected by the service itself to **`config/serve.log`** (auto-truncated at 1 MB). If `ask.py` fails with "no B64 block found" while stderr carries no `[ERR]` line, read the tail of `config/serve.log` before concluding anything.
 
 **Signal format (single line, stderr):**
 

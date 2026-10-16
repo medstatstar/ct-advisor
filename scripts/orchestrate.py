@@ -502,12 +502,17 @@ def _multi_tool_hint(need_tools: list, executed_tool: str, lang: str = "zh-CN") 
 def _build_request(raw: str) -> RefineRequest:
     from adapters import RefineRequest  # 函数级 from-import 仅绑定本函数局部，就近导入确保可见
     obj = json.loads(raw)
+    # suggested_task → query_meta.task_category：把 entry.py 推断的任务类别（pairwise_meta / samplesize 等）
+    # 透传到 Coze 端，辅助 Coze 标注任务类型（此前该字段被静默丢弃）。
+    _qm = obj.get("query_meta", "") if isinstance(obj, dict) else ""
+    if isinstance(_qm, dict):
+        _st = (obj or {}).get("suggested_task")
+        if _st and isinstance(_st, str) and _st.strip():
+            _qm.setdefault("task_category", _st.strip())
     req = RefineRequest(
-        query_meta=obj.get("query_meta", "") if isinstance(obj, dict) else "",
+        query_meta=_qm,
         original_question=str((obj or {}).get("original_question", "")),
         draft_answer=str((obj or {}).get("draft_answer", "")),
-        # 2026-09-25 修复断链：entry.py 传入的附件载荷（doc_context）与范围标签、
-        # 对话历史必须透传，否则 Coze 端永远收不到附件（表现为"未提供文档内容"）。
         doc_context=str((obj or {}).get("doc_context", "") or ""),
         scope_hint=str((obj or {}).get("scope_hint", "") or ""),
         conversation_history=(obj or {}).get("conversation_history", []) or [],
@@ -529,6 +534,24 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
 
     orig_q = req.original_question or ""
 
+    # 0) 主链路本地答案缓存（2026-10-16 性能修复）
+    # 背景：entry.py 主链路（orchestrate → refine_forward → Coze）不经过
+    # forward_guards，dedup_guard 的 30 分钟短路在这条链路上从未生效；agent 一旦
+    # 重跑 entry.py 就是一次真实 Coze 往返（log.docx 中可见 3 次）。此处按问题指纹
+    # 做精确缓存，命中直接复用，0 次 Coze 调用。
+    _ck = ""
+    try:
+        import answer_cache as _ac
+        _ck = _ac.key_of(orig_q, req.doc_context or "",
+                         str((req.query_meta or {}).get("difficulty", "")))
+        _cached = _ac.get(_ck)
+        if _cached:
+            sys.stderr.write("[ct-advisor] answer-cache hit: replayed local cached "
+                             "answer (no new Coze call)\n")
+            return _wrap(_cached)
+    except Exception:  # noqa: BLE001
+        _ck = ""
+
     # 1) 前端高置信预判（模式 B 预取）—— 仅高置信才触发，漏判由 Coze 兜底
     pred = predict_tool(orig_q) if not no_prefetch else {"need_tool": None, "params": {}}
     prefetch_tool = pred.get("need_tool")
@@ -544,8 +567,31 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     def _coze_job():
         from adapters import RefineResult
         from refine_answer import _check_outbound_authorization, _get_endpoint_from_config
-        if not _check_outbound_authorization(_get_endpoint_from_config(config_path), config_path):
-            coze_result[0] = RefineResult(final_answer=req.draft_answer, need_tool=None)
+        _ep = _get_endpoint_from_config(config_path)
+        if not _check_outbound_authorization(_ep, config_path):
+            # 2026-10-16 修复（主流程偏差）：此前只返回一个空 RefineResult，
+            # build_output 会把它渲染成「⚠️ Coze 返回为空，请稍后重试」——
+            # 把「未授权出站 / 配置缺失」误报成「云端返回空」，用户按提示反复
+            # 重试永远不会成功，也看不到真实原因。改挂 internal_error（配置类
+            # 失败通道），让 build_output 渲染准确的人读提示。
+            _res = RefineResult(final_answer=req.draft_answer, need_tool=None)
+            if not (_ep or "").strip():
+                _res.internal_error = (
+                    "⚠️ 无法连接 Coze：未能从 config.json 读到 refiner.endpoint。\n\n"
+                    "配置文件可能缺失或损坏。请检查技能目录下的 config.json 是否包含：\n"
+                    '  "refiner": { "endpoint": "https://ct-advisor.coze.site/run" }\n\n'
+                    "本技能的问答能力完全依赖云端 Coze 引擎，配置恢复前无法作答。"
+                )
+            else:
+                _res.internal_error = (
+                    "⚠️ 未授权出站到 Coze，无法获取答案。\n\n"
+                    f"目标 endpoint：{_ep}\n"
+                    "该地址不在 config.json 的 auto_approve_endpoints 白名单中，"
+                    "出站请求已被拦截。\n\n"
+                    "请由用户确认后将该 endpoint 加入白名单再重试"
+                    "（授权项只能由用户自行修改 config.json，本地大模型不得代改配置）。"
+                )
+            coze_result[0] = _res
             return
         coze_result[0] = _fire_coze(req, config_path)
 
@@ -570,9 +616,36 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     for t in threads:
         t.join()
 
-    return build_output(orig_q, coze_result[0], prefetch_out[0], prefetch_tool,
-                        prefetch_params, need_tools=need_tools,
-                        suggest_tools=(pred.get("suggest_tools") or []))
+    out = build_output(orig_q, coze_result[0], prefetch_out[0], prefetch_tool,
+                       prefetch_params, need_tools=need_tools,
+                       suggest_tools=(pred.get("suggest_tools") or []))
+
+    # 回写本地答案缓存（2026-10-16）：**只缓存 Coze 正常返回的非空答案**。
+    # 必须排除的四类输出，否则会把「错误提示」缓存 30 分钟，形成
+    # 「Coze 已恢复、却一直返回旧错误」的新故障（代码复审 2026-10-16 发现）：
+    #   - 委托块：需 agent 侧继续执行，缓存会跳过必要流程；
+    #   - dependency_error / connection_error / internal_error 三类错误通道
+    #     （build_output 第 320/330/338 行，均以 _wrap 包裹后返回）；
+    #   - Coze final_answer 为空：build_output 会降级成「⚠️ Coze 返回为空」
+    #     （第 437 行）或纯技能兜底文本（第 398/433 行）。
+    _coze_res = coze_result[0]
+    _cacheable = (
+        _coze_res is not None
+        and not getattr(_coze_res, "dependency_error", None)
+        and not getattr(_coze_res, "connection_error", None)
+        and not getattr(_coze_res, "internal_error", None)
+        and bool((getattr(_coze_res, "final_answer", "") or "").strip())
+    )
+    if _ck and _cacheable and TOOL_DELEGATE_START not in out:
+        try:
+            import answer_cache as _ac
+            _ans = _b64_decode_payload(out)
+            if _ans:
+                _ac.put(_ck, _ans)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return out
 
 
 # ---------------------------------------------------------------------------

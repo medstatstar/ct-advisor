@@ -1,7 +1,7 @@
 {
   "version": "2026-09-29",
-  "generated_at": "2026-10-14T15:34:41.101731",
-  "source_dir": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills",
+  "generated_at": "2026-10-16T08:09:15.772739",
+  "source_dir": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills",
   "skills": {
     "ct-adam": {
       "name": "ct-adam",
@@ -22,7 +22,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-adam",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-adam",
       "capabilities": [
         "adam_derivation",
         "sdtm_mapping"
@@ -58,7 +58,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-analysis",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-analysis",
       "capabilities": [
         "adam_derivation",
         "csr_report",
@@ -83,7 +83,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-congress",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-congress",
       "capabilities": [
         "pipeline_intel",
         "registry_search",
@@ -109,7 +109,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-csr",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-csr",
       "capabilities": [
         "csr_report",
         "eligibility",
@@ -136,7 +136,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-datacheck",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-datacheck",
       "capabilities": [
         "adam_derivation",
         "data_quality",
@@ -163,7 +163,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-ecrf",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-ecrf",
       "capabilities": [
         "data_quality",
         "protocol_review",
@@ -188,7 +188,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-eligibility",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-eligibility",
       "capabilities": [
         "adam_derivation",
         "eligibility",
@@ -217,7 +217,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-literature",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-literature",
       "capabilities": [
         "literature_search",
         "safety_signal"
@@ -253,7 +253,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-pipeline",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-pipeline",
       "capabilities": [
         "literature_search",
         "pipeline_intel",
@@ -292,7 +292,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-protocol",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-protocol",
       "capabilities": [
         "csr_report",
         "eligibility",
@@ -314,7 +314,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-publish",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-publish",
       "capabilities": [
         "literature_search",
         "protocol_review",
@@ -336,7 +336,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-registry",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-registry",
       "capabilities": [
         "pipeline_intel",
         "registry_search"
@@ -357,7 +357,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-regress",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-regress",
       "capabilities": []
     },
     "ct-safety": {
@@ -380,7 +380,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-safety",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-safety",
       "capabilities": [
         "safety_signal"
       ]
@@ -388,7 +388,7 @@
     "ct-samplesize": {
       "name": "ct-samplesize",
       "display_name": "Clinical Trial Sample Size / 临床试验样本量专家",
-      "version": "5.10.1",
+      "version": "5.12.0",
       "summary": "为临床试验从业者提供的样本量与检验效能计算工具。本地无需安装 R，直接提供云端 R 计算服务（覆盖 65 种检验，并提供 SVG 出版级别图形）。自然语言驱动，默认回传完整 R 代码；默认按操作系统语言设定输出中文或英文（提示词可强制切换）。",
       "triggers": [
         "clinical trial sample size",
@@ -406,7 +406,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-samplesize",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-samplesize",
       "capabilities": [
         "sample_size",
         "tlg_generation"
@@ -433,7 +433,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-sdtm",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-sdtm",
       "capabilities": [
         "sdtm_mapping"
       ]
@@ -456,7 +456,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-statrev",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-statrev",
       "capabilities": [
         "adam_derivation",
         "csr_report",
@@ -486,7 +486,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-submission",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-submission",
       "capabilities": [
         "csr_report",
         "submission"
@@ -506,7 +506,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-synthdata",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-synthdata",
       "capabilities": [
         "adam_derivation",
         "data_quality",
@@ -540,7 +540,7 @@
       "tier": "B",
       "published": false,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-tlf",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\ct-tlf",
       "capabilities": [
         "adam_derivation",
         "csr_report",
@@ -584,7 +584,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\meta-analysis",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\meta-analysis",
       "capabilities": [
         "literature_search",
         "pipeline_intel",
@@ -609,7 +609,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\statdata-transfer",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\statdata-transfer",
       "capabilities": [
         "literature_search",
         "statistical_analysis"
@@ -634,7 +634,7 @@
       "tier": "A",
       "published": true,
       "installed": true,
-      "install_path": "\\\\filesrv\\C$\\Users\\WintoneFileSrv\\.workbuddy\\skills\\statsoft-cli",
+      "install_path": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills\\statsoft-cli",
       "capabilities": [
         "statistical_analysis"
       ]
