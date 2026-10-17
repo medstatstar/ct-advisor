@@ -296,3 +296,18 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 7. Signals are emitted from failure paths only (`adapters/errsignal.py::emit_err_signal`). If an `[ERR]` line appears on a run that returned a valid answer, treat it as a skill defect and report it.
 
 **Note on `[DEP-MISS]`:** before 2026-10-15 a missing `requests` library surfaced as `[DEP-MISS]` + an install prompt. The transport now uses stdlib `urllib`, so this failure class no longer exists; the handler remains as dormant defensive code.
+
+---
+
+## AI 生成治理（ct-base §22）
+
+> 本技能受 `ct-base/BASE.md §22`（AI 生成资产治理，2026-10-18 新增）约束。来源依据：`ct-base/references/cdisc2026_ai_challenge.md`。作为总入口路由，本技能是 §22.5（ALCOA+ 审计 + 版本锁定）与 §22.6（Control Mode 自治阶梯）的主要承载。
+
+| §22 义务 | 适用项 | 本技能状态 |
+|---|---|---|
+| §22.5 ALCOA+ 审计 | basis + processDefinitionVersion | 🟡 规划——每次 AI 建议须落 `basis`（基于什么规则/数据源）+ `processDefinitionVersion`；引用 `ct-base/assets/audit_event.schema.json` |
+| §22.5 工作流版本锁定 | skill_version / coze_version | 🟢 已部分——coze 出参已带 `skill_version` + `coze_version`（§20.13）；须扩展到每次路由决策的 `processDefinitionVersion` |
+| §22.6 Control Mode 自治阶梯 | CM0–CM4 每步配置 | 🔴 规划——路由须把每步的 Control Mode 显式写入定义；风险点（AI 建议采纳）默认 CM3，确定性调度 CM0，绝不默认 CM4 处理涉监管资产 |
+| §22.1 HITL 闸门 | 生成前 gate | 🟡 部分——已设人工确认门（与下游技能 §6.9 协同）；须显式化"歧义即停"触发清单 |
+
+**红线**：AI 建议须可审计（basis + 版本）；自治级必须显式配置，禁止隐含 CM4（§22.7）。
