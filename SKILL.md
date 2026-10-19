@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.15
+version: 1.3.16
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -309,7 +309,8 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 | §22.5 工作流版本锁定 | skill_version / coze_version | 🟢 已部分——coze 出参已带 `skill_version` + `coze_version`（§20.13）；须扩展到每次路由决策的 `processDefinitionVersion` |
 | §22.6 Control Mode 自治阶梯 | CM0–CM4 每步配置 | 🔴 规划——路由须把每步的 Control Mode 显式写入定义；风险点（AI 建议采纳）默认 CM3，确定性调度 CM0，绝不默认 CM4 处理涉监管资产 |
 | §22.1 HITL 闸门 | 生成前 gate | 🟡 部分——已设人工确认门（与下游技能 §6.9 协同）；须显式化"歧义即停"触发清单 |
-| §22.15 影子模式准入阈值 | CM 升级量化闸门 | 🔴 规划——总入口路由/建议能力升级 Control Mode 前须过影子阶段（锁定版本 + 与人工基准决策离线比对），由技能负责人定义量化阈值（性能/稳定性/时效），全达标才升级，触发熔断即降回 CM3 |
+| §22.15 影子模式准入阈值 | CM 升级量化闸门 | 🔴 规划——总入口路由/建议能力升级 Control Mode 前须过影子阶段（锁定版本 + 与人工基准决策离线比对），由技能负责人定义量化阈值（性能/稳定性/时效），全达标才升级，触发熔断即降回 CM3；**扩写（AI-201 落地建议 #5/#6）**：影子期与传统人工路由并行对跑积累一致性证据；SAP 登记模型版本 + skill 版本 + 规则集版本三要素 |
 | §22.16 RAG 三列待核对清单 | 问题 / 原文位置 / 依据 | 🔴 规划——路由/问答输出的检索类内容（指南、SOP、方案初审）禁止只给结论，必须附三列待核对清单；"漏项"显式列出（依据：Waikar et al. 2026 CPT PSP，DOI `10.1002/psp4.70201`——RAG 概念验证漏掉方案主要终点、带入不适用要求） |
+| §22.18 规格就绪度 Gate 传播 | 路由到生成类技能前确认 | 🔴 规划——总入口把 spec/规格类请求路由给 ct-sdtm/ct-adam/ct-tlf 等生成技能前，先提示调用方过六项就绪度评分；规格缺项直接退回上游作者，不转发（§22.18；AI-201 Gate 1 范式） |
 
 **红线**：AI 建议须可审计（basis + 版本）；自治级必须显式配置，禁止隐含 CM4（§22.7）。
