@@ -1,5 +1,54 @@
 # Changelog
 
+## v1.3.15 (2026-10-19) · §22.15/§22.16 总入口适配（规范层对齐）
+
+- **§22.15 影子模式准入阈值**：路由/建议能力升级 Control Mode 前须过影子阶段（锁定版本 + 与人工基准决策离线比对），技能负责人定义量化阈值（性能/稳定性/时效），全达标才升级，触发熔断降回 CM3。
+- **§22.16 RAG 三列待核对清单**：路由/问答输出的检索类内容（指南/SOP/方案初审）禁止只给结论，必须附三列清单；「漏项」显式列出。
+- 证据与规范原文：`ct-base/references/qc_independence_pharmasug2026.md` + `ct-base/docs/13-ai-generation-governance.md`。
+
+## v1.3.14 (2026-10-19) · Coze 调用全面异步化（async-first）
+
+> 用户裁定：ct-advisor 很难提前判断单轮会超 60s 还是不超（实测 3–72s 横跨 stgw 60s 硬线，
+> 难度分级预测的是复杂度不是耗时），为稳妥起见**全部改异步调用**。
+> 本版本把本地客户端（CLI / 常驻服务 / `ask.py` 全链路）从「同步 `/run`」切换为
+> 「异步优先 + 同步兜底」，与已异步化的 workbench 收敛到同一模式。
+> **纯本地客户端改动，coze 端零改动**（`/async_run` + `/task/{id}` 端点 v1.37+ 已部署，
+> 本次线上零成本验证：两端点均存活，一次轻问题真实异步往返 rc=0）。
+
+- **`adapters/refiner.py` 新增异步主路径 `_call_coze_async`**：`POST /async_run`
+  （毫秒级返回 `task_id`，客户端生成 run_id 经 `X-Run-Id` 上传对齐取消契约）+
+  `GET /task/{task_id}` 轮询（首次 1s、其后 2.5s，总时限 = 本次解析的 timeout，
+  即 90s / 长任务 300s）。终态：`completed` → 按与同步 `/run` **同构**的口径解析
+  result 信封（`final_answer`/`answer` 双键、`need_tool`/`params`/`message` 透出、
+  均缺回退本地草稿）；`failed` → `_AsyncTaskFailed`（新增错误码 `COZE_TASK_FAILED`，
+  人读提示不静默）；`timeout` → `socket.timeout`（与同步路径同一 TIMEOUT 分类）；
+  `cancelled` → 任务失败上抛。
+- **回退与韧性（async 是叠加不是替换，§20.17.2）**：提交遇 404/405（旧部署无端点）
+  或 5xx（异步存储不可用）→ 自动回退同步 `/run`；轮询遇 404（行未可见，最终一致性）/
+  连接抖动 / 5xx（连续容忍 10 次）均继续轮询——任务仍在服务端跑，不因单次抖动废弃；
+  `CT_ADVISOR_ASYNC=0` 环境变量可整体关停异步（调试/紧急回退逃生门）。
+- **传输层去重**：原同步路径的「系统代理优先、仅连接失败直连重试一次、超时不重试」
+  逻辑抽取为共享 `_send()`，异步提交/轮询/同步兜底三处复用（消除 ~30 行重复）。
+- **`config.json`**：`auto_approve_endpoints` 增补 `https://ct-advisor.coze.site/async_run`
+  与 `https://ct-advisor.coze.site/task/`（R3：白名单须含全部自役端点）。
+- **回归**：新增 `scripts/tests/test_refiner_async.py` 15 断言全过（happy path /
+  结构化透出 / 404·503 回退 / failed·timeout 终态 / 轮询到期 / base64 result /
+  空信封回退草稿 / 404 续轮 / 轮询超时续轮 / X-Run-Id / 双键 task_id / 逃生门 /
+  URL 推导 / 错误分类）；
+  既有套件无回归（adapter_audit 4/0、doc_payload 32/0、local_guards ALL PASS、
+  seven_flows 8/8、tool_router 63/63、orchestrate self-test 11/11）；
+  线上探针：一次轻问题 `ask.py` rc=0，答案缓存新鲜落盘，无回退告警；
+  `GET /task/<不存在ID>` 与 `POST /async_run` 均返回应用层 401（端点存活佐证，零成本）。
+- **文档**：SKILL.md（STEP 3 流程 + Refiner 行 + version 1.3.14）、README /
+  README_zh-CN（「单次调用」→「异步提交+轮询」；保留实测 3–72s 数据作为异步化依据）。
+
+## （待部署）2026-10-19 · coze 端点落实 ct-base §1.4 `query_origin` 准入闸门
+
+> 随 ct-base v1.3.33 契约 §1.4 落实。改动在 `adapters/coze/src/main.py`（ct-advisor 工作流源码），**仅端点侧行为**；部署需重新打包上传 Coze（手动，待授权）。
+
+- **合并守卫 `_guard_query_origin()`**：占位哈希闸门（2026-09-13）保留 + 新增 `query_origin` 空值拒绝（缺失 / `None` / 空串 / 纯空白 / 非字符串 → 返回 `""` 拒绝）。`/run` / `/stream_run` / `/async_run` / `/node_run` + 内部 run 分支共 5 个调用点挂接。
+- **动因 / 零误伤**：同 ct-registry（裸 POST 实测）；客户端出站必带非空 query_origin。
+
 ## v1.3.13 (2026-10-16) · 流式输出功能移除 + 线上错误诊断增强
 
 - **删除流式输出功能**：`workbench/index.html` + `workbench/publish/index.html` 全面清理流式输出相关代码（`streamChk` HTML 控件、`useStream` 变量、`/stream_run` 调用分支、`readCozeResponse` 函数、`streamLabel` i18n 条目、`cfg.stream` 配置项）。该功能无实际价值——后端 `/stream_run` 走同样链路撞 60s 超时，并非真流式。
@@ -1907,3 +1956,13 @@ v1.14 移入 `_archive/`）。本地改动**即时生效**；云端需上传 zip
 - **规则**：priority 1 改为 stdin 管道（`echo '{…}' | python refine_answer.py`），`--payload-inline` 降级为 priority 2（仅限纯英文 payload）；新增自检规则：调用前扫一眼 JSON，出现中文标点立刻切 stdin。
 - **落点**：`SKILL.md` Coze 调用优先级表和编码策略段全面改写。
 
+
+## [Unreleased] · Web 层热控拒绝短路 + keep-alive 污染修复（2026-10-19 复查）
+
+- **`workbench/ct-advisor-proxy.py`（含 publish/ 副本）**：与 ct-adam 同轮复查发现同一家族两项缺陷——① **拒绝短路契约**：`_guard`/`_json_body_cap` 拒绝路径 `return self._send_json(429/413, …)` 返回 None，调用方 `if r is not None: return` 永不触发，被拒请求在 429 发出后仍继续处理（`/api/clarify` 仍起本地子进程、`/run`/`/upload_file` 仍转发扣子烧额度、双响应）；修复为「先发响应、再 `return True`」，调用方 `if r: return`。② **keep-alive 污染**：拒绝路径未读请求体残留 socket 被当成下一条请求行（实测 `400 Bad request syntax`）；修复为拒绝即 `close_connection = True` + `Connection: close` 头（不 drain body）。
+- **测试**：`adapters/coze/tests/test_webguard_proxy.py` 33→47 全绿——Part D 拒绝短路回归（猴补 `forward_to_coze`/`append_bug_report`/`run_clarify` 计数，断言 429/413 后零落盘/零子进程/零转发；http.client 复用连接验证断连且无 400）。反向验证：猴补回旧契约后 4 断言挂，证明测试有效。
+
+## [Unreleased] · Web 层拒绝响应信息泄露收敛（§20.18.4 拒绝响应统一载体）
+
+- **`workbench/ct-advisor-proxy.py`（含 publish/ 副本，2026-10-19）**：429 响应体去 mechanism 区分——原 `{"reason":"denylist"/"ratelimit"/"concurrency"}` + `retry_after` 键可让攻击者打一次即区分命中机制并观测封禁到期跳变；现统一固定载体 `{"ok":false,"error":"rate_limited"}` / `{"ok":false,"error":"busy"}`，`Retry-After` 仅作 HTTP 头。500/502 及附件解析失败提示不再回显 `str(e)`（防路径/内部 URL 泄露），改通用错误体 + 服务端 stderr 日志（新增 `_srv_log`）。命中机制只写遥测与日志。
+- **测试**：`adapters/coze/tests/test_webguard_proxy.py` 新增 Part C（静态扫描 3 项 + HTTP 实测 3 项，限流用 misc 类 /api/health 造、零副作用），27→33 全绿；全量回归 antiscrape 69 + habit 33 + HTTP 集成 11 + webguard 33 均绿。

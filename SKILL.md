@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.13
+version: 1.3.15
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -117,7 +117,7 @@ STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
         ├─ < 5 MB   → doc_memory.build_file_payload(allow_upload=True): upload ORIGINAL file to Coze /upload_file, ship as `doc_context` (mode=file_id; base64-forward fallback on failure)
         └─ > 5 MB   → convert locally (office_to_md.py for OOXML / direct read for txt-like), upload the resulting **.md** through the SAME doc_context channel + ℹ️ notice that cloud answers from the md version
 STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
-STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): parallel Coze /run fire + local ct-skill prefetch → merge
+STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): Coze async submit (/async_run, ms-level → task_id) + local ct-skill prefetch → poll /task/{id} until terminal → merge (sync /run only as fallback when the async endpoint is unavailable)
 STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
 STEP 5  Output — entry.py stdout carries a base64 ASCII-safe payload in <<<CT_ANSWER_B64_START/END>>> + sha256 checksum
 STEP 6  Unwrap + verify (scripts/ask.py) — decode the payload, re-hash, compare checksum; stdout becomes the plain-text answer (exit code 2 on mismatch, reason on stderr)
@@ -222,7 +222,7 @@ This skill has implemented four performance optimizations; see `PERF_SOP.md` for
 |---|---|
 | Runtime | `python3` stdlib only |
 | Sibling skills | **Tier A · listed on SkillHub** (non-confidential input, publicly released): `ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` — auto-routed via Coze `need_tool` (entry.py handles card-inline execution). **Tier A · NOT yet listed**: `ct-pipeline` / `ct-synthdata` → `unpublished_a`, answer from Coze draft. **Tier B** (confidential input, **not publicly released**): `ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` / `ct-eligibility` etc. — never installable. |
-| Refiner (Coze) | `scripts/ask.py` (LLM-facing wrapper) → `scripts/entry.py` (internal orchestrator via `scripts/orchestrate.py`) POSTs payload to `ct-advisor.coze.site/run`. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout. |
+| Refiner (Coze) | `scripts/ask.py` (LLM-facing wrapper) → `scripts/entry.py` (internal orchestrator via `scripts/orchestrate.py`) sends payload to `ct-advisor.coze.site` — **async-first** (v1.3.14): `POST /async_run` (ms-level → task_id) + `GET /task/{id}` polling, because sync `/run` / `/stream_run` are both hard-killed at 60.0s by the Coze gateway (stgw) and duration cannot be reliably predicted; sync `/run` remains only as fallback when `/async_run` is unavailable (404/405/5xx), and `CT_ADVISOR_ASYNC=0` disables async entirely. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout (= polling deadline in async mode). |
 | External Refs | **teal** (insightsengineering) — clinical-data interactive exploration framework; **Docling** — structured PDF parsing. See "External Tool References". |
 
 ## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
@@ -309,5 +309,7 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 | §22.5 工作流版本锁定 | skill_version / coze_version | 🟢 已部分——coze 出参已带 `skill_version` + `coze_version`（§20.13）；须扩展到每次路由决策的 `processDefinitionVersion` |
 | §22.6 Control Mode 自治阶梯 | CM0–CM4 每步配置 | 🔴 规划——路由须把每步的 Control Mode 显式写入定义；风险点（AI 建议采纳）默认 CM3，确定性调度 CM0，绝不默认 CM4 处理涉监管资产 |
 | §22.1 HITL 闸门 | 生成前 gate | 🟡 部分——已设人工确认门（与下游技能 §6.9 协同）；须显式化"歧义即停"触发清单 |
+| §22.15 影子模式准入阈值 | CM 升级量化闸门 | 🔴 规划——总入口路由/建议能力升级 Control Mode 前须过影子阶段（锁定版本 + 与人工基准决策离线比对），由技能负责人定义量化阈值（性能/稳定性/时效），全达标才升级，触发熔断即降回 CM3 |
+| §22.16 RAG 三列待核对清单 | 问题 / 原文位置 / 依据 | 🔴 规划——路由/问答输出的检索类内容（指南、SOP、方案初审）禁止只给结论，必须附三列待核对清单；"漏项"显式列出（依据：Waikar et al. 2026 CPT PSP，DOI `10.1002/psp4.70201`——RAG 概念验证漏掉方案主要终点、带入不适用要求） |
 
 **红线**：AI 建议须可审计（basis + 版本）；自治级必须显式配置，禁止隐含 CM4（§22.7）。
