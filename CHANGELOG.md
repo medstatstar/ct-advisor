@@ -1,5 +1,20 @@
 # Changelog
 
+## （待部署）2026-10-22 · v1.3.19 单一路径：对外出口改为明文 + 尾部校验（彻底移除 base64 双入口）
+
+> 来源：用户追问「`ask.py` 与 `entry.py` 有什么区别／为什么会有两个路径」，随后拍板「既然是历史问题就彻底解决，变成一个单一的路径」。
+>
+> **历史包袱的两层成因**：① v1.3.9 为免疫中文 Windows（cp936）控制台乱码，把**对外出口**改成 base64 信封；② 但 base64 迫使 LLM 手工把 ~2600 字符随机串搬进另一条命令解码，LLM 没有可靠的「长随机串搬运」通道（2026-10-16 事故：`5L+d` 被抄成 `5Lzd`，checksum 误报，进而触发 3 次真实 Coze 调用）。2026-10-16 加了 `ask.py` 把解码挪进代码，代价是**并存两套协议** + base64 的 4× 膨胀（6000 字纯中文 = 24,000 字符，正压 Bash 通道天花板、超 PowerShell 约 20,000 截断线）。
+
+- **协议收敛（根因修复，非补丁）**：base64 收回到**代码模块之间**（`orchestrate` → `serve` / `refine_answer` → `entry`，进程间二进制安全，无 LLM 参与）；`entry.py` 在进程边界**只解包一次**，对外 stdout 变为「明文答案 + `<<<CT_ANSWER_END>>>` + `checksum:`」。**入口唯一、形态唯一、协议唯一。**
+- **体积**：6000 字纯中文出口从 **24,000 字符 → 6,048 字符（省 75%）**，全通道安全（实测：Bash 24,000 内联完整、~30,000 转落盘 preview；PowerShell ≈20,000 截断）。
+- **截断检测反而更强**：结束标记放在**尾部**，一旦被通道截断，标记与 checksum 一起消失，一眼可辨；base64 时代必须先解码才会发现结构损坏。实测截尾 3 字符 → checksum 不匹配；截尾 40/200 字符 → 标记缺失。
+- **`scripts/ask.py` 降级为零逻辑转发壳**：仅保留给遗漏的旧调用，参数原样转发、stdout/stderr/退出码继承，不做任何捕获/解码/重编码；`--raw` 与 `--timeout` 已废弃并被忽略。**不删除**是为了零破坏，但两条文件名背后已是同一份实现、同一种输出。
+- **新增 `entry.py --b64`**：应急开关，仅在明文 CJK 无法在目标控制台存活时使用；使用即自行承担解码步骤。
+- **诚实记录的代价**：base64 原本顺带免疫 cp936 乱码，明文出口后中文 Windows PowerShell 需要先设 `[Console]::OutputEncoding = UTF8`（Git Bash / 重定向 / WSL 无需处理）。已在 SKILL.md 写明，并给出「编码问题不得重跑 Coze」的硬性纪律（本地 `session_store` 缓存会以 0 次出站重放同一答案）。
+- **同步**：`orchestrate._wrap` 观测线 20,000 → 30,000 且文案改为「内部载荷异常偏大」；SKILL.md 决策表 1c、HARD GATE、pipeline STEP 5、输出格式段、L3/L4 全面改写；README 中英「管道安全」同步；`.gitignore` / `.clawhubignore` 无需变动（`session_store.json` 已于 v1.3.17 排除）。
+- **验证（实测，非推断）**：明文出口 1000 字 → 1048 字符、checksum 校验通过、无 B64 标记；6000 字 → 6,048 字符；截尾 3/40/200 字符均被识别；非信封输入（本地降级提示）同样带标记与 checksum；`entry.py` / `ask.py` / `orchestrate.py` `py_compile` 全过。
+
 ## （待部署）2026-10-22 · v1.3.18 `output_format` 真正生效 + doc 模式解除长度天花板 + 导出 docx（B 方案）
 
 > 来源：回答**长度/格式偏差核查**（`docs/answer_length_format_deviation_20261022.md`）。实测 68 条真实答案中位数 **1553 字**（p90 2404 / max 5790），而 `shared_contract` C3 与 `_LENGTH_CAPS` 的 complex 天花板是 **≤1000 字**；同时 UI 五个 `output_format` 选项里引擎**从未读取过**该字段（`full_analysis_node.py` 只注入 `difficulty`）→ 选 doc/ppt/table 全是装饰。用户明确「要成文、不要提纲」的刚需（交付物撰写域占比高）被天花板正面截断。**本次经用户授权改动 `adapters/coze/`。**

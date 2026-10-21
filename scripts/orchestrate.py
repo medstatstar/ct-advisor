@@ -102,19 +102,17 @@ def _wrap(text: str) -> str:
     norm = text.replace("\r\n", "\n")
     checksum = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
     b64 = base64.b64encode(norm.encode("utf-8")).decode("ascii")
-    # 长度观测（2026-10-15 审计；2026-10-22 按 doc 模式重测修订）：base64 使出口约为
-    # UTF-8 字节的 1.33 倍——中文场景约 4×原始字符数。实测通道上限：Bash/Git Bash 在
-    # 24,000 字符仍内联完整返回，约 30,000 字符转为「落盘 + 仅 2KB preview」；PowerShell
-    # 工具 ≈20,000 截断。因此 auto/complex（≤1000 字）≈3–4K b64 各通道皆安全；而
-    # **doc 模式（≤6000 字）纯中文可达 24,000 b64，正好压在 Bash 天花板、超 PowerShell
-    # 线**，叠加 4,000 字符工具结果缝合后约 29,300 → 越线落盘。故 doc 模式一律走
-    # scripts/ask.py（明文出口 ≈18KB 最坏），不得直调 entry.py 或 ask.py --raw。
-    # 此处只观测不截断（截断会破坏完整性校验），超线时 stderr 提示便于定位。
-    if len(b64) > 20000:
+    # 长度观测（2026-10-15 审计；2026-10-22 v1.3.19 修订）：base64 使载荷约为
+    # UTF-8 字节的 1.33 倍——中文场景约 4×原始字符数。**v1.3.19 起本函数只服务
+    # 进程间传输**（orchestrate → serve / refine_answer → entry），entry.py 在对外
+    # 出口处一次性解包为明文，故超大载荷不再抵达 agent 侧。
+    # 保留观测仅为定位异常：若此值异常膨胀，说明上游答案远超预期（如 doc 6000 字
+    # 纯中文 = 24,000 b64，属正常上限内的预期值，无需任何动作）。
+    if len(b64) > 30000:
         sys.stderr.write(
-            f"[ct-advisor][warn] base64 载荷 {len(b64)} 字符（答案 {len(norm)} 字符）"
-            f"已超 20000——超过 PowerShell 通道上限，且 Bash 通道约 30000 起会改为落盘 preview。"
-            f"请改用 scripts/ask.py（明文出口）交付，勿直调 entry.py / --raw。\n")
+            f"[ct-advisor][warn] 内部 base64 载荷 {len(b64)} 字符（答案 {len(norm)} 字符）"
+            f"异常偏大——超出 doc 模式 6000 字上限的预期区间，请检查答案是否失控。"
+            f"（对外出口已解包为明文，agent 侧无需处理。）\n")
     return f"{ANSWER_B64_START}\n{b64}\n{ANSWER_B64_END}\nchecksum: {checksum}\n"
 
 

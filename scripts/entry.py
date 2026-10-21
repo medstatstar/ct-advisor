@@ -13,12 +13,13 @@ ct-advisor — 唯一代码入口（本地 LLM 唯一允许的动作）
   2) 难度分级：仅判断 vague / non-vague
   3) vague → 本地澄清循环；non-vague → 直接发 Coze
 
-用法：
+用法（**唯一入口**，v1.3.19 起单一路径）：
   python scripts/entry.py --q "用户问题"
   python scripts/entry.py --q "用户问题" --attach "/path/to/file.docx"
 
-  输出：stdout = <<<CT_ANSWER_B64_START>>> {base64 载荷} <<<CT_ANSWER_B64_END>>> + sha256
-  （v1.3.9：base64 ASCII-safe 出口，免疫 PowerShell cp936 捕获乱码；agent 先解码再校验）
+  输出：stdout = 明文答案 + <<<CT_ANSWER_END>>> + checksum
+  （v1.3.19：内部仍用 base64 信封做**进程间**传输，但对外出口一次性解开为明文，
+   agent 零解码、体积回落到明文；`--b64` 仅作编码异常时的应急开关。）
 """
 from __future__ import annotations
 
@@ -151,6 +152,31 @@ def _emit_output(output: str, args) -> None:
     else:
         sys.stdout.write(output)
     sys.exit(0)
+
+
+# ── 对外出口形态（2026-10-22 单一路径）──────────────────────────────────────
+# 内部（orchestrate / refine_answer / serve 三者之间）仍用 base64 信封，保证
+# 二进制安全；但**对外 stdout** 在此一次性解包为明文 + 尾部校验行。
+# 体积对比（6000 字纯中文）：明文 18 KB / base64 24 KB（正好压住 Bash 通道上限）。
+PLAIN_END_MARK = "<<<CT_ANSWER_END>>>"
+
+
+def _checksum16(text: str) -> str:
+    """与 B64 信封同口径的 sha256 前 16 位。"""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _emit_plain(output: str, args) -> None:
+    """对外唯一出口形态：明文 + 尾部结束标记 + checksum。
+
+    结束标记放在**尾部**而非包裹首尾：一旦被通道截断，标记与 checksum 会一起
+    消失，失败信号一眼可辨；B64 时代则必须先解码才会发现结构损坏。
+    """
+    plain = _extract_plain(output)          # B64 信封 → 明文；非信封原样返回
+    norm = (plain or "").replace("\r\n", "\n")
+    if not norm.endswith("\n"):
+        norm += "\n"
+    _emit_output(f"{norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(norm)}\n", args)
 
 
 def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
@@ -301,6 +327,9 @@ def main():
     ap.add_argument("--out", default=None,
                     help="把完整 stdout（含 B64 块与 checksum）写入该文件；"
                          "stdout 只打印一行确认，避免长载荷经过 agent 上下文")
+    ap.add_argument("--b64", action="store_true",
+                    help="应急：输出旧的 base64 信封（仅当明文通道出现编码问题时使用；"
+                         "内部协议仍为 B64，本开关只影响对外 stdout 形态）")
     ap.add_argument("--session", default="",
                     help="会话标识（跨轮上下文/去重键）：proxy 或飞书应传入稳定 ID；"
                          "缺失则退化为单轮（仍享全局答案缓存，仅无多轮上下文）")
@@ -491,15 +520,19 @@ def main():
         except Exception:  # noqa: BLE001
             pass
 
-    # ── 7) 出口 ──────────────────────────────────────────────────────
-    _emit_output(output, args)
+    # ── 7) 出口（唯一对外形态：明文 + 尾部校验；--b64 仅应急）────────────
+    if getattr(args, "b64", False):
+        sys.stderr.write("[entry] --b64 应急模式：输出 base64 信封\n")
+        _emit_output(output, args)
+    else:
+        _emit_plain(output, args)
 
 
 if __name__ == "__main__":
-    # 2026-10-16 顶层兜底（主流程出口契约）：任何未被内部捕获的异常此前都会让
-    # Python 打印 traceback 并**留下空 stdout**——agent 只能看到「empty stdout」，
-    # 无法向用户交代任何原因。这里统一转成合法的人读提示（B64 包裹），
-    # 保证 stdout 永远可交付，agent 侧零决策。
+    # 顶层兜底（主流程出口契约）：任何未被内部捕获的异常此前都会让 Python 打印
+    # traceback 并**留下空 stdout**——agent 只能看到「empty stdout」，无法向用户
+    # 交代任何原因。这里统一转成合法的人读提示（明文 + 尾部校验），保证 stdout
+    # 永远可交付、且与正常出口同一形态（2026-10-22 单一路径）。
     try:
         main()
     except SystemExit:
@@ -507,11 +540,10 @@ if __name__ == "__main__":
     except BaseException as _e:  # noqa: BLE001
         try:
             sys.stderr.write(f"[entry] 未捕获异常: {type(_e).__name__}: {_e}\n")
-            sys.stdout.write(_safe_wrap_with_checksum(
-                "⚠️ 技能执行出现未预期错误，无法生成答案。\n\n"
-                f"{type(_e).__name__}: {_e}\n\n"
-                "请稍后重试；若持续出现，请把本条提示与上方 stderr 反馈给技能维护者。"
-            ))
+            _norm = ("⚠️ 技能执行出现未预期错误，无法生成答案。\n\n"
+                     f"{type(_e).__name__}: {_e}\n\n"
+                     "请稍后重试；若持续出现，请把本条提示与上方 stderr 反馈给技能维护者。\n")
+            sys.stdout.write(f"{_norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(_norm)}\n")
         except Exception:  # noqa: BLE001
             pass
         sys.exit(1)

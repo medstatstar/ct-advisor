@@ -1,62 +1,34 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""ct-advisor — 单命令封装（2026-10-16）
+"""ct-advisor — 旧调用兼容壳（v1.3.19 · 2026-10-22）
 
-背景（来自 log.docx 性能诊断）：
-  旧流程要求本地大模型在拿到 entry.py 的 stdout 后，**自己**把
-  <<<CT_ANSWER_B64_START>>> 与 <<<CT_ANSWER_B64_END>>> 之间那段约 2600 字符的
-  base64 载荷**逐字复制**进另一条命令里解码 + 校验。LLM 没有可靠的「长随机串
-  搬运」通道，log 中 agent 自己确认了失败原因：
+本技能已收敛为**单一路径**：`scripts/entry.py` 是对外唯一入口，其 stdout 直接是
+「明文答案 + <<<CT_ANSWER_END>>> + checksum」，**agent 侧零解码**。
 
-      "I introduced a typo 5Lzd instead of 5L+d! That's the corruption."
+历史包袱说明（已彻底解决）：
+  v1.3.9 为免疫中文 Windows（cp936）控制台乱码，把对外出口改成 base64 信封；
+  但 agent 必须自己把约 2600 字符的 base64 逐字搬进另一条命令解码，LLM 没有可靠的
+  「长随机串搬运」通道（日志里 agent 自认 `5Lzd vs 5L+d` 打错），于是 2026-10-16 加了
+  本脚本把解包放进代码。两层协议由此并存，且 base64 的 4× 膨胀正压住通道上限。
 
-  校验失败后 agent 又按 SKILL.md 的决策表走「修复捕获 → 重发一次」分支，
-  而主链路的本地去重实际并不生效（见 answer_cache.py 说明），于是变成
-  真实的重复 Coze 调用 —— 一次问答被拖到几分钟。
+  v1.3.19 把 base64 收回到**内部进程间协议**（orchestrate / refine_answer / serve
+  之间仍用它保证二进制安全），对外出口一次性解开为明文——两层协议合一。
 
-本脚本把「运行 → 解码 → 校验 → 打印明文」合并为**一次调用**：
-  - 校验在脚本内部完成（re.search + b64decode + sha256），零人工搬运；
-  - stdout 直接是明文答案，agent 原样透传即可（体积也回落到明文大小，
-    远离 PowerShell 约 20k 字符的回传截断线）；
-  - entry.py 的 stderr 原样透传到本进程 stderr，**不再丢弃**诊断信号
-    （dedup / 常驻服务复用 / 答案缓存命中等）。
+本文件保留的**唯一目的**是让遗漏的旧调用仍能工作。它零逻辑：
+把参数原样转发给 entry.py，继承其 stdout / stderr / 退出码，不做任何捕获、
+解码、重编码。新调用请直接用 entry.py。
 
-用法：
-  python scripts/ask.py --q "用户问题" [--attach "路径"] [--raw] [--timeout 300]
-
-输出约定：
-  stdout  = 校验通过的明文答案（--raw 时改为 entry.py 原始输出）
-  stderr  = entry.py 的诊断行 + 本脚本的失败原因
-  退出码  = 0 成功；2 完整性校验失败（stdout 为空）；其余为 entry.py 的退出码
-
-契约不变：本脚本不生成、不改写任何答案内容，只是把 entry.py 的产物解包后透传。
+已废弃参数：`--raw`（出口已是明文）、`--timeout`（entry.py 内部自管超时），
+传入会被忽略并在 stderr 提示。
 """
 
 from __future__ import annotations
 
-import argparse
-import base64
-import hashlib
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-SKILL_ROOT = SCRIPT_DIR.parent
-
-# UTF-8 强制（与 entry.py 同口径，2026-10-16）：entry.py 的 base64 出口本来就是为了
-# 绕开中文 Windows（cp936）控制台回传乱码，但 ask.py 输出的是**明文答案**——若不强制
-# UTF-8，Python 会按 locale（cp936）编码 stdout，agent 侧按 UTF-8 捕获时中文必乱码，
-# 而 HARD GATE 又禁止 agent 改写答案 → 死锁。故此处必须与 entry.py 保持同一纪律。
-for _s in (sys.stdin, sys.stdout, sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace", newline="\n")
-    except Exception:  # noqa: BLE001
-        pass
-
-B64_START = "<<<CT_ANSWER_B64_START>>>"
-B64_END = "<<<CT_ANSWER_B64_END>>>"
 
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
@@ -76,107 +48,46 @@ def _hidden_kwargs() -> dict:
     return kw
 
 
-def unwrap(stdout: str) -> tuple[str, bool, str]:
-    """从 entry.py 的 stdout 解出明文答案并校验 sha256。
-
-    返回 (answer, ok, detail)：
-      - ok=True  → answer 为校验通过的明文答案
-      - ok=False → answer 可能为空，detail 为失败原因（人读）
-    """
-    if not stdout:
-        return "", False, "empty stdout from entry.py"
-
-    m = re.search(
-        re.escape(B64_START) + r"\s*\n(.*?)\n\s*" + re.escape(B64_END)
-        + r"\r?\nchecksum:\s*([0-9a-fA-F]{16})",
-        stdout,
-        re.DOTALL,
-    )
-    if not m:
-        return "", False, (
-            "no <<<CT_ANSWER_B64_START/END>>> block with checksum found "
-            "(stdout structure destroyed or truncated)"
-        )
-
-    # b64 载荷可能被捕获通道按显示宽度折行，解码前统一剥离所有空白
-    payload = re.sub(r"\s+", "", m.group(1))
-    try:
-        answer = base64.b64decode(payload, validate=False).decode("utf-8")
-    except Exception as e:  # noqa: BLE001
-        return "", False, f"base64 decode failed: {type(e).__name__}: {e}"
-
-    expected = m.group(2).strip().lower()
-    actual = hashlib.sha256(
-        answer.replace("\r\n", "\n").encode("utf-8")
-    ).hexdigest()[:16]
-    if actual != expected:
-        return answer, False, (
-            f"checksum mismatch: expected={expected} actual={actual}"
-        )
-    return answer, True, "ok"
+def _forward_argv(argv: list) -> list:
+    """剥离已废弃参数，其余原样转发。"""
+    out, i = [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--raw":
+            sys.stderr.write("[ask] --raw 已废弃（entry.py 出口已是明文），已忽略\n")
+            i += 1
+            continue
+        if a == "--timeout":
+            sys.stderr.write("[ask] --timeout 已废弃（entry.py 内部自管超时），已忽略\n")
+            i += 2
+            continue
+        out.append(a)
+        i += 1
+    return out
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(
-        description="ct-advisor 单命令封装：跑 entry.py + 脚本内解码校验 + 输出明文答案"
-    )
-    ap.add_argument("--q", required=True, help="用户问题")
-    ap.add_argument("--attach", default=None, help="附件路径")
-    ap.add_argument("--q-meta", default=None, help="可选 query_meta JSON（透传给 entry.py）")
-    ap.add_argument("--timeout", type=float, default=900.0,
-                    help="entry.py 超时秒数（默认 900）。必须大于 entry.py 内部的最坏耗时："
-                         "Coze long_timeout 300s + 委托 card-inline 300s，留足余量")
-    ap.add_argument("--raw", action="store_true",
-                    help="不做解包，直接透传 entry.py 的原始 stdout（调试用）")
-    args = ap.parse_args()
-
-    # 2026-10-16：空问题直接拦在本层，避免把空串送进 entry.py 后走成「vague → 澄清」
-    # 这类语义上无意义的往返（agent 侧拿到明确失败信号，而不是一个奇怪的反问）。
-    if not (args.q or "").strip():
-        sys.stderr.write("[ask] --q 不能为空（未收到有效问题）\n")
-        return 4
-
-    cmd = [sys.executable, str(SCRIPT_DIR / "entry.py"), "--q", args.q]
-    if args.attach:
-        cmd += ["--attach", args.attach]
-    if args.q_meta:
-        cmd += ["--q-meta", args.q_meta]
-
+    cmd = [sys.executable, str(SCRIPT_DIR / "entry.py")] + _forward_argv(sys.argv[1:])
+    sys.stderr.write(
+        "[ask] 兼容壳：本技能已收敛为单一路径，请直接调用 scripts/entry.py"
+        "（stdout 即明文答案）。\n")
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=args.timeout,
-            **_hidden_kwargs(),
-        )
-    except subprocess.TimeoutExpired:
-        sys.stderr.write(f"[ask] entry.py 超时（>{args.timeout:.0f}s），已终止\n")
-        return 3
-
-    # 诊断信号一律透传，不再被 2>$null 之类丢弃
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
-
-    stdout = proc.stdout or ""
-    if args.raw:
-        sys.stdout.write(stdout)
-        return proc.returncode
-
-    answer, ok, detail = unwrap(stdout)
-    if not ok:
-        sys.stderr.write(f"[ask] integrity check FAILED: {detail}\n")
-        sys.stderr.write(
-            "[ask] 不要重跑 entry.py。请把上面这行 stderr 原样报告给用户；\n"
-            "[ask] 若确需排查：--raw 查看 entry.py 原始输出，\n"
-            "[ask] 或查看常驻服务日志 config/serve.log（服务端 stderr 落盘处）。\n"
-        )
-        return 2
-
-    sys.stdout.write(answer if answer.endswith("\n") else answer + "\n")
-    return 0
+        # 不捕获输出：子进程直接继承当前 stdout/stderr，零拷贝、零编码转换、
+        # 不存在任何缓冲区上限。这是「单一形态」在只有一层时唯一正确的做法。
+        #
+        # 🔴 必须显式传 stdout/stderr（2026-10-22 实测）：Windows 上
+        # CREATE_NO_WINDOW 会让子进程脱离父控制台，**不传 stdout 时子进程的输出会
+        # 整体丢失**（rc=0 但 stdout 为空）。显式绑定父进程句柄即可两全——
+        # 既不弹窗，又不丢输出。
+        try:
+            return subprocess.run(
+                cmd, stdout=sys.stdout, stderr=sys.stderr, **_hidden_kwargs()
+            ).returncode
+        except (OSError, ValueError, AttributeError):
+            # stdout 无可继承 fd（如被替换为 StringIO / 纯 GUI 宿主）→ 退回继承模式
+            return subprocess.run(cmd).returncode
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":
