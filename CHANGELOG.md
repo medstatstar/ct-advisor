@@ -17,6 +17,13 @@
 - **SKILL.md**：`version` 1.3.17 → **1.3.18**；`query_meta.output_format` 契约行由「engine honours if able」改为**诚实表述**（doc 走 C3-doc 解除天花板 / 其它值作为排版偏好提示）；Routing Contract 末尾更新为「本地改造 + Coze 侧已落地 C3-doc」，不再声称 `adapters/coze/` 零改动。
 - **验证（全部通过）**：① `session_store` 自测 ALL PASSED，另加**缓存分区**用例——写 auto 版后 `cache_get(doc)` 为空、写 doc 版后两者各取各版，去重 `outline` 不短路到 `doc`；② `answer_postprocess` 分支实测——13000 字输入：doc→3000 不截、auto complex→1047、auto middle→745、doc 9000 字→6050（6000 + doc 专属截断说明）；C14 实测 doc 模式不加声明、auto/None 仍加；③ `full_analysis_cfg.json` JSON 可重新解析、`C3-doc` 条款在 `shared_contract.md` 与 `sp` 两处同源各 1 处；④ `entry.py --help` rc=0，entry / session_store / proxy / 两个 Coze 节点 `py_compile` 全通过；⑤ `POST /api/export_docx` **真实 HTTP 端到端**（临时端口 18999、webguard 关）：200 + `application/vnd.openxmlformats-...document` + RFC 5987 中文文件名（`filename*=UTF-8''...`）+ 1635 字节 docx，回读 4 个部件完整、Heading/Quote/正文中文全部在；⑥ `index.html` 内联 JS `node --check` 通过（83,196 字符）。
 - **本次修复的两个实现问题**：`_make_docx` 里隐式字符串拼接与 `+` 混用导致 `SyntaxError`（已改为 `"".join([...])`）；`Content-Disposition` 直接用中文文件名会在 `http.server` 写头时抛 latin-1 编码错（已改 RFC 5987 双写：ASCII 兜底名 + `filename*`）。
+- **长载荷截断复核（2026-10-22 追加，用户提问触发）**：实测出口载荷在 doc 模式下的真实风险，并修正已过期的契约数字。
+  - **实测通道上限**：Bash/Git Bash 在 **24,000 字符**仍内联完整返回（含尾部标记），约 **30,000 字符**转为「完整落盘到 `tool-results/*.txt` + 仅回 2 KB preview」——不是静默截断，但模型仍拿不到可解码的全文；PowerShell 工具 ≈**20,000** 截断。
+  - **载荷膨胀实测**：b64 ≈ 1.33× UTF-8 字节，中文场景 ≈ **4× 字符数**。`auto/complex`（≤1000 字）≈3–4K b64，各通道皆安全；**doc（≤6000 字）纯中文 = 24,000 b64（正压 Bash 天花板、超 PowerShell 线）**，中英混排 = 17,972；doc + 4,000 字符工具结果缝合 ≈ 29,300 → 越线落盘。
+  - **JSON `\u` 转义不构成叠加风险**：`proxy` 的 `_pipe_response` 与 `_send` 均按原始 bytes 透传、`_send_json` 用 `ensure_ascii=False`，`_inject_session` 同理——中文不会被转成 `\uXXXX` 再翻一倍。（该翻倍只在 `ensure_ascii=True` 的序列化里出现，实测 6000 字会从 18,000 字节涨到 66,602 字节，本链路不经过。）
+  - **历史注入不撑大请求体**：`session_store._summarize` 截断至 `HIST_MAX_PREV_LEN=200`，10 轮上限 → 注入量有界，与答案长度无关。
+  - **截断不会静默骗人**：掉尾部 3 字符或 40 字符都会被 `ask.unwrap` 的 sha256 拦截，`ok=False` + `no <<<CT_ANSWER_B64_START/END>>> block … (stdout structure destroyed or truncated)`，并明令不得重跑 Coze。
+  - **结论与纪律**：**doc 模式一律走 `scripts/ask.py`（明文出口，6000 字纯中文 ≈18 KB，全部通道内）**，禁止直调 `entry.py`、禁止 `ask.py --raw`。已在 `SKILL.md` 决策表 1c 与原 ~20,150 数字处改写为上述实测分档；`orchestrate._wrap` 观测线由 15,000 上调至 **20,000** 并改为提示「改用 ask.py」，触发点实测对应 6,000 字纯中文。
 - **部署提示**：本次**必须重新打包部署 Coze 包**才生效（C3-doc 在提示词层、`doc` 天花板在代码层），旧线上包行为不变 → 未部署前 doc 模式仍会被 1000 字截断。workbench 应用重新发布同样待授权。
 
 ## （待部署）2026-10-22 · v1.3.17 适用范围扩大 + 会话上下文/缓存去重（advisorlog 诊断闭环）
