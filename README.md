@@ -10,7 +10,7 @@
 
 > **The single front door for the whole `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor that also routes real-data / competitive-intel needs to the sibling data skills through a local, code-only orchestrator (`orchestrate.py`) and stitches their results back in code.**
 >
-> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor passes every **non-vague** question to the local orchestrator (`orchestrate.py`), which calls the Coze cloud workflow for methodology / design / statistics / GCP / safety / regulatory / QC / tone answers, and when needed runs the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) **locally** and stitches the result **in code**. It **re-implements no** retrieval or computation logic.
+> No commands or manual needed. Just describe your trial question **in plain language inside a chat** — the advisor passes every **non-vague** question to the local orchestrator (`orchestrate.py`), which calls the Coze cloud workflow for methodology / study-design / statistics / compliance-response / trial-operations / deliverable-drafting / GCP / safety / regulatory / QC / data-management answers, and when needed runs the right sibling skill (`ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize`) **locally** and stitches the result **in code**. It **re-implements no** retrieval or computation logic.
 
 ---
 
@@ -25,6 +25,16 @@ The `ct-*` clinical-trial skill family is built to address needs across the enti
 - **Clinical-trial practitioners at pharmaceutical companies** — sponsors, CROs, and medical / statistical / regulatory roles;
 - **Clinicians and nurses who design, manage clinical-trial projects, or take part in hands-on trial conduct in medical institutions**;
 - **Medical students who want to learn clinical-trial methodology in a structured way**.
+
+## Capabilities & Authoritative References
+
+ct-advisor's coverage was broadened (v1.3.17) to three previously-uncovered but high-frequency blocks — **regulatory-response / trial-operations / deliverable-drafting** — now first-class in-scope core domains. Full sub-topic catalog + authoritative anchors (ICH / NMPA / CDE / TransCelerate / DIA / CASRAI / EQUATOR, searched 2026-10-22) → **[`docs/capability_domains.md`](docs/capability_domains.md)**.
+
+| Domain | Answers | Key anchors |
+|---|---|---|
+| Regulatory-response | GCP principles & China GCP, inspection/CAPA readiness, deviations, safety reporting, trial registration & public disclosure (CTR + 30-day clocks), regulatory comms, informed consent | ICH E6(R3) · NMPA GCP 2020 No.57 · CDE Registration Rule 2020 No.9 |
+| Trial-operations | Study startup, TMF / essential docs, monitoring models (RBM), RBQM (QTL/KRI), vendor/CRO oversight, enrolment & close-out | TransCelerate RBM & QTL · DIA TMF RM · ICH E8(R1) |
+| Deliverable-drafting | Protocol (CPT/eCPT), SAP (ICH E9(R1) estimands + Gamble 55-item), CSR, IB, ICF, device docs (ISO 14155) | TransCelerate CC&R (ICH M11) · ICH E9(R1) · EQUATOR |
 
 ## 1. How to Use It in a Chat (the Core)
 
@@ -229,7 +239,7 @@ The advisor covers the entire clinical-trial lifecycle through ten in-house work
 
 **Q: How is the full competitive-intel brief generated now?** A: Measured behaviour is **round by round**: the first run usually returns a delegate block (`need_tool` + a `need_tools` candidate list + `missing_params`), the advisor **asks you for the missing parameter** (measured: `cond`), and after you supply it **one skill runs per round**, its output stitched into the answer — covering three sources takes several rounds. `need_tools` is only Coze's candidate list; it is **not** auto-iterated, and no single "strategic brief" document is produced automatically. This replaces the separate `ct-pipeline` orchestrator.
 
-**Q: Does pure methodology need the network?** A: Yes — every **non-vague** question is sent to the Coze endpoint (`https://ct-advisor.coze.site/run`) for analysis in a **single call**; a `vague` question is clarified locally via the Local Clarify Loop first, then forwarded. If Coze is unreachable, the answer says "please retry" — there is no local knowledge pack fallback.
+**Q: Does pure methodology need the network?** A: Yes — every **non-vague** question is sent to the Coze endpoint (`https://ct-advisor.coze.site`) for analysis via an **async submit + poll** (`POST /async_run` → `GET /task/{id}`; sync `/run` only as fallback when the async endpoint is unavailable); a `vague` question is clarified locally via the Local Clarify Loop first, then forwarded. If Coze is unreachable, the answer says "please retry" — there is no local knowledge pack fallback.
 
 **Runtime prerequisite (measured):** calling Coze needs Python `requests`. It is **not** auto-installed — when missing the skill prints `python -m pip install "requests==2.32.3"` and exits (no silent install). Measured: run it with an interpreter that lacks the library and `orchestrate.py` returns the `⚠️ Coze 返回为空` fallback wrapper, while `refine_answer.py --forward/--ship` exits 1 with `精校依赖缺失`.
 
@@ -270,7 +280,7 @@ You stay in full control: the report is shown to you **before** anything is sent
 - **Pipeline safety:** graphics appear only *outside* the answer `<<<CT_ANSWER_B64_START/END>>>` base64 payload (v1.3.9+; decode first, then read the answer text) and never rewrite the answer body.
 
 ### Latency note
-Every **non-vague** question is handled by the local orchestrator (`scripts/orchestrate.py`), which forwards to the Coze endpoint in a **single call** (`refiner.timeout = 90` s in `config.json`; **measured 3-72 s per round**, mostly 30-70 s; data-intel questions also run the needed sibling skill locally). **A timeout is not a hard error**: the answer falls back to the local draft (not cloud-polished) with `[coze] FALLBACK_TO_LOCAL_DRAFT` on stderr. A `vague` question is clarified locally first (a few seconds via the Local Clarify Loop), then re-routed. Because the orchestrator, prefetch, merge, and stitching are all **code** (not the LLM), dependence on the local model's performance is low — but reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to over-think locally. **If a single reply routinely takes longer than 3 minutes, switch to a simpler / flash model to speed things up.**
+Every **non-vague** question is handled by the local orchestrator (`scripts/orchestrate.py`), which forwards to the Coze endpoint via an **async submit + poll** (v1.3.14+: `POST /async_run` → `GET /task/{id}`; the sync `/run` path is kept only as a fallback for endpoints without async support — sync and streaming calls are both hard-killed at 60.0s by the Coze gateway, and measured duration spans 3-72 s, i.e. across that line, so prediction-based routing is unreliable). Polling deadline = `refiner.timeout = 90` s (long tasks 300 s) in `config.json`; **measured 3-72 s per round**, mostly 30-70 s; data-intel questions also run the needed sibling skill locally). **A timeout is not a hard error**: the answer falls back to the local draft (not cloud-polished) with `[coze] FALLBACK_TO_LOCAL_DRAFT` on stderr. A `vague` question is clarified locally first (a few seconds via the Local Clarify Loop), then re-routed. Because the orchestrator, prefetch, merge, and stitching are all **code** (not the LLM), dependence on the local model's performance is low — but reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to over-think locally. **If a single reply routinely takes longer than 3 minutes, switch to a simpler / flash model to speed things up.**
 
 ---
 

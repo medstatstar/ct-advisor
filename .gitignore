@@ -62,6 +62,9 @@ config/keys.py
 
 # 运行态会话上下文缓存（类型 B 追问自包含化用，本地生成、不入库）
 config/context_cache.json
+# 统一会话存储（2026-10-22：history + 全局答案缓存 + 近窗去重；运行期生成，含真实问答文本）
+config/session_store.json
+config/.session_store.lock
 
 # 测试 harness（§16.8：测试内容一律不进发布包；2026-09-15 追加通配以覆盖新增测试文件）
 test_seven_flows.py
@@ -134,3 +137,6 @@ workbench/publish-kit/
 PERF_SOP.md
 stderr.log
 .write_test
+
+# ── F20/F27 顶层残留（本地运行产物 · 发布前检查自动补，与双 ignore 对齐）──
+err_quote.log

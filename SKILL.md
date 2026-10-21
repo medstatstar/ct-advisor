@@ -3,11 +3,11 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.16
+version: 1.3.18
 invocable: true
 required_commands: [python]
-summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
-description: "The single entry point for the ct-series across the full clinical-development lifecycle — a cloud-assisted clinical trial advisor. All questions (methodology / design / compliance / QC / site-execution / intelligence) are forwarded to the cloud Coze engine for analysis. The local side only performs a deterministic binary vague-gate (vague | forwarded) and attachment decoding; no knowledge base is retained locally, and no local network retrieval occurs. External reference: the teal clinical-data interactive exploration framework. / 面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。所有问题（方法学/设计/合规/QC/现场执行/情报）统一提交云端 Coze 引擎分析处理。本地仅做确定性二值闸门（是否 vague）与附件解码，不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
+summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
+description: "The single entry point for the ct-series across the full clinical-development lifecycle — a cloud-assisted clinical trial advisor. Coverage has been broadened to regulatory-response / trial-operations / deliverable-drafting / study-design / statistics / submission / safety / data-management / real-world-evidence; only clearly non-medical / non-life-science questions receive a constructive referral. On the local side, in addition to the deterministic vague-gate and attachment decoding, it now also injects multi-turn session context (continuation of prior rounds) and short-circuits via an answer cache / dedup store (saving cloud calls); no knowledge base is retained locally and no local network retrieval occurs. External reference: the teal clinical-data interactive exploration framework. / 面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
 license: MIT
 triggers:
   - "ct-advisor"
@@ -20,7 +20,7 @@ triggers:
   - "GCP question"
   - "临床试验顾问"
   - "临床试验总顾问"
-trigger_scope: "触发词仅限临床试验方法学/法规/设计/合规/QC/情报类问题；不主动匹配非临床类通用问答；不含文件系统写入与系统级 API 调用。"
+trigger_scope: "触发词覆盖临床试验方法学/法规/设计/合规应答/项目运营/交付物撰写/QC/安全性/数据/注册/情报类问题；尽量扩大适用范围，仅对明确非医药/生命科学语境的问题（如消费电子、金融、快消、地产等）给出建设性转介建议，绝不空拒；不含文件系统写入与系统级 API 调用。"
 metadata:
   openclaw: { emoji: "🛠️", icon: "assets/icon.svg" }
   authors: ["medstatstar", "phoe-zip"]
@@ -196,7 +196,7 @@ if m:
 
 > 🔴 **No host-model fallback (HARD GATE · 2026-10-15)**: ct-advisor is coze-only **by design** — there is no local knowledge base or database, so a host-model direct answer on a clinical question has no domain substrate and is **forbidden as a fallback** (a bare host-model answer was evaluated and rejected: quality cannot be guaranteed without the cloud knowledge base and tool chain). The same tiering rule means attachment / `doc_context` content must **never** leave the Coze channel. The ONLY sanctioned recovery for a broken capture is: **repair the capture → re-send once (≤1, dedup-cached in the common case)**. Everything else stops and reports.
 
-> 🔴 **Short-circuit output is also GATE-wrapped (2026-10-15 · cache layer updated 2026-10-16)**: both short-circuit paths — `answer_cache.py` on the entry.py main chain, `dedup_guard` on the refine_answer.py serial path — emit their cached answer through the same `<<<CT_ANSWER_B64_START/END>>> + checksum` wrapper as a fresh Coze call (stderr marks `answer-cache hit` / `dedup short-circuit`). `ask.py` verifies it like any other answer — a cached answer is a legitimate delivery, not an error.
+> 🔴 **Short-circuit output is also GATE-wrapped (2026-10-15 · unified into `session_store.py` 2026-10-22)**: both short-circuit paths — `session_store.cache_get` (exact-fingerprint answer cache, cross-session) and `session_store.dedup_check` (near-duplicate within a session window) — are now wired into **both** the entry.py main chain AND the workbench `ct-advisor-proxy.py` (`/run` / `/async_run`); they emit the cached answer through the same `<<<CT_ANSWER_B64_START/END>>> + checksum` wrapper as a fresh Coze call (stderr marks `answer-cache hit` / `dedup short-circuit`; the proxy returns a local pseudo-task so the front-end is oblivious). `ask.py` verifies it like any other answer — a cached answer is a legitimate delivery, not an error.
 
 > 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. The default is **one call per question**; with `ask.py` this is structural — decode + sha256 happen inside the same script invocation, so there is nothing left for the LLM to "verify again". **Re-calling `ask.py` / `entry.py` purely to perform the check is strictly forbidden** (in practice this once caused "the same question sent 2–3 times, a single Q&A dragging to 4 minutes"). The single exception is decision-table steps 2–3: **at most one re-send to repair a broken CAPTURE** (mojibake/truncation/destroyed structure), with the reason stated to the user — never for a clean-text mismatch (step 4 → stop) and never without capture evidence. If you need to persist output, use `entry.py --out <file>` instead of re-running.
 
@@ -208,13 +208,75 @@ This skill has implemented four performance optimizations; see `PERF_SOP.md` for
 - **L1 Resident orchestration service** (`scripts/serve.py` + `entry.py` client): heavy modules are warmed up once, so local overhead → 0. Idle window raised 600s → 3600s (2026-10-16).
 - **L2 Parallel warm-up** (`scripts/orchestrate.py`): eliminates stacked serial imports.
 - **L3 Inline verification discipline**: sha256 is done inline in memory — since 2026-10-16 fully inside `scripts/ask.py`, with zero LLM round-trips.
-- **L4 Single-command + local answer cache (2026-10-16)**: `scripts/ask.py` merges run + decode + verify + print into one call (the LLM never touches the base64 payload), and `scripts/answer_cache.py` gives the entry.py main chain a 30-min answer cache so a re-run costs **0 Coze calls**. Root cause fixed: the `dedup_guard` short-circuit had never been reachable from `entry.py` (guard wired only into the `refine_answer.py` CLI; `query_origin` never set by entry.py), so every re-run was a real Coze round-trip — three of them for a single question in the 2026-10-16 log.
+- **L4 Single-command + unified session store (2026-10-16 · unified & multi-turn 2026-10-22)**: `scripts/ask.py` merges run + decode + verify + print into one call (the LLM never touches the base64 payload). The unified `scripts/session_store.py` (shared by **both** entry.py and the workbench proxy) gives a 30-min cross-session answer cache + a 10-min in-session near-duplicate dedup, so a re-send / repeated question costs **0 Coze calls**; it also injects multi-turn `conversation_history` into the Coze payload so context carries across rounds (previously the history was computed but never injected — root cause of 18% "承接上一轮" manual recaps). Root cause fixed: the `dedup_guard` short-circuit had never been reachable from `entry.py` (guard wired only into the `refine_answer.py` CLI; `query_origin` never set by entry.py), so every re-run was a real Coze round-trip — three of them for a single question in the 2026-10-16 log.
+- **L5 Scope broadening via domain router (2026-10-22)**: `scripts/scope_guard.py` was rewritten as a controlled-vocabulary domain router (multi-label: compliance / ops / writing / design / stats / safety / registry / data / rws / methodology / medical / device / vet). The three real high-frequency blocks users actually use — **合规应答 / 项目运营 / 交付物撰写** — are now first-class in-scope core domains (a writing / outline / template question is NO LONGER treated as out-of-scope); only a clearly non-medical / non-life-science question (e.g. consumer electronics, finance, FMCG) emits a constructive referral. 0% out-of-scope on the 68 real questions from the past-30-day Feishu advisorlog.
 
 **⚠️ Deployment restriction (important)**: the skill directory lives on a network share whose ACL is creator-owner — you can create new files, but **overwriting pre-installed existing files raises `PermissionError 13`**, and deletion is also blocked by a trash hook. Therefore, any change to `scripts/*.py` / `SKILL.md` should be written as a same-directory `.new` copy, then overwritten on the user's local machine with `move /Y` (command in `PERF_SOP.md` §4, or run `scripts/_perf_deploy.py`).
 
 **Version drift**: the resident service caches code; after updating skill files, the old service still runs old code until its idle timeout (3600s since 2026-10-16; override with `CT_ADVISOR_IDLE`). `entry.py` has a built-in `/version` probe that, before reusing an old service, compares a **code fingerprint** — the max mtime across `scripts/*.py` + `adapters/**/*.py`, computed by `scripts/code_fingerprint.py` — against the value the service recorded at startup. If the local copy is newer it auto-shuts-down the old service and launches the new version. **No manual restart is ever required.** *(Before 2026-10-16 the probe compared only `orchestrate.py`'s mtime, so updating just `serve.py` or `adapters/**` silently failed to take effect — fixed in the same release.)*
 
 `curl http://127.0.0.1:18771/shutdown` remains available as a manual escape hatch (e.g. the port is held by a stuck service), but it is **not part of any deployment procedure** — end users never need it.
+
+## Session, Context, Cache & Routing Contract (2026-10-22)
+
+Two new local modules close the gaps the past-30-day Feishu advisorlog exposed (no multi-turn context, 21% redundant sends, ~47% of real questions wrongly tagged "out-of-scope" because they were writing/ops/compliance tasks). **Both run purely locally; the Coze payload is enriched, not replaced.**
+
+### A. `scripts/session_store.py` — unified per-session store
+
+Single JSON store at `config/session_store.json` (cross-process file lock: `msvcrt` on Win / `fcntl` on POSIX; atomic replace; any exception silently degrades to "no-hit / no-record" so it never blocks the main flow). Three capabilities keyed by `session_id`:
+
+| Capability | API | Policy |
+|---|---|---|
+| Multi-turn context | `history(session_id)` → `[{question, answer_summary}]` | Injected as `conversation_history` into the Coze payload. Pruned by OR-rule: ≤10 rounds **OR** ≤2h, hard cap 24h. Empty `session_id` → single-turn (no history, still global cache). |
+| Answer cache | `cache_get(question, doc_context, difficulty)` | Exact sha256 fingerprint (question+attachment+difficulty), 30-min TTL (`CT_ADVISOR_ANSWER_TTL`), **cross-session** — same question anywhere returns the same answer, 0 Coze calls. |
+| Near-dup dedup | `dedup_check(session_id, question)` → `(is_dup, prev_answer, secs_ago)` | Same session, 10-min window, `difflib.SequenceMatcher.quick_ratio ≥ 0.90`; on hit the caller short-circuits and replays `prev_answer`. |
+| Record | `record(session_id, question, answer, …)` | Called **only after a real outbound** (never on a short-circuit) — writes history + global cache + session dedup. `clear_session(session_id)` starts a fresh session (keeps global cache). |
+
+`entry.py` wires all three in `main()` (via `--session <id>`); the workbench `ct-advisor-proxy.py` imports the same module for `/run` and `/async_run`.
+
+### B. `scripts/scope_guard.py` — domain router (replaces the old out-of-scope gate)
+
+Controlled-vocabulary, multi-label classifier (`classify_domains(q)` → up to 3 of: `compliance / ops / writing / design / stats / safety / registry / data / rws / methodology / medical / device / vet`). `assess(q) → (in_scope, tag, referral)`:
+
+- any domain hit **or** a weak life-science signal → in-scope (no referral);
+- only a **clearly non-medical** signal (consumer electronics / finance / FMCG / real-estate / …) → out-of-scope with a **constructive** referral that names the coverage and suggests a next step (never a blank refusal).
+
+The router writes two payload hints consumed by Coze (see C): `scope_hint` (only when out-of-scope) and `domain_hint` (the multi-label list). 15/15 offline selftest pass; **0% out-of-scope on the 68 real advisorlog questions**.
+
+### C. Coze payload contract (request fields the engine should accept)
+
+| Field | Set by | Meaning |
+|---|---|---|
+| `conversation_history` | entry.py / proxy (`session_store.history`) | Prior rounds (question + answer summary) so the engine can resolve "承接上一轮 / 继续" without the user re-typing context. **Front-end may also send its own `conversation_history`; the proxy injects the server-side one only when the field is absent.** |
+| `scope_hint` | proxy (`scope_guard.assess`) | `"non_medical"` only when out-of-scope — engine should prepend the referral framing. |
+| `domain_hint` | proxy (`scope_guard.classify_domains`) | e.g. `["compliance","ops"]` — lets the engine bias retrieval / sibling-skill routing. |
+| `query_meta.output_format` | front-end (`auto/doc/outline/table/ppt`) | 期望答案形态；`doc`=交付物撰写模式（解除 C3 长度天花板、允许 `##`/`###`+表格），引擎现已按形态作答 |
+| `session_id` | front-end (`X-Session-Id` header) **or** body | Stable per-machine id (mirrors `query_origin`); drives history + dedup. |
+
+**Coze 侧已在本轮实现 `output_format=doc` 模式**（用户 2026-10-22 确认「方案 A：长文本 + 导出按钮」）：`full_analysis_node` 把 `query_meta.output_format` 注入提示词（此前从未进入，五选项仅 `auto` 生效）、doc 模式跳过 C14「不提供文件」声明、走 6000 字防御性安全天花板；`shared_contract.md` 与 `full_analysis_cfg.json` 的 `sp` 增加 C3-doc 条款。上下文/缓存/去重仍由 proxy 本地富化与短路，引擎仅收到更丰富的请求。本地侧另新增 `POST /api/export_docx`（零依赖 OOXML 生成）与前端的「📄 导出 docx」按钮——文件在本地生成、不回传云端，与 C14「引擎不返文件」不冲突。详见 `docs/answer_length_format_deviation_20261022.md`。
+
+### D. Workbench proxy local endpoints (no Coze round-trip)
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/history?session_id=` | GET | Returns `{ok, history:[{question, answer_summary}]}` from `session_store`. |
+| `/api/turn` | POST | `{session_id, question, answer, doc_context, query_meta}` → `session_store.record(...)` (called by the front-end after a successful answer). |
+| `/api/feedback` | POST | `{session_id, run_id, rating, note}` → appends a `type=rating` line to `workbench/feedback_log.jsonl` (satisfaction signal, local only). |
+| `/api/export_docx` | POST | `{text, title}` → returns a stdlib-generated OOXML `.docx` as an attachment (local only; the cloud engine still returns text only, so C14 holds). |
+
+Short-circuit return shape: cache/dedup hit on `/async_run` returns `{"task_id": <local>}`; on `/run` returns `{"result":{final_answer, cache_hit:true}}`; `/stream_run` is **never** short-circuited (it streams, proxy only injects context).
+
+## Capability Domains — Expanded Coverage (2026-10-22)
+
+Coverage was broadened per user mandate: the three previously-uncovered but high-frequency real-user blocks — **合规应答 / 项目运营 / 交付物撰写** — are now first-class in-scope core domains (mapped to `scope_guard` labels `compliance` / `ops` / `writing`). They are **never** empty-refused; only clearly non-medical / non-life-science questions get a constructive referral. Full sub-topic catalog + authoritative anchors (ICH / NMPA / CDE / TransCelerate / DIA / CASRAI / EQUATOR, searched 2026-10-22) live in **`docs/capability_domains.md`**. Summary:
+
+| Domain (label) | What the advisor answers | Key authoritative anchors |
+|---|---|---|
+| 合规应答 `compliance` | GCP 原则与适用、中国 GCP 落地、核查/稽查 readiness、方案偏离与 CAPA、安全性报告、登记与信息公示（CTR 号 + 30 天时限）、监管函件/沟通交流、知情同意与弱势受试者保护 | ICH E6(R3) 11 原则（2025-07-23 生效）· NMPA GCP 2020 第 57 号 · CDE《登记与信息公示管理规范》2020 第 9 号 + 平台 chinadrugtrials.org.cn |
+| 项目运营 `ops` | 研究中心启动、TMF / 必备文件（DIA TMF Reference Model v3 + MAGI ISF）、监查模式（RBM / 中心化 / hybrid）、RBQM（QTL 1–5 / KRI 10–25、CtQ 因素）、供应商/CRO 管理、入组留存、关中心与 DBL | TransCelerate RBM & QTL Framework · DIA TMF RM (tmfrefmodel.com) · ICH E8(R1) · CASRAI TMF 指南 |
+| 交付物撰写 `writing` | 方案（CPT/eCPT）、SAP（ICH E9(R1) 估计目标五属性 + Gamble 55 项清单）、CSR、IB、ICF、器械文档（ISO 14155）、登记类文件 | TransCelerate CC&R（2026 对齐 ICH M11）· ICH E9(R1) · EMA addendum · CASRAI SAP 模板 · EQUATOR |
+
+Assistance boundaries (enforced in-engine, documented in the doc): ✅ explain clauses / give decision frameworks / checklists / templates; ⚠️ never substitute legal, regulatory, or medical-writing conclusions — route to `ct-registry` / `ct-stats` / `ct-samplesize` / submission path as noted. The three domains are **locally routed**; Coze only needs to honour `domain_hint`.
 
 ## Requirements
 

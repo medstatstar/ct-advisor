@@ -1,5 +1,54 @@
 # Changelog
 
+## （待部署）2026-10-22 · v1.3.18 `output_format` 真正生效 + doc 模式解除长度天花板 + 导出 docx（B 方案）
+
+> 来源：回答**长度/格式偏差核查**（`docs/answer_length_format_deviation_20261022.md`）。实测 68 条真实答案中位数 **1553 字**（p90 2404 / max 5790），而 `shared_contract` C3 与 `_LENGTH_CAPS` 的 complex 天花板是 **≤1000 字**；同时 UI 五个 `output_format` 选项里引擎**从未读取过**该字段（`full_analysis_node.py` 只注入 `difficulty`）→ 选 doc/ppt/table 全是装饰。用户明确「要成文、不要提纲」的刚需（交付物撰写域占比高）被天花板正面截断。**本次经用户授权改动 `adapters/coze/`。**
+
+- **doc 语义确认（用户拍板）**：`output_format=doc` 返回**长文本**（聊天内完整成文 prose），**不**由云引擎生成 .docx 二进制；文件形态由本地「导出 docx」按钮补齐 —— 与 C14「本服务只返文字，不生成/导出/回传任何文件」铁律不冲突。
+- **Coze 侧（T9/T10/T11，经授权）**：
+  - `src/graphs/nodes/full_analysis_node.py`：把 `query_meta.output_format` 注入 user prompt（**首次进入提示词**）；doc 模式下**跳过** C14 交付物边界声明（因为此时本地确实提供导出）；doc 模式以 `format_hint` 参数传入 `apply_length_cap`。
+  - `src/graphs/nodes/answer_postprocess.py`：`_LENGTH_CAPS` 增 `doc: 6000`（**仅 doc 模式生效**，防御性安全天花板，不回归 auto 既有行为）；`apply_length_cap(text, difficulty, format_hint="")` 增参，截断说明区分 doc 专属文案；`ensure_deliverable_boundary(answer, question, format_hint="")` 增参，doc 模式直接原样返回。
+  - `config/shared_contract.md` + `config/full_analysis_cfg.json` 的 `sp`：新增 **C3-doc「交付物撰写模式」**条款——`output_format=doc` 时解除 C3 常规长度天花板（按交付物所需篇幅完整成文）、允许 `##`/`###` 层级与表格、仍须真实可核查（C12 不放松）、仍受 C2 边界与 C4 单一推荐约束。
+- **本地侧（零风险）**：
+  - `workbench/ct-advisor-proxy.py`：新增 `POST /api/export_docx` —— 纯 stdlib（`zipfile`）把 `final_answer` 文本渲染为最小 OOXML docx（`[Content_Types].xml` / `_rels/.rels` / `word/document.xml`），`Content-Disposition: attachment` 下载；**不触碰 Coze、不破 C14**。`_inject_session` 从 `query_meta.output_format` 取值传给 `cache_get`/`dedup_check`；`/api/turn` 把 `output_format` 一并 `record`。
+  - `scripts/session_store.py`：`cache_key` / `cache_get` / `record` / `dedup_check` 全部增 `output_format` 参数 —— **doc 与 auto 答案分区缓存**（避免选 doc 命中 auto 的 1000 字版缓存）、近窗去重按格式匹配。
+  - `scripts/entry.py`：缓存/去重/record 三处同步传 `output_format`（`--q-meta` 已整 dict 收进 `query_meta`，无需新增入参）。
+  - `workbench/index.html`：机器人气泡下新增「📄 导出 docx」按钮 + `exportDocx()`（POST 文本 → Blob 下载，文件名取问题前 20 字）；`_reportTurn` 上报 `output_format`，与缓存写入键保持一致。
+- **SKILL.md**：`version` 1.3.17 → **1.3.18**；`query_meta.output_format` 契约行由「engine honours if able」改为**诚实表述**（doc 走 C3-doc 解除天花板 / 其它值作为排版偏好提示）；Routing Contract 末尾更新为「本地改造 + Coze 侧已落地 C3-doc」，不再声称 `adapters/coze/` 零改动。
+- **验证（全部通过）**：① `session_store` 自测 ALL PASSED，另加**缓存分区**用例——写 auto 版后 `cache_get(doc)` 为空、写 doc 版后两者各取各版，去重 `outline` 不短路到 `doc`；② `answer_postprocess` 分支实测——13000 字输入：doc→3000 不截、auto complex→1047、auto middle→745、doc 9000 字→6050（6000 + doc 专属截断说明）；C14 实测 doc 模式不加声明、auto/None 仍加；③ `full_analysis_cfg.json` JSON 可重新解析、`C3-doc` 条款在 `shared_contract.md` 与 `sp` 两处同源各 1 处；④ `entry.py --help` rc=0，entry / session_store / proxy / 两个 Coze 节点 `py_compile` 全通过；⑤ `POST /api/export_docx` **真实 HTTP 端到端**（临时端口 18999、webguard 关）：200 + `application/vnd.openxmlformats-...document` + RFC 5987 中文文件名（`filename*=UTF-8''...`）+ 1635 字节 docx，回读 4 个部件完整、Heading/Quote/正文中文全部在；⑥ `index.html` 内联 JS `node --check` 通过（83,196 字符）。
+- **本次修复的两个实现问题**：`_make_docx` 里隐式字符串拼接与 `+` 混用导致 `SyntaxError`（已改为 `"".join([...])`）；`Content-Disposition` 直接用中文文件名会在 `http.server` 写头时抛 latin-1 编码错（已改 RFC 5987 双写：ASCII 兜底名 + `filename*`）。
+- **部署提示**：本次**必须重新打包部署 Coze 包**才生效（C3-doc 在提示词层、`doc` 天花板在代码层），旧线上包行为不变 → 未部署前 doc 模式仍会被 1000 字截断。workbench 应用重新发布同样待授权。
+
+## （待部署）2026-10-22 · v1.3.17 适用范围扩大 + 会话上下文/缓存去重（advisorlog 诊断闭环）
+
+> 来源：飞书 `advisortbl` 近 30 天 68 条真实提问诊断。改动全在本地 `scripts/` + `workbench/`；**`adapters/coze/` 零改动**，旧端点契约不变，线上零成本兼容。配套说明见 `docs/coze_side_changes_20261022.md`。
+
+- **适用范围扩大（Task 1）**：`scripts/scope_guard.py` 重写为 domain 路由（多标签：compliance/ops/writing/design/stats/safety/registry/data/rws/methodology/medical/device/vet）。用户真正高频的三块——**合规应答 / 项目运营 / 交付物撰写**——升为在范围核心域（写作/大纲/模板类不再判超范围，旧 `medical_writing` tag 删除）；仅明确非医药/生命科学语境（消费电子/金融/快消/地产等）才给建设性转介。15/15 离线自测通过；68 条真实提问 **0% 超范围**。
+- **统一会话存储（Task 2）**：新建 `scripts/session_store.py`（替代旧 `answer_cache.py`/`dedup_guard.py` 仅 CLI 路径的割裂接线）——`history`（多轮 `conversation_history`，OR 裁剪 ≤10 轮/≤2h/硬上限 24h）+ 跨 session 30-min 答案缓存 + 同 session 10-min 近窗去重（sim≥0.90）。entry.py 与 proxy 共用，跨入口一致。内嵌自测 ALL PASSED。
+- **entry.py 根因修复（Task 3）**：`main()` 注入 `session_store.history()` 到 `conversation_history`（修复"history 算过从未注入"导致 18% 手工复述）；所有路径统一走 `dedup_check`→`cache_get` 短路（移除 `if not vague` 误拦）；`--session` 入参；真实出站后才 `record`。
+- **workbench proxy（Task 4）**：`_inject_session` 注入上下文 + 写 `scope_hint`/`domain_hint`；缓存/去重命中走本地伪 task（`/async_run`→`{task_id}`、`/run`→`{result:{cache_hit:true}}`）前端无感；新增 `GET /api/history`、`POST /api/turn`、`POST /api/feedback` 三个本地端点（反馈落 `feedback_log.jsonl`）；前端经 `X-Session-Id` 头 + `query_meta.output_format` 透传。
+- **工作台 UI（Task 5）**：进度阶段 + 计时（「云端分析中…（已 Ns）」）、>2000 字长文附件引导、`output_format` 选择（auto/doc/outline/table/ppt）、会话历史、👍/👎 满意度反馈；内联 JS `node --check` 通过。
+- **SKILL.md / README 中英同步（Task 6）**：frontmatter `summary`/`description`/`trigger_scope` 扩大覆盖范围；性能段新增 L4（统一 session store + 多轮注入）与 L5（domain 路由适用范围扩大）；新增「Session, Context, Cache & Routing Contract」章节登记 payload 字段与本地端点；README.md / README_zh-CN.md 能力枚举同步纳入合规应答/项目运营/交付物撰写。
+- **验证**：scope_guard 15/15、session_store ALL PASSED、entry.py `--help`、proxy 语法、index.html JS 检查均通过。未部署（重新发布 workbench 应用需授权）。
+- **能力域文档扩充（文档做实，2026-10-22 追加）**：新增 **`docs/capability_domains.md`**——把合规应答/项目运营/交付物撰写三块从一句话登记**做实为可落地子主题清单 + 权威参照**（ICH E6(R3) 2025-07-23 生效、NMPA GCP 2020 第 57 号、CDE《登记与信息公示管理规范》2020 第 9 号 + 平台 chinadrugtrials.org.cn 的 CTR 号与 30 天时限、TransCelerate RBM & QTL Framework（QTL 1–5 / KRI 10–25）、DIA TMF Reference Model v3 + MAGI ISF、ICH E9(R1) 估计目标五属性 + Gamble JAMA 2017 55 项 SAP 清单、TransCelerate CC&R 2026 对齐 ICH M11、ISO 14155、EQUATOR）。SKILL.md 新增「Capability Domains — Expanded Coverage」章节与速查表；README.md / README_zh-CN.md 各增「能力与权威参考」小节并链接该文档。所有链接为公开权威源（检索于 2026-10-22），不托管其内容、失效以官网现行版为准。
+
+## （待部署）2026-10-20 · 工作台支持 `#q=` 跨工作台转接预填（配套 ct-samplesize 咨询转接 C 方案）
+
+- **改动**：`workbench/index.html` 的 `DOMContentLoaded` 钩子头部新增 hash 预填：解析 `location.hash` 的 `#q=<URL编码文本>` → 解码填入 `#qinput` 并聚焦；随后 `history.replaceState` 清掉 hash（防刷新回填）。**只预填、不自动发送**（保持人工确认 HITL）。输入框已有内容时不覆盖。
+- **设计取舍**：用 hash 而非 query 传参——问题文本不进服务器访问日志；仅预填不自动触发——转接方（ct-samplesize 咨询闸门）过来的都是咨询类问题，发送时机留给用户。
+- **触发来源**：ct-samplesize 工作台 advisory 拦截后，样本量/效力相关咨询句展示「转 Ct-Advisor 处理 ↗」按钮（见 ct-samplesize CHANGELOG 5.13.16 同日条目）。
+- **验证**：inline JS `node --check` 通过；`publish-kit/build_publish.py` 重跑（COPIED 10 / PRUNED 2 stale），`publish/index.html` 含预填逻辑。改动仅本地，**未部署**（部署需重新发布 workbench 应用，待授权）。
+
+## （待部署）2026-10-20 · coze 端点修复流式并发槽提前释放 + §20.18.4 拒绝载体收敛
+
+> **2026-10-21 打包就绪**：`adapters/coze/ct-advisor_coze_v1.43_20261021.zip`（114 files / 1,064,075 B / MD5 `f0c9ef7fb1cf0b5b5a968bcd612e6129`）。pack.py 闸门全绿（.coze/uv.lock 在包、refiner_contract=0、guidelines 排除、legacy decoders 6/6、upload chain 3/3、hidden=['.coze']、tests=0）；与 v1.42 逐字节 delta = 恰为 `src/main.py` + `src/antiscrape.py` 两文件（包内已确认含 `wrap_stream_release` 标准件、本地旧实现已删除）。**待上传 Coze 部署（待授权）**。
+
+> 随 ct-base §20.18.6 回流：与 ct-samplesize 同类的反盗调集成缺陷修复。改动在 `adapters/coze/src/main.py`（coze 部署源），**仅端点侧行为**；部署需重新打包上传 Coze（gitignored，待授权）。
+
+- **流式并发槽延迟释放**：`/stream_run` 原 `try: return StreamingResponse(gen); finally: _release_antiscrape(request)` 会在构造响应瞬间释放全局并发槽（§20.18 上限 50 对流式在途 R 计算/推理失效）。改为 `StreamingResponse(wrap_stream_release(stream_generator, request, on_finish=lambda: cozeloop.flush()))`，释放点钉在流真正耗尽处。
+- **`antiscrape.py` 逐字同步 ct-base**：补齐 `wrap_stream_release` 标准件（import inspect + 生成器包裹助手）。
+- **§20.18.4 信息收敛**：`_response_from_admit` 移除违规范例 `X-AntiAbuse: deny:{reason}` 头 + reason 区分键；429 统一为 `{"ok":false,"error":"rate_limited"}` + Retry-After。
+
 ## v1.3.16 (2026-10-19) · §22.15 扩写 + §22.18 Gate 传播
 
 - **§22.15 扩写**：影子期与传统人工路由**并行对跑**积累一致性证据（AI-201 落地建议 #5）；SAP 登记模型版本 + skill 版本 + 规则集版本三要素（#6）。

@@ -23,9 +23,11 @@ ct-advisor — 唯一代码入口（本地 LLM 唯一允许的动作）
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
+import re
 import sys
 import subprocess
 import time
@@ -111,6 +113,44 @@ MAX_FILE_BYTES = 5 * 1024 * 1024
 def _safe_wrap_with_checksum(text: str) -> str:
     """sha256 校验包裹（与 orchestrate._wrap 同格式）"""
     return _wrap(text)
+
+
+def _extract_plain(output: str) -> str:
+    """从出口载荷（<<<CT_ANSWER_B64_START>>>…<END>>> + sha256）解出纯答案文本。
+
+    非包裹形态（本地澄清提示 / 降级提示）原样返回。用于会话历史记录——Coze 注入的
+    conversation_history 需要可读摘要，而非 B64 包裹。
+    """
+    try:
+        m = re.search(
+            re.escape(ANSWER_B64_START) + r"\s*(.*?)\s*" + re.escape(ANSWER_B64_END),
+            output or "", re.S,
+        )
+        if not m:
+            return output or ""
+        return base64.b64decode(m.group(1).strip()).decode("utf-8")
+    except Exception:  # noqa: BLE001
+        return output or ""
+
+
+def _emit_output(output: str, args) -> None:
+    """统一出口（2026-10-22）：处理 --out 落盘 / stdout 透传，并正常退出。
+
+    抽离原因：短路（dedup/cache 命中）与真实出站两路最终都走同一出口，
+    避免出口逻辑散落导致「--out 只在某路径生效」的不一致。
+    """
+    if args.out:
+        try:
+            out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(output, encoding="utf-8")
+            sys.stdout.write(f"[entry] 结果已写入 {out_path} ({len(output)} chars)\n")
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"[entry] --out 写入失败: {type(e).__name__}: {e}\n")
+            sys.stdout.write(output)
+    else:
+        sys.stdout.write(output)
+    sys.exit(0)
 
 
 def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
@@ -240,30 +280,12 @@ def _run_card_inline(card_json: str, config_path: str) -> str:
 # 出站（urllib）逻辑已全部下沉到 adapters/local_service_client.py（§16.9）；
 # entry.py 仅保留一个薄封装调用，详见该适配器。
 def _run_orchestrate(payload: str, config: str) -> str:
-    """本地答案缓存 → 常驻服务（L1，版本漂移自动重启）→ 内联 run_orchestrate。
+    """常驻编排服务薄封装（出站入口）。
 
-    缓存预检查放在 entry 侧（而非只放在 orchestrate 内）的原因（2026-10-16）：
-      常驻服务由 start_server() 以 stderr=DEVNULL 拉起，服务进程内写的
-      「answer-cache hit」诊断行 agent 看不到；在 entry 侧先查一次，命中信号
-      落在 entry.py 自己的 stderr 上（agent 可见），同时省掉一次 HTTP 往返。
+    2026-10-22 重构：本地答案缓存 / 去重短路已上移到 main() 统一由 session_store
+    负责（跨 entry / proxy 一致），本函数仅做「常驻服务 → 内联」转发，
+    不再内部查 answer_cache（避免与 session_store 双重维护、且无法区分「是否真实出站」）。
     """
-    try:
-        import answer_cache as _ac
-        _obj = json.loads(payload)
-        _ck = _ac.key_of(
-            str(_obj.get("original_question", "") or ""),
-            str(_obj.get("doc_context", "") or ""),
-            str((_obj.get("query_meta") or {}).get("difficulty", "")),
-        )
-        _cached = _ac.get(_ck)
-        if _cached:
-            sys.stderr.write(
-                "[ct-advisor] answer-cache hit: replayed local cached answer "
-                "(no new Coze call)\n"
-            )
-            return _wrap(_cached)
-    except Exception:  # noqa: BLE001
-        pass
     return run_orchestrate_via_server(payload, config)
 
 
@@ -279,6 +301,9 @@ def main():
     ap.add_argument("--out", default=None,
                     help="把完整 stdout（含 B64 块与 checksum）写入该文件；"
                          "stdout 只打印一行确认，避免长载荷经过 agent 上下文")
+    ap.add_argument("--session", default="",
+                    help="会话标识（跨轮上下文/去重键）：proxy 或飞书应传入稳定 ID；"
+                         "缺失则退化为单轮（仍享全局答案缓存，仅无多轮上下文）")
     args = ap.parse_args()
 
     # ── 0) 依赖预检（2026-10-15 修订：requests 已改为可选） ──
@@ -354,6 +379,20 @@ def main():
     except Exception:
         pass
 
+    # ── 3b) 注入会话上下文（P0-3 修复：主链路此前从未调用 context_stitch，
+    # 导致 Coze 永远只拿到单轮问题，用户被迫在「承接上一轮」里手工复述背景）────
+    session_id = (args.session or "").strip()
+    conversation_history = []
+    try:
+        import session_store as _ss
+        conversation_history = _ss.history(session_id)
+        if conversation_history:
+            sys.stderr.write(
+                f"[entry] 注入会话上下文 {len(conversation_history)} 轮 "
+                f"(P0-3 修复)\n")
+    except Exception:  # noqa: BLE001
+        pass
+
     payload = json.dumps({
         "query_meta": query_meta,
         "original_question": original_question,
@@ -361,6 +400,7 @@ def main():
         "doc_context": doc_context,
         "suggested_task": _infer_task(original_question),
         "scope_hint": _scope_hint,
+        "conversation_history": conversation_history,
     }, ensure_ascii=False)
 
     # ── 4) vague → 澄清循环 ─────────────────────────────────────────────────
@@ -379,60 +419,80 @@ def main():
             sys.exit(0)
         # decidable / forced_decide → 继续发 Coze
 
-    # ── 5) 发往 Coze ────────────────────────────────────────────────────────
-    # 2026-10-16 措辞修正：此前无条件打印「发往 Coze...」，但 _run_orchestrate 会先查
-    # answer_cache —— 命中时根本不发出站请求。日志与实际行为不符，会让 agent（以及排障的人）
-    # 误判「又调了一次 Coze」——这正是本次优化要消灭的误判。
-    sys.stderr.write("[entry] 进入编排（若命中本地答案缓存则不出站）...\n")
+    # ── 5) 短路：近窗去重 + 全局答案缓存（P0-2 修复）────────────────────
+    # 对所有路径生效：vague 的 need_clarify 已在步骤 4 提前 exit，不会误短路；
+    # 此处仅对「真正会出站」的问题做本地复用（覆盖重复发送澄清类问题也省出站）。
+    shortcut = False
+    _output_format = query_meta.get("output_format", "") or ""
     try:
-        output = _run_orchestrate(payload, args.config)
-    except Exception as e:
-        sys.stderr.write(f"[entry] orchestrate 异常: {type(e).__name__}: {e}\n")
-        output = _safe_wrap_with_checksum(
-            f"⚠️ Coze 服务暂时不可用（{type(e).__name__}），"
-            f"请稍后重试或检查网络连接。"
-        )
-
-    # ── 6) 检测 CT_TOOL_DELEGATE → 代码自动执行 card-inline ─────────────
-    card_json = _extract_delegate_card(output)
-    if card_json:
-        sys.stderr.write("[entry] 检测到工具委托，代码自动执行 card-inline\n")
-        _ci_out = ""
-        try:
-            _ci_out = _run_card_inline(card_json, args.config)
-        except Exception as e:  # noqa: BLE001
-            sys.stderr.write(f"[entry] card-inline 异常: {type(e).__name__}: {e}\n")
-        # 2026-10-16 修复（主流程偏差）：card-inline 失败（子进程崩溃 / 超时 /
-        # 产物被截断）会返回空串或半截输出。此前直接透传，agent 将拿到**空 stdout**
-        # 或原始 <<<CT_TOOL_DELEGATE>>> 中间态 —— 既无法交付答案，也违反
-        # 「agent 不接触内部中间态」的架构契约（SKILL.md 明确委托块由 entry.py
-        # 自动执行，agent 侧无处理入口）。此处校验产物必须是合法的 B64 包裹。
-        if ANSWER_B64_START in _ci_out and ANSWER_B64_END in _ci_out:
-            output = _ci_out
+        import session_store as _ss
+        _dh, _dans, _dsecs = _ss.dedup_check(session_id, original_question,
+                                            output_format=_output_format)
+        if _dh and _dans:
+            sys.stderr.write(
+                f"[entry] 近窗重复命中（{_dsecs}s 前）→ 本地短路复用，不出站\n")
+            output = _wrap(_dans)
+            shortcut = True
         else:
-            sys.stderr.write("[entry] card-inline 产物形态异常，降级为人读提示\n")
+            _cached = _ss.cache_get(
+                original_question, doc_context,
+                query_meta.get("difficulty", ""),
+                output_format=_output_format)
+            if _cached:
+                sys.stderr.write(
+                    "[entry] 全局答案缓存命中 → 本地短路复用，不出站\n")
+                output = _wrap(_cached)
+                shortcut = True
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not shortcut:
+        # ── 5a) 真实出站 ───────────────────────────────────────────────
+        sys.stderr.write("[entry] 进入编排（出站 Coze）...\n")
+        try:
+            output = _run_orchestrate(payload, args.config)
+        except Exception as e:
+            sys.stderr.write(f"[entry] orchestrate 异常: {type(e).__name__}: {e}\n")
             output = _safe_wrap_with_checksum(
-                "⚠️ 技能结果缝合失败：委托执行的本地技能未能返回有效结果。\n\n"
-                "可能原因：技能参数不完整、技能执行超时或该技能当前不可用。\n"
-                "请补充必要信息后重试；若持续失败，请把本条提示与上方 stderr 反馈给技能维护者。"
+                f"⚠️ Coze 服务暂时不可用（{type(e).__name__}），"
+                f"请稍后重试或检查网络连接。"
             )
 
-    # ── 7) 出口（2026-10-16）────────────────────────────────────────────
-    # --out：把「完整 stdout」持久化到文件，stdout 只回一行确认。
-    # 目的：杜绝「想复验 / 复现只能重跑 entry.py → 真实重复 Coze 调用」
-    # 这一链路（见 log.docx 性能诊断）。
-    if args.out:
+        # ── 6) 检测 CT_TOOL_DELEGATE → 代码自动执行 card-inline ──────
+        card_json = _extract_delegate_card(output)
+        if card_json:
+            sys.stderr.write("[entry] 检测到工具委托，代码自动执行 card-inline\n")
+            _ci_out = ""
+            try:
+                _ci_out = _run_card_inline(card_json, args.config)
+            except Exception as e:  # noqa: BLE001
+                sys.stderr.write(f"[entry] card-inline 异常: {type(e).__name__}: {e}\n")
+            if ANSWER_B64_START in _ci_out and ANSWER_B64_END in _ci_out:
+                output = _ci_out
+            else:
+                sys.stderr.write("[entry] card-inline 产物形态异常，降级为人读提示\n")
+                output = _safe_wrap_with_checksum(
+                    "⚠️ 技能结果缝合失败：委托执行的本地技能未能返回有效结果。\n\n"
+                    "可能原因：技能参数不完整、技能执行超时或该技能当前不可用。\n"
+                    "请补充必要信息后重试；若持续失败，请把本条提示与上方 stderr 反馈给技能维护者。"
+                )
+
+        # ── 6b) 记录会话历史（仅真实出站；短路命中不重复记轮）────────
         try:
-            out_path = Path(args.out)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(output, encoding="utf-8")
-            sys.stdout.write(f"[entry] 结果已写入 {out_path} ({len(output)} chars)\n")
-        except Exception as e:  # noqa: BLE001
-            sys.stderr.write(f"[entry] --out 写入失败: {type(e).__name__}: {e}\n")
-            sys.stdout.write(output)
-    else:
-        sys.stdout.write(output)
-    sys.exit(0)
+            import session_store as _ss
+            _plain = _extract_plain(output)
+            if _plain.strip():
+                _ss.record(
+                    session_id, original_question, answer=_plain,
+                    difficulty=query_meta.get("difficulty", ""),
+                    doc_context=doc_context,
+                    output_format=_output_format,
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ── 7) 出口 ──────────────────────────────────────────────────────
+    _emit_output(output, args)
 
 
 if __name__ == "__main__":

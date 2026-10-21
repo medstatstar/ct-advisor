@@ -76,6 +76,9 @@ config/keys.py
 
 # 运行态会话上下文缓存（类型 B 追问自包含化用，本地生成、不入库；与 .gitignore 同集，§16.8）
 config/context_cache.json
+# 统一会话存储（2026-10-22：history + 全局答案缓存 + 近窗去重；运行期生成，含真实问答文本）
+config/session_store.json
+config/.session_store.lock
 
 # publish_inject 注入副产物（§16.8：注入时自动备份被覆盖文件 + 写入 .ctbase_injected.json 清单，
 # 均为本地安全副产物，发布前须剔除；发布后可用 publish_inject.py --clean 清理）
@@ -133,3 +136,6 @@ workbench/publish-kit/
 PERF_SOP.md
 stderr.log
 .write_test
+
+# ── F20/F27 顶层残留（本地运行产物 · 发布前检查自动补，与双 ignore 对齐）──
+err_quote.log
