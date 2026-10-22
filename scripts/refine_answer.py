@@ -27,7 +27,6 @@ value.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import re
@@ -61,13 +60,9 @@ def _hidden_kwargs() -> dict:
 # 代码旁路模式（--ship）最终答案定界符：脚本输出唯一权威答案，agent 只做原样透传。
 ANSWER_START = "<<<CT_ANSWER_START>>>"
 ANSWER_END = "<<<CT_ANSWER_END>>>"
-# 2026-10-15（v1.3.9）：base64 ASCII-safe 出口。PowerShell 5.1 按
-# [Console]::OutputEncoding（中文机默认 cp936）捕获 native stdout，UTF-8 答案被
-# 误解码成乱码 → 字节级 sha256 必败 → 误判「编码损耗/篡改」→ 无谓重跑。
-# base64 字符集全 ASCII（cp936 子集），任何编码页捕获逐字节无损，结构性免疫。
-# 旧 ANSWER_START/END 保留供历史引用识别，生产输出一律走 B64 定界符。
-ANSWER_B64_START = "<<<CT_ANSWER_B64_START>>>"
-ANSWER_B64_END = "<<<CT_ANSWER_B64_END>>>"
+# 2026-10-22（v1.3.20）：本模块输出**明文**。v1.3.9 的 base64 ASCII-safe 信封已删除
+# ——抗 cp936 乱码的职责上移到 entry._emit_plain（UTF-8 字节写 + 答案文件），
+# 内部再加一层编码只会多出「谁负责解码」的分支。标记/checksum 只在 entry 出口产生。
 NEED_PARAMS_MARKER = "<<<CT_NEED_PARAMS>>>"
 INSTALL_MARKER = "<<<CT_INSTALL_REQUIRED>>>"
 
@@ -121,8 +116,7 @@ def _check_outbound_authorization(endpoint: str, config_path: str) -> bool:
 #  - stdin decoded as cp936 would corrupt the UTF-8 JSON piped in (the agent's main usage is piping JSON);
 #  - stdout encoded as cp936 may raise UnicodeEncodeError on CJK/emoji/℃, and the consumer decoding as UTF-8 would get garbage.
 # Fix all three standard streams to UTF-8 for consistent cross-platform, cross-console encoding behaviour.
-# stdout 恒 LF（2026-10-15）：控制台回传链路会把 \n 转 \r\n，源头输出 LF +
-# 校验和按 LF 口径计算，双保险免疫 CRLF 损耗（见 _emit_wrapped）。
+# stdout 恒 LF（2026-10-15）：源头输出 LF；本模块不再算校验和（出口在 entry）。
 for _s in (sys.stdin, sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace", newline="\n")  # type: ignore[attr-defined]
@@ -469,24 +463,15 @@ def _run_handle_need_tool(card: dict) -> dict:
                 "result": f"{type(e).__name__}: {e}"}
 
 
-def _emit_wrapped(text: str) -> None:
-    """把最终答案包裹为 base64 ASCII-safe 载荷 + sha256 校验和输出，供 agent 解码透传并自检。
+def _emit_plain(text: str) -> None:
+    """把最终答案以**明文**写 stdout（2026-10-22 v1.3.20：内部无编码包裹）。
 
-    双归一化口径（2026-10-15）：
-    1) 换行归一化：校验和按 LF 口径计算，免疫控制台回传链路的 \\n→\\r\\n 转换；
-    2) base64 载荷（v1.3.9）：定界符/载荷/校验行全 ASCII（cp936 子集），
-       PowerShell 按任何编码页捕获都逐字节无损，从根上消除「GBK 乱码 →
-       校验失败 → 误判损耗/篡改 → 无谓重跑」链路。agent 侧先 b64decode
-       再归一化重算（见 SKILL.md Anti-tamper Check 段）。
+    历史：v1.3.9 起本函数输出 base64 ASCII-safe 信封（`ANSWER_B64_*`）以抗
+    cp936 乱码；该防护已上移到 `entry._emit_plain`（UTF-8 字节写 + 答案文件），
+    本函数只把正文交给调用方（`entry._run_card_inline` 直接读 stdout）。
+    标记与 checksum 不在本层产生——唯一产生点是 entry 出口。
     """
-    norm = text.replace("\r\n", "\n")
-    checksum = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
-    b64 = base64.b64encode(norm.encode("utf-8")).decode("ascii")
-    # 长度观测（与 orchestrate._wrap 同口径，2026-10-15 审计）：只观测不截断。
-    if len(b64) > 15000:
-        sys.stderr.write(f"[ct-advisor][warn] base64 载荷 {len(b64)} 字符（答案 {len(norm)} 字符），"
-                         f"超出观测线 15000——agent 捕获若见截断痕迹请换 Bash/Git Bash 通道\n")
-    sys.stdout.write(f"{ANSWER_B64_START}\n{b64}\n{ANSWER_B64_END}\nchecksum: {checksum}\n")
+    sys.stdout.write((text or "").replace("\r\n", "\n"))
 
 
 def _extract_draft(raw: str) -> str:
@@ -548,9 +533,9 @@ def main() -> None:
                          "失败/超时回退 draft_answer（final_answer 字段），由调用方判定本地兜底")
     ap.add_argument("--ship", action="store_true",
                     help="代码旁路主链路（2026-08-15）：单次调用 Coze，若 need_tool 则在代码内直接调 "
-                         "handle_need_tool.py 执行并对结果做确定性缝合；最终答案以 "
-                         "<<<CT_ANSWER_B64_START>>> base64 包裹输出（v1.3.9 起全 ASCII 载荷，"
-                         "免疫控制台编码页损耗）。本地大模型只做原样透传（pipe），不重写/重排/补充。此模式用于跳过大模型重组。")
+                         "handle_need_tool.py 执行并对结果做确定性缝合；最终答案以**明文**输出"
+                         "（v1.3.20：标记/checksum 由 entry.py 出口统一添加）。本地大模型只做原样透传"
+                         "（pipe），不重写/重排/补充。此模式用于跳过大模型重组。")
     ap.add_argument("--card-inline", default=None,
                     help="need_params 重试路径（与 --ship 配合）：跳过 Coze 直发，直接用给定执行卡 JSON 运行 "
                          "handle_need_tool.py 并缝合（用于补齐参数后重试，避免重复调用 Coze）")
@@ -608,7 +593,7 @@ def main() -> None:
             sys.exit(1)
         coze_answer = card.get("draft_answer") or ""
         tool_out = _run_handle_need_tool(card)
-        _emit_wrapped(_merge_answer(coze_answer, tool_out))
+        _emit_plain(_merge_answer(coze_answer, tool_out))
         sys.exit(0)
 
     # Read priority (in-memory pipeline first, zero temp files):
@@ -733,28 +718,25 @@ def main() -> None:
         if _go.notes:
             sys.stderr.write("[ct-advisor] forward_guards: " + "; ".join(_go.notes) + "\n")
         if _go.short_circuit:
-            # 缓存重放同样走 HARD GATE 包裹（2026-10-15）：此前裸输出无
-            # <<<CT_ANSWER_B64_START/END>>> + checksum，agent 侧校验正则匹配不到，
-            # 形成完整性盲区。缓存答案在脚本侧内存中生成，未经捕获通道污染，
-            # 包裹后校验必过。来源提示走 stderr，不破坏 stdout 定界结构。
+            # 缓存重放同样走明文出口（2026-10-22）：内部全程明文，标记与 checksum
+            # 由 entry 出口统一产生；来源提示走 stderr，不污染 stdout。
             sys.stderr.write(
                 "[ct-advisor] dedup short-circuit: replayed local cached answer "
                 "(no new Coze call sent)\n"
             )
-            _emit_wrapped(_go.answer)
+            _emit_plain(_go.answer)
             sys.exit(0)
     except Exception as _ge:  # noqa: BLE001
         sys.stderr.write(f"[ct-advisor] forward_guards skipped: {_ge}\n")
 
     if args.ship:
         # 代码旁路主链路（2026-08-15）：单次调用 Coze；need_tool 分支在代码内执行 + 确定性缝合；
-        # 最终答案以 <<<CT_ANSWER_B64_START/END>>> base64 包裹 + checksum 输出（v1.3.9），
-        # 本地大模型先 b64decode 再校验透传（pipe），不重写。
+        # 最终答案以**明文**输出（v1.3.20），本地大模型原样透传（pipe），不重写。
         if not _check_outbound_authorization(
             _get_endpoint_from_config(args.config), args.config
         ):
             # 未授权出站：无法获取 Coze 答案，明确告知 agent 走本地兜底
-            _emit_wrapped(
+            _emit_plain(
                 "⚠️ 未授权出站到 Coze，无法获取精校答案。请确认允许后重试。"
                 "「答案未经过 Coze 精校，请谨慎使用」。"
             )
@@ -772,7 +754,7 @@ def main() -> None:
             sys.stderr.write(
                 f"[ct-advisor] ship 失败（{type(e).__name__}）：Coze 不可用，需本地兜底\n"
             )
-            _emit_wrapped(
+            _emit_plain(
                 "⚠️ 无法连接 Coze 服务，答案未经过精校。请稍后重试。"
             )
             sys.exit(0)
@@ -867,7 +849,7 @@ def main() -> None:
                                    req.original_question, merged)
         except Exception:  # noqa: BLE001
             pass
-        _emit_wrapped(merged)
+        _emit_plain(merged)
         sys.exit(0)
 
     if args.forward:

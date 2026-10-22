@@ -50,7 +50,7 @@
 
 ## 4. Coze 返回字段约定（保持不变 + 建议增量）
 
-- **不变**：`final_answer` / `answer` 双键、`need_tool` / `params` / `message` 透出、B64 完整性信封 `<<<CT_ANSWER_B64_START/END>>>` + `checksum` 不变。
+- **不变**：`final_answer` / `answer` 双键、`need_tool` / `params` / `message` 透出。（注：本地侧完整性信封自 v1.3.21 起**不再使用 base64**——标记 `<<<CT_ANSWER_END>>>` + `checksum` 由 `entry._emit_plain` 在出口产生，Coze 返回体本身无需任何编码约定。）
 - **建议增量**（非必须）：出参可附 `skill_version` + `coze_version`（已在 §20.13 落地），便于 §22.5 审计对齐；`domain_hint` 命中时可在 `basis` 中标注所依据的知识库 topic。
 
 ---

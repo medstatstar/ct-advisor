@@ -1,6 +1,23 @@
 # Changelog
 
-## （待部署）2026-10-22 · v1.3.20 返回侧同样归一化（前端不再吃 base64）+ 控制台编码兜底
+## （待部署）2026-10-22 · v1.3.21 彻底重修：**全链路去 base64** + 编码决策移出出口
+
+> 来源：用户拍板「彻底重修一下……需要尽量只有一个流程方向，不要搞太多的分支。编码决策也可以改一下位置，彻底解决问题。」
+>
+> 前两版（v1.3.19 收去程、v1.3.20 收返程）都是**在管理编码问题**：仍保留内部 B64 进程间传输、仍保留 `_extract_plain` 解包层、仍保留"检测控制台编码再决定要不要告警/落盘"的判断。这些都是分支。本版把问题**消掉**而不是管住。
+
+- **内部去 base64（净删代码）**：`orchestrate._wrap` → `_finalize`（纯行尾归一）；`refine_answer._emit_wrapped` → `_emit_plain`（纯明文）；`serve./ask` 异常分支不再包信封；`entry._extract_plain` 整个解包层删除，改为 `_answer_body`（剥尾部标记）。**全仓已无任何 base64 答案载荷**（附件 `file_b64` 属 Coze 上传协议，与答案无关，保留）。
+- **标记与 checksum 只有一个产生点**：`entry._emit_plain`。其余模块一律明文，杜绝"两处各算一次校验和"的口径漂移。
+- **编码决策移出出口**：不再 `isatty()` 检测、不再读 `sys.stdout.encoding`、不再有 `--b64` / `--answer-file` / `--no-answer-file` / `--out` 四个开关。出口恒为 `sys.stdout.buffer.write(payload.encode("utf-8"))`——**常量编码，无协商**。实测 `PYTHONIOENCODING=cp936` 下捕获字节仍为合法 UTF-8。
+- **数据真源移到文件系统**：每轮无条件写 `<skill>/_answers/{sha16}.md`（UTF-8，与 stdout 正文逐字节一致），stdout 末尾给 `answer_file: _answers/{sha16}.md`——**相对 ASCII 路径**，避免用户名/目录含中文时路径本身在 cp936 终端变成唯一乱码的部分。终端显示乱码属显示层问题，读文件即可，不重跑。
+- **代理与前端回归纯转发/纯渲染**：撤销 v1.3.20 加的 `_normalize_*` 归一化层（那层是为「上游可能返回 B64」这一从未发生的情况准备的分支）；前端删除 `stripDelimiters()` 与 `_raw_b64_result` 残留，只做渲染。
+- **协议变更的安全性**：`adapters/local_service_client.server_stale()` 用 `code_fingerprint`（scripts/*.py + adapters/** 的 mtime 最大值）比对，改代码后常驻 serve 会**自动重启**，因此不需要版本握手/兼容分支。
+- **测试同步**：`orchestrate --self-test` 11/11、`test_seven_flows.py` 8/8（断言从"有 B64 信封"改为"有正文且非委托卡"）。
+- **验证（实测）**：出口 7/7——stdout 为合法 UTF-8 字节、checksum 外部复算一致、答案文件与 stdout 正文逐字节相同、两者均无 B64、`answer_file` 为合法相对 ASCII 路径、正文首行即答案、退出码 0；`py_compile` 五个脚本通过；前端内联 JS `node --check` 通过。
+
+## （已撤销）2026-10-22 · v1.3.20 返回侧同样归一化（前端不再吃 base64）+ 控制台编码兜底
+
+> **该版本的代理归一化层与编码兜底开关已被 v1.3.21 撤销**：归一化是为「上游可能返回 B64」这一从未发生的情况准备的分支（`adapters/coze` 全仓无答案 B64，只有附件 `file_b64`）；编码兜底的 `--answer-file` / `--no-answer-file` 与 isatty 告警则被"常量字节写 + 无条件答案文件"取代。保留本条仅为溯源。
 
 > 来源：用户追问「把这套『明文 + 尾部标记』也推到返回侧（让前端也不吃 B64）」，并追加「中文 Windows PowerShell 需要先设 `[Console]::OutputEncoding`，这个操作是否可能被跳过，此时有无补救」。
 >

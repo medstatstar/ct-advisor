@@ -14,8 +14,8 @@ ct-advisor — 代码全自动编排器（2026-08-15，模式 B + 委托本地�
   - 本地大模型**不**判断「信息是否足够」、**不**重写 Coze 文本。
 
 与既有协议的关系：
-  - 信息足够 → 复用 refine_answer.py 的 <<<CT_ANSWER_B64_START>>>…<<<CT_ANSWER_B64_END>>> base64 包裹
-    （含 sha256 校验和；v1.3.9 起载荷全 ASCII，对控制台编码页免疫），本地大模型只做原样透传（pipe），与 --ship 同协议。
+  - 信息足够 → 返回**明文答案**（v1.3.20 起内部无编码包裹；标记与 checksum 只在
+    `entry._emit_plain` 出口产生一次），本地大模型只做原样透传（pipe）。
   - 仍需 ct 技能 → 输出 <<<CT_TOOL_DELEGATE>>>…<<<CT_TOOL_DELEGATE_END>>> 结构化块，
     本地大模型读取后执行（见下方「委托协议」），最终仍由 --card-inline 走代码缝合。
 
@@ -23,12 +23,11 @@ ct-advisor — 代码全自动编排器（2026-08-15，模式 B + 委托本地�
   1. 读取块内 need_tool / params / draft_answer / original_question；
   2. 若 params 完整 → 直接 `python scripts/refine_answer.py --card-inline '<执行卡 JSON>'`；
   3. 若缺失 → 向用户追问补齐（不编造），再执行上述 --card-inline；
-  --card-inline 会由代码执行技能 + 缝合 Coze 草稿 + 包裹最终答案（大模型不重写）。
+  --card-inline 会由代码执行技能 + 缝合 Coze 草稿（大模型不重写）。
 
 用法：
   python scripts/orchestrate.py --payload-inline '<3变量 JSON>'
-        → 输出 <<<CT_ANSWER_B64_START>>>…<<<CT_ANSWER_B64_END>>> + checksum（信息足够，pipe 透传；
-          载荷为 base64 ASCII-safe，任何编码页捕获无损——agent 先 b64decode 再校验）
+        → 输出明文答案（信息足够，pipe 透传；标记/checksum 由 entry.py 出口统一添加）
           或 <<<CT_TOOL_DELEGATE>>>…<<<CT_TOOL_DELEGATE_END>>>（委托大模型调 ct 技能）
   python scripts/orchestrate.py --payload-inline '<JSON>' --no-prefetch
         → 跳过前端预判预取，仅走 Coze；Coze 判定需工具时仍委托大模型
@@ -38,7 +37,6 @@ ct-advisor — 代码全自动编排器（2026-08-15，模式 B + 委托本地�
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import re
@@ -58,20 +56,18 @@ for _p in (str(SCRIPT_DIR), str(SKILL_ROOT)):
 # 改为「用前再 import」：把它们的加载塞进 Coze 网络等待窗口内并发完成，不再串行堆积在
 # 发请求之前（此前每次冷启动白白烧 ~13s）。ANSWER_START/END 作为定界常量在此本地重定义
 # （与 refine_answer 完全同值），避免仅为两个常量而整体导入 57KB 模块。
-# 2026-10-15（v1.3.9）：答案载荷改 base64 ASCII-safe 出口（ANSWER_B64_*）——控制台
-# 回传链路（PowerShell 5.1 按 [Console]::OutputEncoding，中文机默认 cp936）会把
-# UTF-8 字节误解码成乱码，字节级 sha256 必败 → agent 误判「编码损耗/篡改」→ 无谓
-# 重跑。base64 字符集全在 ASCII（cp936 子集）内，任何编码页捕获均逐字节无损，
-# 结构性免疫、不依赖 agent 记得切 OutputEncoding。旧 ANSWER_START/END 常量保留供
-# 历史引用与调试识别，生产输出一律走 B64 定界符。
+# 2026-10-22（v1.3.20）：答案在**进程间也是明文**。base64 当年的唯一价值是绕过
+# 控制台代码页（cp936 会把 UTF-8 字节误解码）；那个问题现在由出口的
+# `stdout.buffer.write(utf-8 字节)` + 答案文件承担，内部再加一层编码只会多出
+# 「谁负责解码」的分支。现在标记与 checksum **只在 entry._emit_plain 产生一次**，
+# 本模块只做行尾归一。
 ANSWER_START = "<<<CT_ANSWER_START>>>"
 ANSWER_END = "<<<CT_ANSWER_END>>>"
-ANSWER_B64_START = "<<<CT_ANSWER_B64_START>>>"
-ANSWER_B64_END = "<<<CT_ANSWER_B64_END>>>"
 
-# 编码统一（与 refine_answer.py 一致）：三流强制 UTF-8 + stdout 恒 LF，
-# 避免 CJK/℃ 在 Windows cp936 下乱码；LF 输出 + LF 口径校验和双保险
-# 免疫控制台回传链路的 \n→\r\n 转换（2026-10-15，见 _wrap）。
+# 编码统一（2026-10-22 修订职责边界）：本条只服务「orchestrate.py 被**直接**当 CLI
+# 跑」的场景（调试 / --self-test / --payload-inline 的 stdout 提示）。**答案通道**
+# 不依赖它——`entry._emit_plain` 用 `stdout.buffer.write(utf-8 字节)` 直接落字节，
+# 既不看 `sys.stdout.encoding`，也不受这里的 reconfigure 影响。
 for _s in (sys.stdin, sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8", errors="replace", newline="\n")  # type: ignore[attr-defined]
@@ -87,54 +83,13 @@ TOOL_DELEGATE_END = "<<<CT_TOOL_DELEGATE_END>>>"
 # 输出构造（确定性，无 LLM）
 # ---------------------------------------------------------------------------
 
-def _wrap(text: str) -> str:
-    """把最终答案包裹为 base64 ASCII-safe 载荷 + sha256 校验和（与 refine_answer._emit_wrapped 同格式）。
+def _finalize(text: str) -> str:
+    """编排结果的行尾归一——内部唯一形态是**明文**，无编码、无解包。
 
-    双归一化口径（2026-10-15）：
-    1) 换行归一化：校验和按 LF 口径计算——控制台回传链路（Windows Python stdout
-       text 模式 / PowerShell 捕获）不可避免地把 \\n 转成 \\r\\n，若按原始字节算，
-       agent 侧重算必败。
-    2) base64 载荷（v1.3.9）：答案文本先 base64 编码再输出，定界符/载荷/校验行
-       全 ASCII（cp936 子集），PowerShell 按任何编码页捕获都逐字节无损，从根上
-       消除「GBK 乱码 → 校验失败 → 误判损耗/篡改 → 无谓重跑」链路。agent 侧
-       先 b64decode 再归一化重算（见 SKILL.md Anti-tamper Check 段）。
+    v1.3.20 起：标记与 checksum 只在 `entry._emit_plain` 产生一次，本函数不再
+    包裹任何东西（历史 `_wrap` 的 base64 信封已删除，见 CHANGELOG）。
     """
-    norm = text.replace("\r\n", "\n")
-    checksum = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
-    b64 = base64.b64encode(norm.encode("utf-8")).decode("ascii")
-    # 长度观测（2026-10-15 审计；2026-10-22 v1.3.19 修订）：base64 使载荷约为
-    # UTF-8 字节的 1.33 倍——中文场景约 4×原始字符数。**v1.3.19 起本函数只服务
-    # 进程间传输**（orchestrate → serve / refine_answer → entry），entry.py 在对外
-    # 出口处一次性解包为明文，故超大载荷不再抵达 agent 侧。
-    # 保留观测仅为定位异常：若此值异常膨胀，说明上游答案远超预期（如 doc 6000 字
-    # 纯中文 = 24,000 b64，属正常上限内的预期值，无需任何动作）。
-    if len(b64) > 30000:
-        sys.stderr.write(
-            f"[ct-advisor][warn] 内部 base64 载荷 {len(b64)} 字符（答案 {len(norm)} 字符）"
-            f"异常偏大——超出 doc 模式 6000 字上限的预期区间，请检查答案是否失控。"
-            f"（对外出口已解包为明文，agent 侧无需处理。）\n")
-    return f"{ANSWER_B64_START}\n{b64}\n{ANSWER_B64_END}\nchecksum: {checksum}\n"
-
-
-def _b64_decode_payload(out: str) -> str:
-    """从 _wrap 输出中解码 base64 答案载荷（自测 / 调试辅助；消费方见 SKILL.md 协议）。"""
-    m = re.search(re.escape(ANSWER_B64_START) + r"\s*\n(.*?)\n\s*" + re.escape(ANSWER_B64_END),
-                  out, re.DOTALL)
-    if not m:
-        return ""
-    try:
-        return base64.b64decode(m.group(1).strip()).decode("utf-8")
-    except Exception:
-        return ""
-
-
-def _b64_roundtrip_ok(out: str) -> bool:
-    """自测：载荷可解码、checksum 与解码后答案（LF 口径）一致。"""
-    m = re.search(r"checksum:\s*([0-9a-f]{16})", out)
-    ans = _b64_decode_payload(out)
-    if not (m and ans):
-        return False
-    return hashlib.sha256(ans.replace("\r\n", "\n").encode("utf-8")).hexdigest()[:16] == m.group(1)
+    return (text or "").replace("\r\n", "\n")
 
 
 def _enrich_coze_params(orig_q: str, coze_tool: str | None, coze_params: dict) -> dict:
@@ -320,7 +275,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
     # 渲染为用户可见的「请先安装」提示，避免冒充 Coze 空答案。
     dep_err = getattr(coze_result, "dependency_error", None)
     if dep_err:
-        return _wrap(
+        return _finalize(
             "⚠️ 答案精校服务依赖缺失，无法连接 Coze。\n\n"
             f"{dep_err}\n\n"
             "安装完成前本技能无法提供精校答案（不会返回任何未经精校的占位内容）。"
@@ -330,7 +285,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
     # 而非误导为「Coze 返回空、请稍后重试」。仅当 Coze 真正返回空答案时才走原提示。
     conn_err = getattr(coze_result, "connection_error", None)
     if conn_err:
-        return _wrap(
+        return _finalize(
             "精校服务连接失败，无法获取 Coze 答案。\n\n"
             f"{conn_err}\n\n"
             "完成上述排查并恢复网络/代理后，重新运行本技能即可（连接恢复前本技能不会返回任何未经精校的占位内容）。"
@@ -338,7 +293,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
     # ── 技能内部错误快速通道（2026-10-15）：配置/代码类失败，不伪装成「返回为空」 ──
     internal_err = getattr(coze_result, "internal_error", None)
     if internal_err:
-        return _wrap(internal_err)
+        return _finalize(internal_err)
     # coze_result 为 None（线程异常崩溃兜底）：降级为空结果，避免 AttributeError 连环崩溃
     if coze_result is None:
         coze_result = _mk_coze("", None, {})
@@ -361,8 +316,8 @@ def build_output(orig_q: str, coze_result: RefineResult,
     # 在最终答案**末尾**追加一行软建议；不改写答案本身、不阻断取数决策。
     sugg = suggest_footer(suggest_tools or [], lang=_detect_lang(orig_q))
 
-    def _wrapf(text: str) -> str:
-        return _wrap(text + sugg)
+    def _final_out(text: str) -> str:
+        return _finalize(text + sugg)
 
     # ---- 有预判执行结果 ----
     if prefetch_out is not None:
@@ -373,7 +328,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
                 # 信息足够：Coze 答案 + 预判技能结果（多源问题附提示其余工具）
                 lang = _detect_lang(orig_q)  # 2026-08-21：缝合文案/标签随提问语言
                 merged = _merge_answer(coze_answer, prefetch_out, lang=lang)
-                return _wrapf(merged + _multi_tool_hint(need_tools or [], tool, lang=lang))
+                return _final_out(merged + _multi_tool_hint(need_tools or [], tool, lang=lang))
             # Coze 要求不同工具：预判结果并入草稿，委托 Coze 工具
             base = _merge_answer(coze_answer, prefetch_out) if coze_answer.strip() else \
                 f"## 补充信息（来源：{tool}）\n\n" + _render_skill_text(prefetch_out)
@@ -397,8 +352,8 @@ def build_output(orig_q: str, coze_result: RefineResult,
             # 代码直接缝合包裹（无需 agent 介入，也无需征询同意）
             lang = _detect_lang(orig_q)
             if coze_answer.strip():
-                return _wrapf(_merge_answer(coze_answer, prefetch_out, lang=lang))
-            return _wrapf(_render_skill_text(prefetch_out))
+                return _final_out(_merge_answer(coze_answer, prefetch_out, lang=lang))
+            return _final_out(_render_skill_text(prefetch_out))
         if status == "install_required":
             # 2026-09-10（第十四轮，用户要求）：由「委托补参 / 安装」改为
             # 「**先自身作答，末尾再建议安装**」——不再用安装动作阻断答案。
@@ -408,7 +363,7 @@ def build_output(orig_q: str, coze_result: RefineResult,
             # 用户授权 → 在卡片加 "install_consent": "approved" 重跑；拒绝 → 加
             # "install_consent": "declined" 重跑，由代码产出「未取数」兜底答案。
             lang = _detect_lang(orig_q)
-            return _wrapf(_merge_answer(coze_answer, prefetch_out, lang=lang))
+            return _final_out(_merge_answer(coze_answer, prefetch_out, lang=lang))
         # error：预判执行失败
         if coze_tool:
             return _render_delegate(
@@ -418,8 +373,8 @@ def build_output(orig_q: str, coze_result: RefineResult,
             )
         # 预判失败且无 Coze 工具 → 仅 Coze 答案（若有）或兜底警告
         if coze_answer.strip():
-            return _wrapf(coze_answer)
-        return _wrapf("⚠️ Coze 服务暂时不可用且无法获取技能补充数据，请稍后重试。")
+            return _final_out(coze_answer)
+        return _final_out("⚠️ Coze 服务暂时不可用且无法获取技能补充数据，请稍后重试。")
 
     # ---- 无预判 ----
     if coze_tool:
@@ -432,12 +387,12 @@ def build_output(orig_q: str, coze_result: RefineResult,
             payload = (_unreleased_payload(coze_tool) if tier_info["tier"] != "A"
                        else _unpublished_payload(coze_tool))
             if coze_answer.strip():
-                return _wrapf(_merge_answer(coze_answer, payload, lang=lang))
-            return _wrapf(_render_skill_text(payload))
+                return _final_out(_merge_answer(coze_answer, payload, lang=lang))
+            return _final_out(_render_skill_text(payload))
         return _render_delegate(orig_q, coze_tool, coze_params, coze_answer)
     if coze_answer.strip():
-        return _wrapf(coze_answer)
-    return _wrapf("⚠️ Coze 返回为空，请稍后重试。")
+        return _final_out(coze_answer)
+    return _final_out("⚠️ Coze 返回为空，请稍后重试。")
 
 
 def _render_skill_text(tool_out: dict) -> str:
@@ -551,7 +506,7 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
         if _cached:
             sys.stderr.write("[ct-advisor] answer-cache hit: replayed local cached "
                              "answer (no new Coze call)\n")
-            return _wrap(_cached)
+            return _finalize(_cached)
     except Exception:  # noqa: BLE001
         _ck = ""
 
@@ -642,9 +597,8 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     if _ck and _cacheable and TOOL_DELEGATE_START not in out:
         try:
             import answer_cache as _ac
-            _ans = _b64_decode_payload(out)
-            if _ans:
-                _ac.put(_ck, _ans)
+            if out.strip():                     # 内部已是明文，直接入缓存
+                _ac.put(_ck, out)
         except Exception:  # noqa: BLE001
             pass
 
@@ -674,11 +628,11 @@ SELF_TEST = [
     # (描述, orig_q, coze, prefetch_out, prefetch_tool, prefetch_params, 期望标记)
     ("预判ok且Coze无需工具 → 包裹答案",
      "算样本量 ORR 30% vs 45%", _mk_coze("Coze说算一下"), _mk_prefetch("ct-samplesize", "ok", {"n": 120}),
-     "ct-samplesize", {"p1": 0.3, "p2": 0.45}, "CT_ANSWER_B64_START"),
+     "ct-samplesize", {"p1": 0.3, "p2": 0.45}, "__ANSWER__"),
 
     ("Coze需同工具且预判ok → 包裹答案（不重复调）",
      "算样本量", _mk_coze("Coze草稿", "ct-samplesize", {}), _mk_prefetch("ct-samplesize", "ok", {"n": 99}),
-     "ct-samplesize", {}, "CT_ANSWER_B64_START"),
+     "ct-samplesize", {}, "__ANSWER__"),
 
     ("预判need_params → 委托（列出缺失）",
      "算样本量", _mk_coze("Coze草稿", "ct-samplesize", {}),
@@ -696,11 +650,11 @@ SELF_TEST = [
 
     ("Coze答案足够且无预判 → 包裹",
      "什么是SDTM", _mk_coze("SDTM是...", None, {}),
-     None, None, {}, "CT_ANSWER_B64_START"),
+     None, None, {}, "__ANSWER__"),
 
     ("Coze空 + 无工具 → 兜底警告包裹",
      "边缘问题", _mk_coze("", None, {}),
-     None, None, {}, "CT_ANSWER_B64_START"),
+     None, None, {}, "__ANSWER__"),
 
     ("预判error但Coze需同工具 → 委托重试",
      "查XX药安全性", _mk_coze("Coze草稿", "ct-safety", {"drug": "XX"}),
@@ -711,11 +665,11 @@ SELF_TEST = [
     # 漏掉 _unreleased_payload / _unpublished_payload 的 NameError，真实触发即崩）。
     ("无预判 + Coze需B档工具(ct-protocol) → unreleased包裹",
      "审阅试验方案", _mk_coze("草稿", "ct-protocol", {}),
-     None, None, {}, "CT_ANSWER_B64_START"),
+     None, None, {}, "__ANSWER__"),
 
     ("无预判 + Coze需未发布A档工具(ct-pipeline) → unpublished包裹",
      "公开情报编排", _mk_coze("草稿", "ct-pipeline", {}),
-     None, None, {}, "CT_ANSWER_B64_START"),
+     None, None, {}, "__ANSWER__"),
 ]
 
 
@@ -723,25 +677,23 @@ def run_self_test() -> int:
     print("orchestrate.py 编排决策自测")
     print("=" * 60)
     ok = 0
-    for desc, q, coze, pre, pt, pp, expect_marker in SELF_TEST:
+    for desc, q, coze, pre, pt, pp, expect in SELF_TEST:
         out = build_output(q, coze, pre, pt, pp)
-        hit = expect_marker in out
-        mark = "✓" if hit else "✗"
-        if hit:
-            ok += 1
-        # 校验包裹格式 / 委托格式之一
-        if expect_marker == "CT_ANSWER_B64_START":
-            valid = (ANSWER_B64_START in out and ANSWER_B64_END in out
-                     and "checksum:" in out and _b64_roundtrip_ok(out))
+        if expect == "__ANSWER__":
+            # 答案路径：有正文且不是委托卡（v1.3.20 起内部不再有包裹标记）
+            valid = bool(out.strip()) and TOOL_DELEGATE_START not in out
         else:
             valid = TOOL_DELEGATE_START in out and TOOL_DELEGATE_END in out
+        mark = "✓" if valid else "✗"
+        if valid:
+            ok += 1
         print(f"  {mark} [{('OK' if valid else 'BADFMT'):<6}] {desc}")
     # 2026-09-10（第十四轮，用户要求）：软建议页脚——不调用兄弟技能，
     # 先自身作答，再在答案**末尾**建议可安装 / 调用（弱命中 / 咨询意图路径）。
     prog = build_output("样本量计算要注意什么", _mk_coze("样本量取决于效应量与把握度。")
                         , None, None, {}, suggest_tools=["ct-samplesize"])
-    sug_ok = (ANSWER_B64_START in prog) and ("兄弟技能" in _b64_decode_payload(prog)) \
-        and ("ct-samplesize" in _b64_decode_payload(prog))
+    sug_ok = ("兄弟技能" in prog) and ("ct-samplesize" in prog) \
+        and (TOOL_DELEGATE_START not in prog)
     print(f"  {'✓' if sug_ok else '✗'} [{'OK' if sug_ok else 'BADFMT'}] 软建议：先作答 + 末尾建议 ct-samplesize")
     ok += 1 if sug_ok else 0
 

@@ -10,8 +10,8 @@ route_tool / orchestrate 等，冷导入合计约 24s）在进程启动期一次
 安全边界：
   - 仅监听 127.0.0.1（回环），外部不可达，不接受任何代码执行或文件副作用。
   - 仅暴露 /health、/ask、/shutdown 三个端点；/ask 只接受 {payload, config} 并返回
-    run_orchestrate 的原始字符串（含 <<<CT_ANSWER_B64_START/END>>> + sha256，base64
-    ASCII-safe 载荷），与 entry.py 内联路径输出格式完全一致——HARD GATE 与输出契约不变。
+    run_orchestrate 的**明文**结果（v1.3.20 起内部无编码包裹），与 entry.py 内联路径
+    输出完全一致——HARD GATE 与输出契约不变。
   - 空闲超时自动退出（默认 600s），避免孤儿进程常驻。
 """
 from __future__ import annotations
@@ -131,17 +131,12 @@ class Handler(BaseHTTPRequestHandler):
             # 2026-10-16 修复（重复调用风险）：此前返回 HTTP 500，而客户端
             # （adapters/local_service_client.server_ask）对 HTTPError 的处理是
             # 「回退内联再跑一次」——若异常发生在 Coze 调用之后，就会**真的再调
-            # 一次 Coze**，正是本次优化的目标缺陷。改为在服务端就地渲染成合法的
-            # B64 包裹、以 HTTP 200 返回，客户端不再回退，杜绝重复执行。
-            try:
-                from orchestrate import _wrap
-                out = _wrap(
-                    "⚠️ 技能编排过程出现内部错误，无法生成答案。\n\n"
-                    f"{type(e).__name__}: {e}\n\n"
-                    "请稍后重试；若持续出现，请把本条提示反馈给技能维护者。"
-                )
-            except Exception:  # noqa: BLE001
-                out = ""
+            # 一次 Coze**，正是本次优化的目标缺陷。改为在服务端就地渲染成合法答案
+            # （明文；标记/checksum 由 entry 出口补），以 HTTP 200 返回，客户端不再
+            # 回退，杜绝重复执行。
+            out = ("⚠️ 技能编排过程出现内部错误，无法生成答案。\n\n"
+                   f"{type(e).__name__}: {e}\n\n"
+                   "请稍后重试；若持续出现，请把本条提示反馈给技能维护者。")
             self._send(200, out.encode("utf-8"))
 
 

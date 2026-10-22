@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.20
+version: 1.3.21
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -67,31 +67,28 @@ tier: A
 >
 > **and then pipe the stdout to the user verbatim.**
 >
-> Since v1.3.19 the stdout is **plain text followed by a trailing integrity line** — no
-> decoding, no transcription, no second command:
+> Since **v1.3.21** the stdout is **plain text followed by a trailing integrity line** and one
+> ASCII pointer to the answer file — no decoding, no transcription, no second command:
 >
 > ```
 > {the answer text, as many lines as it needs}
 > <<<CT_ANSWER_END>>>
 > checksum: {sha256[:16]}
+> answer_file: _answers/{checksum}.md
 > ```
 >
-> **One entry point, one output shape, one protocol.** The base64 envelope introduced in
-> v1.3.9 is now strictly an *internal* transport between code modules (`orchestrate` →
-> `serve` / `refine_answer` → `entry`); `entry.py` unwraps it exactly once at the process
-> boundary. `scripts/ask.py` survives only as a zero-logic forwarding shim for stale callers.
-> Since **v1.3.20** the same rule holds on the *return* side: the workbench proxy
-> (`workbench/ct-advisor-proxy.py`) unwraps any base64 payload in the upstream JSON before
-> forwarding it, so **every client receives plain text** — the browser no longer ships a
-> decoder (`decodeB64Utf8` / `_raw_b64_result` were removed in the same commit).
->
-> **Why the two-layer history is gone.** v1.3.9 introduced base64 to survive cp936 console
-> mojibake, but that forced the LLM to hand-copy a ~2.6k-char random string into a second
-> command — which it cannot do reliably (2026-10-16 incident: `5Lzd` typed for `5L+d`, a
-> "checksum failure" that was pure transcription damage, then three real Coze calls for one
-> question). The wrapper that fixed it left two parallel protocols plus a 4× payload
-> inflation that pressed against the tool-output ceiling. Keeping base64 inside and emitting
-> plain text outside resolves both at once.
+> **One entry point, one output shape, one protocol, one place where the protocol is produced.**
+> Since v1.3.21 there is **no base64 anywhere in the pipeline** — not between code modules, not
+> on the wire, not in the browser. The reason is historical: v1.3.9 introduced base64 to survive
+> cp936 console mojibake, but that forced the LLM to hand-copy a ~2.6k-char random string into a
+> second command (2026-10-16 incident: `5Lzd` typed for `5L+d`, a "checksum failure" that was
+> pure transcription damage, then three real Coze calls for one question). The wrapper that fixed
+> it left two parallel protocols, a 4× payload inflation, and — once the browser started taking
+> the API directly — a decoder in *each* client. v1.3.21 removes the need instead of managing it:
+> **encoding is no longer a decision made at the exit**. `entry.py` writes UTF-8 bytes straight to
+> `stdout.buffer` (constant, no code-page inspection, no flags), the marker/checksum pair is
+> produced in exactly one function, and the same bytes are also on disk. `scripts/ask.py` survives
+> only as a zero-logic forwarding shim for stale callers.
 
 **HARD GATE — the following are absolutely PROHIBITED for the local LLM:**
 - ❌ **NEVER** read, search, or reference any local knowledge base (the `knowledge/` directory has been removed)
@@ -105,6 +102,7 @@ tier: A
 - ❌ **NEVER** inject process narration ("Step 2", "Coze returned", "assembling payload")
 - ❌ **NEVER** decide whether to forward to Coze — ALL questions are forwarded (entry.py handles routing internally)
 - ❌ **NEVER** wrap, encode, base64-ify, or otherwise re-transport the answer on your own — the pipeline already emits the final form
+- ❌ **NEVER** present the `answer_file:` line as part of the answer (it is a pointer, not content)
 - ❌ **NEVER** discard stderr with `2>$null` / `2>/dev/null` — stderr carries the answer-cache-hit / resident-service / `[ct-advisor][ERR]` signals that tell you whether a Coze call actually happened
 
 **Why this rule exists:** The local LLM's "helpful" instincts (answering from its own knowledge, pre-reading files, post-formatting answers) have repeatedly violated the pipeline contract, destroyed Coze-delivered content formatting, altered numeric precision, injected unsolicited content, and bypassed the cloud analysis entirely. This rule eliminates ALL local LLM decision space.
@@ -123,10 +121,11 @@ python scripts/entry.py --q "Is this document related to medicine?" --attach "/p
 
 **That's it.** The stdout is the final answer — pipe it to the user verbatim.
 
-> **Debugging / advanced**: `python scripts/entry.py --q "..." --out <file>` writes the full
-> stdout to a file so it can be re-verified **without re-running Coze**. `--b64` reproduces the
-> legacy base64 envelope — an **escape hatch only**, for the rare console where plain CJK
-> output cannot survive code-page conversion; if you use it you own the decode step.
+> **There are no flags to tune the output.** `--out`, `--b64`, `--answer-file` and
+> `--no-answer-file` were removed in v1.3.21: every run writes the same bytes to stdout and the
+> same bytes to `<skill>/_answers/{checksum}.md`. That file is the **data source of truth** — if
+> a terminal shows mojibake (a display-layer problem, never a data problem), read that file and
+> deliver from it instead of re-running anything.
 >
 > **Length is no longer a channel risk.** A 6000-char CJK answer now leaves `entry.py` as
 > ≈6,000 characters. Under base64 it was 24,000 — past the PowerShell ~20,000 truncation line
@@ -145,7 +144,7 @@ STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
 STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
 STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): Coze async submit (/async_run, ms-level → task_id) + local ct-skill prefetch → poll /task/{id} until terminal → merge (sync /run only as fallback when the async endpoint is unavailable)
 STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
-STEP 5  Output — entry.py unwraps the internal envelope **once** and prints plain text + `<<<CT_ANSWER_END>>>` + `checksum:` (single protocol since v1.3.19; `--b64` restores the legacy envelope)
+STEP 5  Output — entry.py writes the answer file (UTF-8), then the same bytes + `<<<CT_ANSWER_END>>>` + `checksum:` + `answer_file:` to stdout.buffer (single protocol, single producer since v1.3.21)
 ```
 
 > **LLM-forbidden zone**: every STEP above is executed by code. The local LLM
@@ -153,12 +152,14 @@ STEP 5  Output — entry.py unwraps the internal envelope **once** and prints pl
 
 ### Output format
 
-`scripts/entry.py` — stdout is the **plain-text answer plus a trailing integrity line**:
+`scripts/entry.py` — stdout is the **plain-text answer plus a trailing integrity line and an
+ASCII pointer to the answer file**:
 
 ```
 {the answer text, as many lines as it needs}
 <<<CT_ANSWER_END>>>
 checksum: {sha256[:16] of everything before the marker, LF-normalized}
+answer_file: _answers/{checksum}.md
 ```
 
 The marker sits at the **end** on purpose: any channel truncation removes it together with
@@ -166,28 +167,32 @@ the checksum, so a damaged capture is obvious at a glance instead of silently pa
 checksum covers the answer body only (everything from the first byte up to and including the
 newline immediately before the marker), so it is trivially reproducible.
 
-> **Where base64 still lives (internal only)**: `orchestrate._wrap` emits the
-> `<<<CT_ANSWER_B64_START/END>>>` envelope when passing results *between code modules* —
-> process-to-process, where binary safety matters and no LLM is involved. `entry.py` decodes
-> it exactly once at the boundary. Never ask an LLM to handle that envelope; if you ever see
-> one in stdout, it means `--b64` was passed explicitly.
+`answer_file` is a **relative ASCII path** (skill root ⇒ `_answers/{sha16}.md`) precisely so it
+survives any console code page — a user name or directory in CJK would otherwise be the one part
+of the message that turns to mojibake. The file holds byte-identical content to the stdout body.
 
-### 🔴 Integrity check (HARD GATE · simplified in v1.3.19)
+> **Where base64 no longer lives (v1.3.21)**: nowhere. `orchestrate._finalize`,
+> `refine_answer._emit_plain` and `serve./ask` all pass **plain text**; the marker/checksum pair
+> is produced in exactly one function (`entry._emit_plain`). If you ever see a base64 envelope in
+> any output, it is a leftover from an old resident process — the code fingerprint makes
+> `entry.py` restart it automatically, so just re-run once and report it.
 
-Because the answer now arrives as **plain text**, the whole check collapsed into one
-structural question: **is the trailing `<<<CT_ANSWER_END>>>` marker there?**
+### 🔴 Integrity check (HARD GATE · simplified in v1.3.19, final in v1.3.21)
+
+Because the answer arrives as **plain text**, the whole check collapsed into one structural
+question: **is the trailing `<<<CT_ANSWER_END>>>` marker there?**
 
 | # | Observation | Meaning | Action |
 |---|---|---|---|
-| 1 | Marker + `checksum:` present, body non-empty | Capture complete | Deliver the body verbatim. `checksum:` re-verification is optional here — the marker's presence already proves the capture was not cut. |
+| 1 | Marker + `checksum:` present, body non-empty | Capture complete | Deliver the body verbatim (`answer_file:` line included, it is not part of the answer). `checksum:` re-verification is optional here — the marker's presence already proves the capture was not cut. |
 | 2 | Marker absent, or `checksum:` line missing | The tool channel truncated the capture | Re-capture the **same** command with Bash / Git Bash. **Do NOT re-run Coze.** |
 | 3 | Marker present but checksum mismatch (code below) | Real corruption, not truncation | Do NOT deliver. Report expected vs actual and stop — never loop re-runs. |
-| 4 | `--b64` was used (legacy escape hatch) | Base64 envelope | Strip all whitespace, decode, then hash-verify — see code below. |
+| 4 | Body looks garbled but marker + checksum are intact | Display-layer code page, data intact | Read `answer_file` (UTF-8 on disk) and deliver that. No re-run. |
 
 Re-running without capture evidence is a protocol violation: in the 2026-10-15/16 incidents it
 made one question fire 2–3 times, dragging a single Q&A to minutes.
 
-Verification code — only needed for `--b64` or a suspected step-3 mismatch:
+Verification code — only needed for a suspected mismatch in row 3:
 
 ```python
 import hashlib, re
@@ -204,44 +209,40 @@ if MARK in stdout:
 
 **If the checksum does not match, the local LLM MUST NOT deliver the answer to the user.** This prevents any silent tampering.
 
-> 🔴 **Capture stdout byte-faithfully (2026-10-22, protocol simplified)**: `entry.py` forces
-> UTF-8 on all three streams, so read it in a UTF-8-capable channel. Git Bash / `cmd /c` with
-> file redirection / WSL are byte-faithful with no action needed. On a Chinese-Windows
-> PowerShell host, set `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` **before**
-> invoking it — with plain CJK output this setting is load-bearing again (under the old base64
-> envelope it was not).
+> 🔴 **Encoding is no longer a setting you can get wrong (v1.3.21)**: `entry.py` writes the
+> payload with `sys.stdout.buffer.write(utf-8 bytes)` — a **constant**, not a negotiation. It does
+> not look at `sys.stdout.encoding`, `PYTHONIOENCODING`, or the console code page, and there is no
+> flag to change it. Verified under `PYTHONIOENCODING=cp936`: the captured bytes decode as valid
+> UTF-8 every time.
 >
-> 🔴 **Fallback for a skipped/mistyped encoding setting (automatic · 2026-10-22)**: because that
-> one-line setting is easy to forget or to apply *after* the call (an in-effect-only-for-later-
-> commands mistake), `entry.py` **always writes a second, intact copy** of the plain answer to
-> `%TEMP%/ct-advisor/last_answer.md` (UTF-8, no BOM, overwritten per call; `--answer-file PATH`
-> overrides the location, `--no-answer-file` disables it). If stdout shows `鏈熶复…`-style
-> mojibake, or the ASCII warning line `[ct-advisor] WARN: console encoding=…` appears, the run
-> itself still SUCCEEDED — **Read that file and deliver from it; never re-run Coze for an encoding
-> problem** (a local `session_store` cache hit replays the same answer with **zero** outbound
-> calls anyway). Reading the engine's own fallback artifact is sanctioned; hand-rolling a temp-file
-> relay for stdout, or re-encoding/re-transporting the answer yourself, is not.
+> What is *not* solved by that, and cannot be: a **terminal** may still render UTF-8 bytes through
+> its own code page (`鏈熶复…`). That is a display-layer problem, so the engine does not try to
+> detect it — instead every run also writes the identical bytes to
+> `<skill>/_answers/{checksum}.md` and prints `answer_file: _answers/{checksum}.md`. If the text
+> looks garbled, **read that file and deliver from it; never re-run Coze for an encoding problem**
+> (a `session_store` cache hit would replay the same answer with zero outbound calls anyway). The
+> path is ASCII by construction, so it stays readable in the very console that garbled the answer.
 >
-> One-line self-check before blaming the skill: `[Console]::OutputEncoding.WebName` must print
-> `utf-8`. Note `$OutputEncoding` is a **different** variable (it governs stdin sent to native
-> programs) and setting it alone does not help; and the setting is **per-process**, so it must be
-> applied in the *same* shell invocation that runs `entry.py`, not in an earlier one.
+> Optional hygiene, not a requirement: `[Console]::OutputEncoding = [Text.Encoding]::UTF8` before a
+> PowerShell invocation makes the *screen* readable too. Note `$OutputEncoding` is a **different**
+> variable (it governs stdin sent to native programs) and setting it alone does nothing; and the
+> setting is per-process, so it must be applied in the same shell invocation.
 
 
 > 🔴 **No host-model fallback (HARD GATE · 2026-10-15)**: ct-advisor is coze-only **by design** — there is no local knowledge base or database, so a host-model direct answer on a clinical question has no domain substrate and is **forbidden as a fallback** (a bare host-model answer was evaluated and rejected: quality cannot be guaranteed without the cloud knowledge base and tool chain). The same tiering rule means attachment / `doc_context` content must **never** leave the Coze channel. The ONLY sanctioned recovery for a broken capture is: **repair the capture → re-send once (≤1, usually served by the local cache)**. Everything else stops and reports.
 
 > 🔴 **Short-circuit output obeys the same contract (2026-10-15 · unified into `session_store.py` 2026-10-22)**: both short-circuit paths — `session_store.cache_get` (exact-fingerprint answer cache, cross-session) and `session_store.dedup_check` (near-duplicate within a session window) — are wired into **both** the `entry.py` main chain AND the workbench `ct-advisor-proxy.py` (`/run` / `/async_run`). A short-circuited answer leaves `entry.py` through the **same plain-text exit** as a fresh Coze call (stderr marks `answer-cache hit` / `dedup short-circuit`; the proxy returns a local pseudo-task so the front-end is oblivious). A cached answer is a legitimate delivery, not an error.
 
-> 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. The default is **one call per question**. **Re-calling `entry.py` purely to "verify" the output is strictly forbidden** — with the plain-text exit there is nothing left to verify locally. The single exception is decision-table row 2: **at most one re-send to repair a broken CAPTURE**, with the reason stated to the user — never for a checksum mismatch on clean text (row 3 → stop) and never without capture evidence. If you need to persist output, use `entry.py --out <file>` instead of re-running.
+> 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. The default is **one call per question**. **Re-calling `entry.py` purely to "verify" the output is strictly forbidden** — with the plain-text exit there is nothing left to verify locally. The single exception is decision-table row 2: **at most one re-send to repair a broken CAPTURE**, with the reason stated to the user — never for a checksum mismatch on clean text (row 3 → stop) and never without capture evidence. If you need to persist output, it is already on disk at `answer_file` — do not re-run for that either.
 
-**Verification discipline (L3 · 2026-10-22)**: the sha256 check MUST be computed against the stdout of the SAME `entry.py` call, in memory, and only when `--b64` was used or a mismatch is suspected — the trailing marker already proves completeness in the normal path. **Forbidden**: writing stdout to a temp file just for the check, extra tool round-trips, post-hoc temp-file cleanup, and any attempt by the LLM to re-encode or re-transport the answer.
+**Verification discipline (L3 · 2026-10-22, final in v1.3.21)**: the sha256 check is only needed on a suspected mismatch — the trailing marker already proves completeness in the normal path, and no flag can toggle the output shape any more. **Forbidden**: writing stdout to a temp file for the check, extra tool round-trips, post-hoc temp-file cleanup, and any attempt by the LLM to re-encode or re-transport the answer.
 
 ## Performance Optimization & Deployment Notes (L1/L2/L3, 2026-09-26)
 
 This skill has implemented four performance optimizations; see `PERF_SOP.md` for details:
 - **L1 Resident orchestration service** (`scripts/serve.py` + `entry.py` client): heavy modules are warmed up once, so local overhead → 0. Idle window raised 600s → 3600s (2026-10-16).
 - **L2 Parallel warm-up** (`scripts/orchestrate.py`): eliminates stacked serial imports.
-- **L3 Inline verification discipline**: sha256 is computed inline in memory — since 2026-10-22 the check is only needed on the `--b64` escape hatch, because the plain-text exit's trailing marker already proves completeness. Zero LLM round-trips.
+- **L3 Inline verification discipline**: sha256 is computed inline in memory and only on a suspected mismatch — the plain-text exit's trailing marker already proves completeness. Zero LLM round-trips.
 - **L4 Single-command + unified session store (2026-10-16 · unified & multi-turn 2026-10-22 · **single path 2026-10-22**)**: `scripts/entry.py` now emits the **final plain-text answer in one call** — no decode step, no second script, and the payload shrinks from 4× (base64 of CJK) back to 1×. `scripts/ask.py` is retained only as a zero-logic forwarder for stale callers. The unified `scripts/session_store.py` (shared by **both** entry.py and the workbench proxy) gives a 30-min cross-session answer cache + a 10-min in-session near-duplicate dedup, so a re-send / repeated question costs **0 Coze calls**; it also injects multi-turn `conversation_history` into the Coze payload so context carries across rounds (previously the history was computed but never injected — root cause of 18% "承接上一轮" manual recaps). Root cause fixed: the `dedup_guard` short-circuit had never been reachable from `entry.py` (guard wired only into the `refine_answer.py` CLI; `query_origin` never set by entry.py), so every re-run was a real Coze round-trip — three of them for a single question in the 2026-10-16 log.
 - **L5 Scope broadening via domain router (2026-10-22)**: `scripts/scope_guard.py` was rewritten as a controlled-vocabulary domain router (multi-label: compliance / ops / writing / design / stats / safety / registry / data / rws / methodology / medical / device / vet). The three real high-frequency blocks users actually use — **合规应答 / 项目运营 / 交付物撰写** — are now first-class in-scope core domains (a writing / outline / template question is NO LONGER treated as out-of-scope); only a clearly non-medical / non-life-science question (e.g. consumer electronics, finance, FMCG) emits a constructive referral. 0% out-of-scope on the 68 real questions from the past-30-day Feishu advisorlog.
 

@@ -17,14 +17,15 @@ ct-advisor — 唯一代码入口（本地 LLM 唯一允许的动作）
   python scripts/entry.py --q "用户问题"
   python scripts/entry.py --q "用户问题" --attach "/path/to/file.docx"
 
-  输出：stdout = 明文答案 + <<<CT_ANSWER_END>>> + checksum
-  （v1.3.19：内部仍用 base64 信封做**进程间**传输，但对外出口一次性解开为明文，
-   agent 零解码、体积回落到明文；`--b64` 仅作编码异常时的应急开关。）
+  输出（v1.3.20 起：全程明文，无编码分支、无开关）：
+    stdout = 明文答案 + <<<CT_ANSWER_END>>> + checksum + answer_file 行
+    另落一份 <技能根>/_answers/<sha16>.md（UTF-8，数据真源）
+  说明：标记与 checksum 只在 `_emit_plain` 这一个地方产生；编码恒为 UTF-8 字节
+  （`stdout.buffer.write`），不看控制台代码页、不看环境变量。
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -73,11 +74,7 @@ def _hidden_kwargs() -> dict:
 
 # ── 下游代码模块 ──────────────────────────────────────────────────────────────
 from route import is_vague
-from orchestrate import (
-    ANSWER_START, ANSWER_END, _wrap,
-    ANSWER_B64_START, ANSWER_B64_END,
-    run_orchestrate,
-)
+from orchestrate import ANSWER_END, run_orchestrate
 
 # ── B1 task 推断（2026-10-08）：payload 增加 suggested_task 辅助 Coze 端标注 ──
 # 2026-10-16 修复：suggested_task 此前被 orchestrate._build_request 静默丢弃。
@@ -111,121 +108,64 @@ TOOL_DELEGATE_END = "<<<CT_TOOL_DELEGATE_END>>>"
 MAX_FILE_BYTES = 5 * 1024 * 1024
 
 
-def _safe_wrap_with_checksum(text: str) -> str:
-    """sha256 校验包裹（与 orchestrate._wrap 同格式）"""
-    return _wrap(text)
+def _plain_text(text: str) -> str:
+    """内部通篇明文：只做行尾归一。标记与 checksum 只在出口产生一次。"""
+    return (text or "").replace("\r\n", "\n")
 
 
-def _extract_plain(output: str) -> str:
-    """从出口载荷（<<<CT_ANSWER_B64_START>>>…<END>>> + sha256）解出纯答案文本。
-
-    非包裹形态（本地澄清提示 / 降级提示）原样返回。用于会话历史记录——Coze 注入的
-    conversation_history 需要可读摘要，而非 B64 包裹。
-    """
-    try:
-        m = re.search(
-            re.escape(ANSWER_B64_START) + r"\s*(.*?)\s*" + re.escape(ANSWER_B64_END),
-            output or "", re.S,
-        )
-        if not m:
-            return output or ""
-        return base64.b64decode(m.group(1).strip()).decode("utf-8")
-    except Exception:  # noqa: BLE001
-        return output or ""
-
-
-def _emit_output(output: str, args) -> None:
-    """统一出口（2026-10-22）：处理 --out 落盘 / stdout 透传，并正常退出。
-
-    抽离原因：短路（dedup/cache 命中）与真实出站两路最终都走同一出口，
-    避免出口逻辑散落导致「--out 只在某路径生效」的不一致。
-    """
-    if args.out:
-        try:
-            out_path = Path(args.out)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(output, encoding="utf-8")
-            sys.stdout.write(f"[entry] 结果已写入 {out_path} ({len(output)} chars)\n")
-        except Exception as e:  # noqa: BLE001
-            sys.stderr.write(f"[entry] --out 写入失败: {type(e).__name__}: {e}\n")
-            sys.stdout.write(output)
-    else:
-        sys.stdout.write(output)
-    sys.exit(0)
-
-
-# ── 对外出口形态（2026-10-22 单一路径）──────────────────────────────────────
-# 内部（orchestrate / refine_answer / serve 三者之间）仍用 base64 信封，保证
-# 二进制安全；但**对外 stdout** 在此一次性解包为明文 + 尾部校验行。
-# 体积对比（6000 字纯中文）：明文 18 KB / base64 24 KB（正好压住 Bash 通道上限）。
+# ── 对外出口（2026-10-22 单一路径 · 唯一产生点）─────────────────────────────
+# 形态：明文正文 + <<<CT_ANSWER_END>>> + checksum 行 + answer_file 行（纯 ASCII）。
+# 结束标记放**尾部**：被通道截断时标记与 checksum 一起消失，失败一眼可辨。
 PLAIN_END_MARK = "<<<CT_ANSWER_END>>>"
 
-#: 控制台编码兜底（2026-10-22）：明文出口的正确性依赖 stdout 为 UTF-8，而中文
-#: Windows PowerShell 默认 cp936——用户可能忘记/跳过 `[Console]::OutputEncoding`
-#: 设置，此时中文在终端会变乱码（字节本身没坏，显示层坏了）。硬兜底 = **每次
-#: 都把明文答案另存一份 UTF-8 文件**，终端坏掉也能从文件完整读回（agent 用 Read
-#: 工具读文件走 UTF-8，与控制台编码无关）。固定文件名便于直接复用，不靠发现。
-ANSWER_FILE_NAME = "last_answer.md"
-
-
-def _is_utf8_stream(stream) -> bool:
-    """stdout/stderr 的编码是否 UTF-8（含 cp65001，Windows 控制台代码页 65001）。"""
-    enc = (getattr(stream, "encoding", "") or "").lower().replace("-", "").replace("_", "")
-    return enc in ("utf8", "utf8sig", "cp65001")
-
-
-def _answer_file_path(args=None):
-    """兜底答案文件路径：--answer-file 优先；否则 %TEMP%/ct-advisor/last_answer.md。"""
-    import tempfile
-    explicit = getattr(args, "answer_file", None) if args is not None else None
-    if explicit:
-        return Path(explicit)
-    return Path(tempfile.gettempdir()) / "ct-advisor" / ANSWER_FILE_NAME
+#: 答案文件目录（相对技能根，全 ASCII）＝数据真源。stdout 里给的是**相对路径**，
+#: 避免用户名/目录含中文时路径本身在 cp936 控制台再次变成乱码。
+ANS_DIR_NAME = "_answers"
 
 
 def _checksum16(text: str) -> str:
-    """与 B64 信封同口径的 sha256 前 16 位。"""
+    """答案正文（LF 口径）的 sha256 前 16 位。"""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def _emit_plain(output: str, args) -> None:
-    """对外唯一出口形态：明文 + 尾部结束标记 + checksum。
+def _answer_body(output: str) -> str:
+    """从出口载荷取正文：剥掉尾部标记与其后的 checksum 行（内部已无编码包裹）。"""
+    s = _plain_text(output)
+    idx = s.rfind(PLAIN_END_MARK)
+    if idx >= 0:
+        s = s[:idx]
+    s = re.sub(r"(?m)^[ \t]*checksum:[ \t]*[0-9a-f]{16}[ \t]*$", "", s)
+    return s.strip("\n")
 
-    结束标记放在**尾部**而非包裹首尾：一旦被通道截断，标记与 checksum 会一起
-    消失，失败信号一眼可辨；B64 时代则必须先解码才会发现结构损坏。
 
-    编码兜底（2026-10-22）：无论终端编码如何，明文恒另存一份 UTF-8 文件
-    （--no-answer-file 关闭）。终端是 cp936 时额外在**首行**打一条纯 ASCII 告警，
-    保证「设置被跳过」也有可读出口，而不是给用户一屏乱码。
+def _emit_plain(output: str, exit_code: int = 0) -> None:
+    """唯一出口：写答案文件（UTF-8）→ 按 UTF-8 字节写 stdout → 退出。
+
+    编码决策**不在这里做**：不看 isatty、不看 sys.stdout.encoding、不看环境变量，
+    一律 `stdout.buffer.write(utf-8 字节)`——常量编码，没有协商分支，也没有开关。
+    显示层（终端代码页）与本函数无关：数据真源是 `_answers/<sha16>.md`，
+    stdout 末尾的 `answer_file:` 行是纯 ASCII，任何代码页下都读得出来。
     """
-    plain = _extract_plain(output)          # B64 信封 → 明文；非信封原样返回
-    norm = (plain or "").replace("\r\n", "\n")
-    if not norm.endswith("\n"):
-        norm += "\n"
-    payload = f"{norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(norm)}\n"
+    body = _answer_body(output)
+    cs = _checksum16(body + "\n")          # 校验口径 = 标记之前的全部字节（含尾换行）
+    payload = f"{body}\n{PLAIN_END_MARK}\nchecksum: {cs}\n"
 
-    # 1) 无条件 UTF-8 落盘（兜底出口；失败不影响 stdout 主路径）
-    note = ""
-    if not getattr(args, "no_answer_file", False):
-        try:
-            ap = _answer_file_path(args)
-            ap.parent.mkdir(parents=True, exist_ok=True)
-            ap.write_text(payload, encoding="utf-8")
-            note = str(ap)
-        except Exception as e:  # noqa: BLE001
-            sys.stderr.write(f"[entry] 答案兜底文件写入失败: {type(e).__name__}: {e}\n")
+    rel = f"{ANS_DIR_NAME}/{cs}.md"
+    try:
+        d = SKILL_ROOT / ANS_DIR_NAME
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{cs}.md").write_text(payload, encoding="utf-8")
+        payload += f"answer_file: {rel}\n"
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"[entry] 答案文件写入失败: {type(e).__name__}: {e}\n")
 
-    # 2) 控制台编码自检：非 UTF-8 终端只给一条 ASCII 告警（不阻断输出）
-    if sys.stdout.isatty() and not _is_utf8_stream(sys.stdout):
-        enc = (getattr(sys.stdout, "encoding", "") or "?")
-        sys.stdout.write(
-            "[ct-advisor] WARN: console encoding=%s (not UTF-8). Chinese text below "
-            "may look garbled; the intact answer is at:\n  %s\n"
-            "Fix: [Console]::OutputEncoding=[Text.Encoding]::UTF8 "
-            "(or read the file above).\n" % (enc, note or "(not written)")
-        )
+    try:
         sys.stdout.flush()
-    _emit_output(payload, args)
+        sys.stdout.buffer.write(payload.encode("utf-8"))
+        sys.stdout.buffer.flush()
+    except Exception:  # noqa: BLE001
+        sys.stdout.write(payload)
+    sys.exit(exit_code)
 
 
 def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
@@ -373,17 +313,6 @@ def main():
     ap.add_argument("--q-meta", default=None, help="可选 query_meta JSON")
     ap.add_argument("--config", default=str(SKILL_ROOT / "config.json"))
     ap.add_argument("--max-clarify", type=int, default=3, help="澄清轮数上限")
-    ap.add_argument("--out", default=None,
-                    help="把完整 stdout（明文答案 + 尾部标记 + checksum）写入该文件；"
-                         "stdout 只打印一行确认，避免长载荷经过 agent 上下文")
-    ap.add_argument("--answer-file", default=None,
-                    help="编码兜底文件路径（默认 %%TEMP%%/ct-advisor/last_answer.md）："
-                         "明文答案恒以 UTF-8 另存一份，控制台编码错乱时可从此文件读回")
-    ap.add_argument("--no-answer-file", action="store_true",
-                    help="关闭兜底文件写入（仅在确定 stdout 编码正确时使用）")
-    ap.add_argument("--b64", action="store_true",
-                    help="应急：输出旧的 base64 信封（仅当明文通道出现编码问题时使用；"
-                         "内部协议仍为 B64，本开关只影响对外 stdout 形态）")
     ap.add_argument("--session", default="",
                     help="会话标识（跨轮上下文/去重键）：proxy 或飞书应传入稳定 ID；"
                          "缺失则退化为单轮（仍享全局答案缓存，仅无多轮上下文）")
@@ -495,11 +424,10 @@ def main():
             questions = clarify_result.get("questions", [])
             q_text = "\n".join(f"  - {q}" for q in questions)
             sys.stderr.write(f"[entry] 需澄清 {len(questions)} 项\n")
-            sys.stdout.write(_safe_wrap_with_checksum(
+            _emit_plain(
                 f"在回答之前，需要澄清以下问题：\n\n{q_text}\n\n"
                 f"请针对以上问题逐一回复后，我将基于您的补充信息继续分析。"
-            ))
-            sys.exit(0)
+            )
         # decidable / forced_decide → 继续发 Coze
 
     # ── 5) 短路：近窗去重 + 全局答案缓存（P0-2 修复）────────────────────
@@ -514,7 +442,7 @@ def main():
         if _dh and _dans:
             sys.stderr.write(
                 f"[entry] 近窗重复命中（{_dsecs}s 前）→ 本地短路复用，不出站\n")
-            output = _wrap(_dans)
+            output = _plain_text(_dans)
             shortcut = True
         else:
             _cached = _ss.cache_get(
@@ -524,7 +452,7 @@ def main():
             if _cached:
                 sys.stderr.write(
                     "[entry] 全局答案缓存命中 → 本地短路复用，不出站\n")
-                output = _wrap(_cached)
+                output = _plain_text(_cached)
                 shortcut = True
     except Exception:  # noqa: BLE001
         pass
@@ -536,7 +464,7 @@ def main():
             output = _run_orchestrate(payload, args.config)
         except Exception as e:
             sys.stderr.write(f"[entry] orchestrate 异常: {type(e).__name__}: {e}\n")
-            output = _safe_wrap_with_checksum(
+            output = _plain_text(
                 f"⚠️ Coze 服务暂时不可用（{type(e).__name__}），"
                 f"请稍后重试或检查网络连接。"
             )
@@ -550,11 +478,11 @@ def main():
                 _ci_out = _run_card_inline(card_json, args.config)
             except Exception as e:  # noqa: BLE001
                 sys.stderr.write(f"[entry] card-inline 异常: {type(e).__name__}: {e}\n")
-            if ANSWER_B64_START in _ci_out and ANSWER_B64_END in _ci_out:
+            if _ci_out.strip():
                 output = _ci_out
             else:
-                sys.stderr.write("[entry] card-inline 产物形态异常，降级为人读提示\n")
-                output = _safe_wrap_with_checksum(
+                sys.stderr.write("[entry] card-inline 产物为空，降级为人读提示\n")
+                output = _plain_text(
                     "⚠️ 技能结果缝合失败：委托执行的本地技能未能返回有效结果。\n\n"
                     "可能原因：技能参数不完整、技能执行超时或该技能当前不可用。\n"
                     "请补充必要信息后重试；若持续失败，请把本条提示与上方 stderr 反馈给技能维护者。"
@@ -563,7 +491,7 @@ def main():
         # ── 6b) 记录会话历史（仅真实出站；短路命中不重复记轮）────────
         try:
             import session_store as _ss
-            _plain = _extract_plain(output)
+            _plain = _answer_body(output)
             if _plain.strip():
                 _ss.record(
                     session_id, original_question, answer=_plain,
@@ -574,12 +502,8 @@ def main():
         except Exception:  # noqa: BLE001
             pass
 
-    # ── 7) 出口（唯一对外形态：明文 + 尾部校验；--b64 仅应急）────────────
-    if getattr(args, "b64", False):
-        sys.stderr.write("[entry] --b64 应急模式：输出 base64 信封\n")
-        _emit_output(output, args)
-    else:
-        _emit_plain(output, args)
+    # ── 7) 出口（唯一形态、唯一产生点；无开关）──────────────────────────
+    _emit_plain(output)
 
 
 if __name__ == "__main__":
@@ -594,18 +518,12 @@ if __name__ == "__main__":
     except BaseException as _e:  # noqa: BLE001
         try:
             sys.stderr.write(f"[entry] 未捕获异常: {type(_e).__name__}: {_e}\n")
-            _norm = ("⚠️ 技能执行出现未预期错误，无法生成答案。\n\n"
-                     f"{type(_e).__name__}: {_e}\n\n"
-                     "请稍后重试；若持续出现，请把本条提示与上方 stderr 反馈给技能维护者。\n")
-            _payload = f"{_norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(_norm)}\n"
-            # 与正常出口同口径：兜底文案也落一份 UTF-8 文件，控制台编码错乱时仍可读回
-            try:
-                _ap = _answer_file_path()
-                _ap.parent.mkdir(parents=True, exist_ok=True)
-                _ap.write_text(_payload, encoding="utf-8")
-            except Exception:  # noqa: BLE001
-                pass
-            sys.stdout.write(_payload)
-        except Exception:  # noqa: BLE001
+            _emit_plain(
+                "⚠️ 技能执行出现未预期错误，无法生成答案。\n\n"
+                f"{type(_e).__name__}: {_e}\n\n"
+                "请稍后重试；若持续出现，请把本条提示与上方 stderr 反馈给技能维护者。",
+                exit_code=1,
+            )
+        except BaseException:  # noqa: BLE001
             pass
         sys.exit(1)
