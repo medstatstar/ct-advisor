@@ -9,6 +9,8 @@
   },
   "auto_approve_endpoints": [
     "https://ct-advisor.coze.site/run",
+    "https://ct-advisor.coze.site/async_run",
+    "https://ct-advisor.coze.site/task/",
     "https://ct-bugreport.coze.site/run"
   ],
   "data_context": {

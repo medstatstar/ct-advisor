@@ -134,12 +134,25 @@ def _checksum16(text: str) -> str:
 
 
 def _answer_body(output: str) -> str:
-    """从出口载荷取正文：剥掉尾部标记与其后的 checksum 行（内部已无编码包裹）。"""
+    """从出口载荷取正文：剥掉**合法的尾部**（标记独占一行 + 紧跟 checksum 行）。
+
+    为什么用正则而不是 `rfind(PLAIN_END_MARK)`（2026-10-22 审查）：答案正文本身
+    可能引用 `<<<CT_ANSWER_END>>>`（用户恰好在问这套输出协议），裸 rfind 会从那里
+    截断，静默丢掉后半段正文。只有「标记自成一行、下一行是 16 位十六进制 checksum」
+    这一种形态才是协议尾部，其余位置一律按正文处理。
+    """
     s = _plain_text(output)
-    idx = s.rfind(PLAIN_END_MARK)
-    if idx >= 0:
-        s = s[:idx]
-    s = re.sub(r"(?m)^[ \t]*checksum:[ \t]*[0-9a-f]{16}[ \t]*$", "", s)
+    m = re.search(r"(?m)^[ \t]*" + re.escape(PLAIN_END_MARK) + r"[ \t]*\n"
+                  r"checksum:[ \t]*[0-9a-f]{16}[ \t]*(?:\n|$)", s)
+    if m:
+        s = s[:m.start()]
+    else:
+        # 兼容：标记在**末尾**但 checksum 缺失（异常载荷）→ 只剥末尾那一行。
+        # 绝不按行全删：正文本身可能就有一行 `<<<CT_ANSWER_END>>>`（用户恰好在问
+        # 这套协议），按行删除会吃掉正文。
+        s2 = s.rstrip()
+        if s2.endswith(PLAIN_END_MARK):
+            s = s2[: -len(PLAIN_END_MARK)]
     return s.strip("\n")
 
 
@@ -227,7 +240,8 @@ def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
         try:
             result = subprocess.run(
                 [sys.executable, str(SCRIPT_DIR / "office_to_md.py"), str(p)],
-                capture_output=True, text=True, timeout=120, **_hidden_kwargs()
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120, **_hidden_kwargs()
             )
         except Exception as _e:  # noqa: BLE001
             return question + (
@@ -290,7 +304,8 @@ def _run_clarify(original_question: str, max_rounds: int = 3) -> dict:
         result = subprocess.run(
             [sys.executable, str(SCRIPT_DIR / "clarify_loop.py"),
              "--payload-inline", payload],
-            capture_output=True, text=True, timeout=30, **_hidden_kwargs()
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, **_hidden_kwargs()
         )
         return json.loads(result.stdout)
     except Exception as _e:  # noqa: BLE001
@@ -306,7 +321,7 @@ def _extract_delegate_card(output: str) -> str | None:
     2026-10-16 修复：此前 `output.index(TOOL_DELEGATE_END)` 在「有 START 无 END」
     （输出被截断 / 拼接异常）时抛 ValueError，而调用方没有 try → main 直接崩溃、
     stdout 为空。现整段包在 try 内，任何形态异常一律降级为 None（当作无委托处理，
-    由上游的 B64 包裹校验兜底）。
+    由正常作答流程继续）。
     """
     try:
         if TOOL_DELEGATE_START not in output or TOOL_DELEGATE_END not in output:
@@ -322,13 +337,25 @@ def _extract_delegate_card(output: str) -> str | None:
 
 
 def _run_card_inline(card_json: str, config_path: str) -> str:
-    """代码执行 ct 技能并缝合（跳过 LLM 决策）"""
+    """代码执行 ct 技能并缝合（跳过 LLM 决策）。
+
+    编码（2026-10-22 审查修复）：必须**显式** `encoding="utf-8"`。`refine_answer.py`
+    内部已把 stdout 固定为 UTF-8 字节，而 `text=True` 单独使用会退回父进程 locale
+    解码；在中文 Windows（cp936）上，含中文的缝合答案会变成乱码，甚至因非法字节抛
+    `UnicodeDecodeError`——异常又被 main 降级成「技能结果缝合失败」，把编码问题
+    伪装成技能故障，极难定位。同理，子进程 stderr 一并转出，否则诊断信息全丢。
+
+    ⚠️ 同一规则适用于本文件内所有 `subprocess.run(..., text=True)`：不得依赖隐式 locale。
+    """
     result = subprocess.run(
         [sys.executable, str(SCRIPT_DIR / "refine_answer.py"),
          "--card-inline", card_json,
          "--config", config_path],
-        capture_output=True, text=True, timeout=300, **_hidden_kwargs()
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=300, **_hidden_kwargs()
     )
+    if result.stderr.strip():
+        sys.stderr.write(f"[entry] card-inline stderr:\n{result.stderr.rstrip()}\n")
     return result.stdout
 
 

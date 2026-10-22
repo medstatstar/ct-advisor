@@ -51,9 +51,17 @@ def _dir() -> Path:
     return d
 
 
-def key_of(question: str, doc_context: str = "", difficulty: str = "") -> str:
-    """问题指纹。同问题 + 同附件载荷 + 同难度 → 同 key。"""
-    raw = f"{(question or '').strip()}|{doc_context or ''}|{difficulty or ''}"
+def key_of(question: str, doc_context: str = "", difficulty: str = "",
+           output_format: str = "") -> str:
+    """问题指纹。同问题 + 同附件载荷 + 同难度 + 同输出形态 → 同 key。
+
+    2026-10-22 主链审查修复（P0）：纳入 output_format。此前 key 只看前三项，于是
+    `output_format=doc` 的请求会命中 auto 模式缓存的短答案（C3 的 complex≤1000 字
+    上限），doc 模式被**静默旁路**——用户选了「要成文」却拿到提纲式短答，与
+    v1.3.18 在 session_store.cache_key 上的修复是同一个缺陷的两处实例。
+    """
+    raw = (f"{(question or '').strip()}|{doc_context or ''}|{difficulty or ''}"
+           f"|{output_format or ''}")
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 

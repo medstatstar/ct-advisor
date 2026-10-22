@@ -15,6 +15,13 @@
   `requests` 不再是必需依赖，「依赖缺失」作为一类用户可见失败被整体消灭；
   urllib 同样读取 HTTP(S)_PROXY 环境变量，HTTPS 经 http 代理时自动走 CONNECT 隧道
   （本机实测：经系统代理 POST 端点返回 200）。
+- 调用方式（2026-10-19 起 **async-first**）：所有 Coze 调用默认走
+  `POST /async_run`（毫秒级返回 task_id）+ `GET /task/{task_id}` 轮询——
+  同步 `/run` 与流式 `/stream_run` 均会被 Coze 云网关 stgw 在 60.0s 整 504 掐断
+  （ct-base §20.17.1 实测定形），只有异步提交+轮询能穿越；而请求耗时无法可靠
+  预判（实测 3~70s 横跨 60s 线，难度分级预测复杂度不预测时长），故不按预测分流、
+  一律异步。异步是叠加不是替换：端点无 `/async_run`（404/405）或异步存储不可用
+  （5xx）时自动回退同步 `/run`；`CT_ADVISOR_ASYNC=0` 可整体关停异步（调试/回退）。
 - 失败双通道（2026-10-15 B 方案）：人读提示挂 `RefineResult.connection_error` /
   `internal_error` 供 `build_output` 渲染；机器错误码经 `emit_err_signal` 发 stderr
   `[ct-advisor][ERR]` 信号，供调用方 agent 按 SKILL.md「错误自愈协议」决策。
@@ -47,6 +54,8 @@ import os
 import re
 import socket
 import sys
+import time
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -99,6 +108,53 @@ def _env_proxy_present() -> bool:
         if os.environ.get(_k):
             return True
     return False
+
+
+# ── 异步调用基础设施（2026-10-19 async-first，ct-base §20.17.2 标准契约） ──
+# 参数口径与 ct-advisor workbench pollTask（index.html:1163-1199）一致，并取其
+# 「404 继续轮询 / result 多形态适配 / 终态分类」生产验证行为。
+_ASYNC_POLL_FIRST = 1.0        # 首次轮询前置等待（秒）：提交后毫秒级返回，给秒回
+                               # 完成（缓存命中）一次就近命中机会，又不空转
+_ASYNC_POLL_INTERVAL = 2.5     # 稳态轮询间隔（秒）
+_ASYNC_SUBMIT_TIMEOUT = 30.0   # 提交超时（秒）：async 提交毫秒级，30s 充分且低于 stgw 60s 硬线
+_ASYNC_POLL_TIMEOUT = 15.0     # 单次轮询 GET 超时（秒）
+_ASYNC_POLL_5XX_TOLERANCE = 10 # 轮询遇 5xx 的连续容忍次数（任务仍在跑，不因单次抖动废弃）
+_ASYNC_TERMINAL_RUNNING = ("", "running", "pending", "queued", "submitted", "accepted")
+
+
+class _AsyncUnsupported(Exception):
+    """异步端点不可用（404/405 旧部署、5xx 存储不可用、无 task_id）→ 调用方回退同步 /run。"""
+
+
+class _AsyncTaskFailed(Exception):
+    """async 任务终态为 failed/timeout/cancelled（服务端明确报错，非网络问题）。"""
+
+
+def _derive_async_urls(endpoint: str):
+    """从配置的 `/run` 端点推导 `(/async_run, /task/ 基址)`。
+
+    endpoint 形如 ``https://ct-advisor.coze.site/run``；容忍尾斜杠；
+    非 ``/run`` 结尾时按原样作 base（只补路径，不改写用户配置）。
+    """
+    ep = (endpoint or "").strip().rstrip("/")
+    base = ep[: -len("/run")] if ep.endswith("/run") else ep
+    return base + "/async_run", base + "/task/"
+
+
+def _async_error_text(row: dict, status: str) -> str:
+    """从 /task 终态行提取服务端错误文案（兼容 str / {message|error_message} / 缺失）。"""
+    e0 = row.get("error") if isinstance(row, dict) else None
+    if isinstance(e0, str) and e0.strip():
+        return e0.strip()
+    if isinstance(e0, dict):
+        for k in ("message", "error_message", "detail"):
+            v = e0.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+    m = row.get("message") if isinstance(row, dict) else None
+    if isinstance(m, str) and m.strip():
+        return m.strip()
+    return "task %s" % status
 
 _TIMEOUT_HINT = (
     "⚠️ 请求超时：Coze 服务未在限定时间内响应。请求很可能已送达 Coze，仅是回包较慢。\n\n"
@@ -210,6 +266,15 @@ def _classify_outbound_error(e: Exception, proxy_attempted: bool = False):
             "       curl -I https://ct-advisor.coze.site/run\n"
             "     若连不通，检查防火墙 / 杀毒软件是否拦截了 Python 出网。\n"
             "  ④ 排查完成后，重新运行本技能即可。" % _proxy_hint)
+
+    # ── async 任务终态失败（2026-10-19）：服务端明确报错，非网络问题，重试可能恢复 ──
+    if isinstance(e, _AsyncTaskFailed):
+        return ("COZE_TASK_FAILED",
+            "⚠️ Coze 云端任务未成功完成（%s）。\n\n"
+            "请按以下步骤处理：\n"
+            "  ① 稍等 1–2 分钟后重新运行本技能（云端偶发拥堵多可自行恢复）；\n"
+            "  ② 若持续出现，请把本提示连同上面的错误信息反馈给技能维护者。"
+            % (str(e) or type(e).__name__))
 
     return (None, None)
 
@@ -608,10 +673,19 @@ class Refiner(ABC):
 class CozeRefiner(Refiner):
     """扣子服务器精校（唯一精校后端）：外发 3 变量，≤timeout 秒回收 final_answer；异常兜底草稿。
 
+    调用方式（2026-10-19 起 async-first）：`_call_coze` 默认走
+    `POST /async_run` + `GET /task/{task_id}` 轮询（`_call_coze_async`）——
+    同步 `/run` / 流式 `/stream_run` 均会被 Coze 云网关 stgw 60.0s 整 504 掐断
+    （ct-base §20.17.1 实测），而请求耗时无法可靠预判（实测 3~70s 横跨 60s 线），
+    故一律异步、不按难度分流。端点无 `/async_run`（404/405）或异步存储不可用
+    （5xx）时回退同步 `/run`；`CT_ADVISOR_ASYNC=0` 整体关停异步。
+
     超时策略（2026-08-16）：默认 timeout=90s；complex / 模板类 / 追问类问题放宽到 long_timeout
     （默认 300s）——服务端 full_analysis 完整输出模式（模板归纳 / 长文档生成）或结合多轮
     上下文的追问类问题耗时长，
-    90s 会被提前截断。服务端 main.py TIMEOUT_SECONDS=900，不会先于客户端砍断，放宽安全。
+    90s 会被提前截断。异步路径下该超时即轮询总时限（到期抛 socket.timeout，
+    与同步路径同一分类：TIMEOUT → 回退本地草稿）；服务端任务自身 900s 超时，
+    客户端到期后任务仍在后台跑完并落缓存（与同步路径的服务端行为一致，不主动取消）。
     由 build_refiner() 始终实例化。
     """
 
@@ -806,6 +880,199 @@ class CozeRefiner(Refiner):
                 return ""
             time.sleep(0.1)
 
+    def _async_enabled(self) -> bool:
+        """异步总开关：env ``CT_ADVISOR_ASYNC=0/off/false/no`` 时强制同步 /run。
+
+        逃生门用于调试与紧急回退（如线上 /async_run 行为异常时快速关停），
+        不影响端点缺省时的自动回退。
+        """
+        v = os.environ.get("CT_ADVISOR_ASYNC", "").strip().lower()
+        return v not in ("0", "off", "false", "no")
+
+    def _send(self, make_request, timeout: float):
+        """出站传输（stdlib urllib，零第三方依赖）：系统代理优先、仅连接失败直连重试一次。
+
+        重试语义（与历史 requests 版一致）：
+          1) 有系统代理 env → 先走系统代理（默认 opener 读 env 代理）；
+          2) 仅「连接阶段」失败（URLError / OSError：代理不可达、DNS、拒连）
+             才强制直连（空 ProxyHandler）重试一次；
+          3) 超时（socket.timeout / TimeoutError）**不重试**并原样上抛——
+             Coze 多半已收到，重试 = 重复发送；
+          4) HTTPError（4xx/5xx）是服务端响应而非连接问题，直接返回交调用方分类。
+
+        返回 ``(raw_bytes|None, http_error|None, last_exc|None)``：
+          - raw 非空    → 2xx 响应体；
+          - http_error  → 服务端有响应（HTTPError 本身即响应对象）；
+          - 均空        → 所有路径连接失败，last_exc 为最后一次异常。
+        """
+        import urllib.error as _urlerr
+        import urllib.request as _urlreq
+
+        _try_orders = (
+            [("system-proxy", None), ("direct", "direct")]
+            if _env_proxy_present() else
+            [("direct", "direct")]
+        )
+        _last_exc = None
+        for _label, _proxies in _try_orders:
+            _opener = (_urlreq.build_opener() if _proxies is None
+                       else _urlreq.build_opener(_urlreq.ProxyHandler({})))
+            try:
+                with _opener.open(make_request(), timeout=timeout) as _r:
+                    return _r.read(), None, None
+            except _urlerr.HTTPError as _e:
+                return None, _e, None
+            except (socket.timeout, TimeoutError):
+                raise
+            except (_urlerr.URLError, OSError) as _e:
+                _last_exc = _e
+                try:
+                    sys.stderr.write(
+                        f"[ct-advisor] {_label} 连接失败({type(_e).__name__})，尝试下一路径...\n"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                continue
+        return None, None, _last_exc
+
+    def _call_coze_async(self, req: "RefineRequest", headers: Dict[str, str],
+                         body: bytes, timeout: float) -> RefineResult:
+        """异步主路径（2026-10-19）：POST /async_run 秒回 task_id → 轮询 /task/{id} 至终态。
+
+        契约（ct-base §20.17.2，与 workbench pollTask 对齐）：
+          - 提交：毫秒级返回 ``{task_id}``；客户端生成 run_id 经 ``X-Run-Id`` 上传
+            （服务端 task_id == run_id 一个 ID 走到底，取消契约可按它精确匹配）；
+          - 轮询：GET /task/{task_id}，首次 1s 后、其后每 2.5s；总时限 = 本次解析的
+            timeout（到期抛 socket.timeout，与同步路径同一 TIMEOUT 分类）；
+          - 终态：completed → 解析 result 信封（与 /run 同构）；failed/timeout/
+            cancelled → 抛 _AsyncTaskFailed / socket.timeout；
+          - 韧性：轮询遇 404（行未可见，最终一致性）/ 连接抖动 / 5xx（连续容忍上限内）
+            均继续轮询——任务仍在服务端跑，不因单次抖动废弃；
+          - 回退：提交遇 404/405（旧部署无端点）或 5xx（异步存储不可用）→ 抛
+            _AsyncUnsupported，由 _call_coze 落同步 /run。
+        """
+        import urllib.request as _urlreq
+
+        async_url, task_base = _derive_async_urls(self.endpoint)
+        if not (self.endpoint or "").strip():
+            raise _AsyncUnsupported("empty endpoint")
+
+        run_id = uuid.uuid4().hex
+        _ah = dict(headers)
+        _ah["X-Run-Id"] = run_id
+        raw, http_error, last_exc = self._send(
+            lambda: _urlreq.Request(async_url, data=body, method="POST", headers=_ah),
+            min(_ASYNC_SUBMIT_TIMEOUT, max(1.0, timeout)))
+        if raw is None:
+            if http_error is not None:
+                # 404/405 = 旧部署无 async 端点；5xx = 异步存储不可用 → 同步兜底
+                if http_error.code in (404, 405) or http_error.code >= 500:
+                    raise _AsyncUnsupported("async submit HTTP %s" % http_error.code)
+                raise http_error  # 4xx（401/400…）原样上抛，走既有错误分类
+            raise last_exc if last_exc is not None else RuntimeError(
+                "async submit: all outbound paths failed")
+        try:
+            sub = json.loads(raw.decode("utf-8"))
+        except Exception as _e:
+            raise _AsyncUnsupported("async submit: non-JSON response (%s)"
+                                    % type(_e).__name__)
+        task_id = ""
+        if isinstance(sub, dict):
+            task_id = str(sub.get("task_id") or sub.get("run_id") or "")
+        if not task_id:
+            raise _AsyncUnsupported("async submit: no task_id")
+
+        _ph = {"Authorization": headers.get("Authorization", "")}
+        deadline = time.monotonic() + max(1.0, timeout)
+        _5xx = 0
+        _first = True
+        while True:
+            _nap = _ASYNC_POLL_FIRST if _first else _ASYNC_POLL_INTERVAL
+            _first = False
+            _remain = deadline - time.monotonic()
+            if _remain <= 0:
+                raise socket.timeout("async poll deadline exceeded (%.0fs)" % timeout)
+            time.sleep(min(_nap, _remain))
+            try:
+                raw, http_error, last_exc = self._send(
+                    lambda: _urlreq.Request(task_base + task_id, method="GET", headers=_ph),
+                    _ASYNC_POLL_TIMEOUT)
+            except (socket.timeout, TimeoutError):
+                continue  # 单次轮询超时：任务仍在服务端跑，下一轮再试（deadline 兜底）
+            if raw is None:
+                if http_error is not None:
+                    if http_error.code == 404:
+                        continue  # 行尚未可见（最终一致性）→ 继续轮询
+                    if http_error.code >= 500:
+                        _5xx += 1
+                        if _5xx >= _ASYNC_POLL_5XX_TOLERANCE:
+                            raise http_error
+                        continue
+                    raise http_error  # 4xx：鉴权等问题，不空转
+                continue  # 连接层抖动：任务仍在跑，下一轮再试
+            _5xx = 0
+            try:
+                row = json.loads(raw.decode("utf-8"))
+            except Exception:
+                continue  # 轮询响应损坏：下一轮再试，不废掉已在跑的任务
+            if not isinstance(row, dict):
+                continue
+            st = str(row.get("status") or "").strip().lower()
+            if st in _ASYNC_TERMINAL_RUNNING:
+                continue
+            if st == "completed":
+                return self._result_from_async_row(row, req, task_id)
+            if st in ("failed", "error"):
+                raise _AsyncTaskFailed(_async_error_text(row, st))
+            if st == "timeout":
+                raise socket.timeout(_async_error_text(row, st)
+                                     or "async task timeout (server-side)")
+            if st == "cancelled":
+                raise _AsyncTaskFailed("task cancelled")
+            # 未知状态：保守继续轮询（不误判终态）
+
+    def _result_from_async_row(self, row: dict, req: "RefineRequest",
+                               task_id: str) -> RefineResult:
+        """把 /task 轮询终行的 result 信封解析为 RefineResult（与同步 /run 同构）。
+
+        result 多形态适配（对齐 workbench pollTask）：dict 直接用；base64/JSON
+        字符串先解码；缺 result 时回退 row.data / row.output / row.final_answer。
+        """
+        data = row.get("result")
+        if isinstance(data, str) and data.strip():
+            _s = data.strip()
+            try:
+                data = json.loads(_s)
+            except Exception:
+                try:
+                    import base64 as _b64
+                    data = json.loads(_b64.b64decode(_s + "===", validate=False)
+                                      .decode("utf-8"))
+                except Exception:
+                    data = {"final_answer": _s}
+        if not isinstance(data, dict):
+            data = {}
+            for _k in ("data", "output"):
+                _v = row.get(_k)
+                if isinstance(_v, dict):
+                    data = _v
+                    break
+        if not data and isinstance(row.get("final_answer"), str):
+            data = {"final_answer": row["final_answer"]}
+        # 与同步路径同一解析口径：final_answer 优先、老契约 answer 兼容、均缺回退草稿
+        final = data.get("final_answer") or data.get("answer") or req.draft_answer
+        result = RefineResult(
+            final_answer=strip_display_tags(final),
+            cached_answer=data.get("cached_answer") or "",
+            cache_hit=bool(data.get("cache_hit", False)),
+            need_tool=data.get("need_tool") or None,
+            params=data.get("params") or {},
+            run_id=str(data.get("run_id") or task_id or ""),
+        )
+        # §20.15：顶层可选 message 字段（Coze 业务侧表面提示），本地置顶渲染 banner
+        result.message = _normalize_coze_message(data.get("message"))
+        return result
+
     def _call_coze(self, req: RefineRequest, timeout: float) -> RefineResult:
         """真正发起一次 Coze 调用；任何失败都向上抛（由调用方决定回退/退出）。
 
@@ -815,6 +1082,8 @@ class CozeRefiner(Refiner):
           - 缓存命中：cache_hit=True，final_answer=cached_answer
 
         传输层为 stdlib urllib（零第三方依赖，2026-10-15 起），无需 requests。
+        调用方式（2026-10-19 起）：**异步优先**（/async_run + 轮询），同步 /run
+        仅作旧部署/异步不可用时的兜底——理由见 _call_coze_async docstring。
         """
         # 2026-10-15（C 方案）：传输层改 stdlib urllib，此处不再需要 requests
         # （漏删这行会在 requests 缺失时直接 ImportError，废掉整个 C 方案）。
@@ -830,58 +1099,30 @@ class CozeRefiner(Refiner):
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        # ── 出站传输层（2026-10-15 C 方案：stdlib urllib，零第三方依赖） ──
-        # urllib 默认 opener 经 ProxyHandler(getproxies()) 读取环境变量代理
-        # （HTTP(S)_PROXY，大小写不敏感归一）；HTTPS 经 http 代理时自动走 CONNECT
-        # 隧道——本机实测：经系统代理 POST 本端点返回 200。
-        # 重试顺序（与 requests 版语义一致）：
-        #   1) 检测到系统代理 env → 先走系统代理（默认 opener，等价 proxies=None）；
-        #   2) 仅「连接阶段」失败（URLError / OSError：代理不可达、DNS、连接被拒）
-        #      才回退强制直连重试一次（ProxyHandler({}) 空代理表）；
-        #   3) 超时（TimeoutError）不重试：无论哪条路径，Coze 多半已收到请求，
-        #      重试只会造成重复发送；
-        #   4) HTTPError（4xx/5xx）是服务端响应而非连接问题：跳出循环单独处理。
+        _body = json.dumps(payload).encode("utf-8")
+
+        # ── 异步优先（2026-10-19，用户裁定「全部改异步」） ──
+        # 同步 /run 与流式 /stream_run 均被 stgw 60.0s 硬超时掐断（§20.17.1），且耗时
+        # 无法可靠预判（实测 3~70s 横跨 60s 线）→ 一律走 /async_run + 轮询；
+        # 仅「异步端点/存储不可用」回退同步（下方原路径）。超时/连接/任务失败异常
+        # 直接上抛，由 refine_forward 按既有双通道分类回退，语义不变。
+        if self._async_enabled():
+            try:
+                return self._call_coze_async(req, _headers, _body, timeout)
+            except _AsyncUnsupported as _u:
+                try:
+                    sys.stderr.write(f"[ct-advisor] async 不可用（{_u}），回退同步 /run\n")
+                except Exception:  # noqa: BLE001
+                    pass
+
+        # ── 同步 /run（兜底路径：旧部署无 /async_run、或 CT_ADVISOR_ASYNC=0） ──
         import urllib.error as _urlerr
         import urllib.request as _urlreq
 
-        _env_proxy = _env_proxy_present()
-        _try_orders = (
-            [("system-proxy", None), ("direct", "direct")]
-            if _env_proxy else
-            [("direct", "direct")]
-        )
-        _body = json.dumps(payload).encode("utf-8")
-        _resp_raw = None        # 成功响应体（bytes）
-        _http_error = None      # 非 2xx：urllib.error.HTTPError（本身也是响应对象）
-        _last_exc = None
-        for _label, _proxies in _try_orders:
-            # None → 默认 opener（读 env 代理）；"direct" → 空 ProxyHandler 强制直连
-            _opener = (_urlreq.build_opener() if _proxies is None
-                       else _urlreq.build_opener(_urlreq.ProxyHandler({})))
-            _request = _urlreq.Request(
-                self.endpoint, data=_body, method="POST", headers=dict(_headers)
-            )
-            try:
-                with _opener.open(_request, timeout=timeout) as _r:
-                    _resp_raw = _r.read()
-                break
-            except _urlerr.HTTPError as _e:
-                # 服务端有响应（401/5xx 等）：不是连接问题，跳出重试循环
-                _http_error = _e
-                break
-            except (socket.timeout, TimeoutError):
-                # 超时：Coze 很可能已收到请求，重试只会造成重复发送，直接上抛
-                raise
-            except (_urlerr.URLError, OSError) as _e:
-                # 连接阶段失败（代理不可达 / DNS / 连接被拒）→ 尝试下一路径
-                _last_exc = _e
-                try:
-                    sys.stderr.write(
-                        f"[ct-advisor] {_label} 连接失败({type(_e).__name__})，尝试下一路径...\n"
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-                continue
+        _resp_raw, _http_error, _last_exc = self._send(
+            lambda: _urlreq.Request(self.endpoint, data=_body, method="POST",
+                                    headers=dict(_headers)),
+            timeout)
         if _resp_raw is None and _http_error is None:
             # 所有可用路径均连接失败 → 上抛最后一次异常，交由上层兜底
             raise _last_exc if _last_exc is not None else RuntimeError("all outbound paths failed")

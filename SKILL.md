@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.23
+version: 1.3.24
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -200,14 +200,19 @@ Verification code — only needed for a suspected mismatch in row 3:
 ```python
 import hashlib, re
 stdout = "...(entry.py output)..."
-MARK = "<<<CT_ANSWER_END>>>"
-if MARK in stdout:
-    body = stdout.split(MARK, 1)[0]                    # everything before the marker
-    expected = re.search(r"checksum:\s*([0-9a-f]{16})", stdout).group(1)
+# Anchor on the LAST legal tail (marker on its own line + checksum line), never
+# on `split(MARK, 1)[0]`: the answer body itself may quote `<<<CT_ANSWER_END>>>`
+# (e.g. a question about this very protocol), and a naive split would cut the
+# answer there — a test-detectable trap found in the 2026-10-22 audit.
+m = re.search(r"(?m)^<<<CT_ANSWER_END>>>\nchecksum:[ \t]*([0-9a-f]{16})[ \t]*$", stdout)
+if m:
+    body, expected = stdout[:m.start()], m.group(1)
     if hashlib.sha256(body.encode("utf-8")).hexdigest()[:16] != expected:
         print("⚠️ answer integrity check failed")      # do not deliver, do not re-run
     else:
         print(body)                                    # deliver verbatim
+else:
+    print("⚠️ no legal tail: capture truncated or marker inside body without checksum")
 ```
 
 **If the checksum does not match, the local LLM MUST NOT deliver the answer to the user.** This prevents any silent tampering.
@@ -262,7 +267,7 @@ if MARK in stdout:
 
 > 🔴 **No host-model fallback (HARD GATE · 2026-10-15)**: ct-advisor is coze-only **by design** — there is no local knowledge base or database, so a host-model direct answer on a clinical question has no domain substrate and is **forbidden as a fallback** (a bare host-model answer was evaluated and rejected: quality cannot be guaranteed without the cloud knowledge base and tool chain). The same tiering rule means attachment / `doc_context` content must **never** leave the Coze channel. The ONLY sanctioned recovery for a broken capture is: **repair the capture → re-send once (≤1, usually served by the local cache)**. Everything else stops and reports.
 
-> 🔴 **Short-circuit output obeys the same contract (2026-10-15 · unified into `session_store.py` 2026-10-22)**: both short-circuit paths — `session_store.cache_get` (exact-fingerprint answer cache, cross-session) and `session_store.dedup_check` (near-duplicate within a session window) — are wired into **both** the `entry.py` main chain AND the workbench `ct-advisor-proxy.py` (`/run` / `/async_run`). A short-circuited answer leaves `entry.py` through the **same plain-text exit** as a fresh Coze call (stderr marks `answer-cache hit` / `dedup short-circuit`; the proxy returns a local pseudo-task so the front-end is oblivious). A cached answer is a legitimate delivery, not an error.
+> 🔴 **Short-circuit output obeys the same contract (2026-10-15 · unified into `session_store.py` 2026-10-22)**: both short-circuit paths — `session_store.cache_get` (exact-fingerprint answer cache, cross-session) and `session_store.dedup_check` (near-duplicate within a session window) — are wired into **both** the `entry.py` main chain AND the workbench `ct-advisor-proxy.py` (`/run` / `/async_run`). A short-circuited answer leaves `entry.py` through the **same plain-text exit** as a fresh Coze call (stderr marks `answer-cache hit` / `dedup short-circuit`; the proxy returns a local pseudo-task so the front-end is oblivious). A cached answer is a legitimate delivery, not an error. **Conversely, error text is never cached** (v1.3.24): `session_store.record()` refuses anything that starts with `⚠️`/`⚠` or contains a delegate block, and the read side applies the same gate — so a failure is never replayed as an "answer" for the next 30 minutes, and legacy poisoned entries self-expire without manual cleanup.
 
 > 🔴 **Single-run discipline (performance · as mandatory as the HARD GATE)**: `entry.py` is one complete Coze remote call and the main time cost of a single Q&A. The default is **one call per question**. **Re-calling `entry.py` purely to "verify" the output is strictly forbidden** — with the plain-text exit there is nothing left to verify locally. The single exception is decision-table row 2: **at most one re-send to repair a broken CAPTURE**, with the reason stated to the user — never for a checksum mismatch on clean text (row 3 → stop) and never without capture evidence. If you need to persist output, it is already on disk at `answer_file` — do not re-run for that either.
 

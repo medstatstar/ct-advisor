@@ -286,7 +286,11 @@ def build_output(orig_q: str, coze_result: RefineResult,
     conn_err = getattr(coze_result, "connection_error", None)
     if conn_err:
         return _finalize(
-            "精校服务连接失败，无法获取 Coze 答案。\n\n"
+            # 2026-10-22 审查修复：补上 ⚠️ 前缀（此前是全仓唯一不带该标记的错误通道）。
+            # 两个作用：① 用户一眼看出这不是答案；② session_store 的缓存准入按
+            # 「⚠️/⚠ 开头」拒绝错误文本入缓存——缺前缀会让失败提示被缓存 30 分钟，
+            # 表现为「Coze 已恢复却一直返回连接失败」。
+            "⚠️ 精校服务连接失败，无法获取 Coze 答案。\n\n"
             f"{conn_err}\n\n"
             "完成上述排查并恢复网络/代理后，重新运行本技能即可（连接恢复前本技能不会返回任何未经精校的占位内容）。"
         )
@@ -500,8 +504,10 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     _ck = ""
     try:
         import answer_cache as _ac
+        _qm = req.query_meta or {}
         _ck = _ac.key_of(orig_q, req.doc_context or "",
-                         str((req.query_meta or {}).get("difficulty", "")))
+                         str(_qm.get("difficulty", "")),
+                         str(_qm.get("output_format", "") or ""))
         _cached = _ac.get(_ck)
         if _cached:
             sys.stderr.write("[ct-advisor] answer-cache hit: replayed local cached "

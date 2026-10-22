@@ -2,9 +2,88 @@
 [serve] 监听 127.0.0.1:18771
 [serve] 预热完成
 [serve] 监听 127.0.0.1:18771
+[ct-advisor][AUTH-BLOCK] outbound to  requires user confirmation.
+
+首次使用云端服务需将您的请求发送到 Coze 端点（）。这会提升答案的质量与覆盖度，且不会发送任何个人信息、受试者信息或未公开项目数据。是否允许本次发送？
 [serve] 预热完成
 [serve] 监听 127.0.0.1:18771
+[ct-advisor][AUTH-BLOCK] outbound to  requires user confirmation.
+
+首次使用云端服务需将您的请求发送到 Coze 端点（）。这会提升答案的质量与覆盖度，且不会发送任何个人信息、受试者信息或未公开项目数据。是否允许本次发送？
 [serve] 预热完成
 [serve] 监听 127.0.0.1:18771
+[ct-advisor][AUTH-BLOCK] outbound to  requires user confirmation.
+
+首次使用云端服务需将您的请求发送到 Coze 端点（）。这会提升答案的质量与覆盖度，且不会发送任何个人信息、受试者信息或未公开项目数据。是否允许本次发送？
 [serve] 预热完成
 [serve] 监听 127.0.0.1:18771
+[ct-advisor][AUTH-BLOCK] outbound to http://127.0.0.1:49597/run requires user confirmation.
+
+首次使用云端服务需将您的请求发送到 Coze 端点（http://127.0.0.1:49597/run）。这会提升答案的质量与覆盖度，且不会发送任何个人信息、受试者信息或未公开项目数据。是否允许本次发送？
+[ct-advisor][AUTH-BLOCK] outbound to http://127.0.0.1:49597/run requires user confirmation.
+
+首次使用云端服务需将您的请求发送到 Coze 端点（http://127.0.0.1:49597/run）。这会提升答案的质量与覆盖度，且不会发送任何个人信息、受试者信息或未公开项目数据。是否允许本次发送？
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor][AUTH-BLOCK] outbound to http://127.0.0.1:59999/run requires user confirmation.
+
+首次使用云端服务需将您的请求发送到 Coze 端点（http://127.0.0.1:59999/run）。这会提升答案的质量与覆盖度，且不会发送任何个人信息、受试者信息或未公开项目数据。是否允许本次发送？
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] answer-cache hit: replayed local cached answer (no new Coze call)
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[ct-advisor] async 不可用（async submit HTTP 500），回退同步 /run
+[coze] FALLBACK_TO_LOCAL_DRAFT 原因=HTTPError 超时=20.0s；不重试；返回本地 draft_answer
+[ct-advisor][ERR] code=COZE_HTTP_ERROR auto_fixable=false retry_safe=false requires_network=true detail="HTTPError: HTTP Error 500: Internal Server Error"
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[ct-advisor] async 不可用（async submit HTTP 500），回退同步 /run
+[coze] FALLBACK_TO_LOCAL_DRAFT 原因=HTTPError 超时=20.0s；不重试；返回本地 draft_answer
+[ct-advisor][ERR] code=COZE_HTTP_ERROR auto_fixable=false retry_safe=false requires_network=true detail="HTTPError: HTTP Error 500: Internal Server Error"
+[ct-advisor] async 不可用（async submit HTTP 500），回退同步 /run
+[coze] FALLBACK_TO_LOCAL_DRAFT 原因=HTTPError 超时=20.0s；不重试；返回本地 draft_answer
+[ct-advisor][ERR] code=COZE_HTTP_ERROR auto_fixable=false retry_safe=false requires_network=true detail="HTTPError: HTTP Error 500: Internal Server Error"
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit HTTP 500），回退同步 /run
+[coze] FALLBACK_TO_LOCAL_DRAFT 原因=HTTPError 超时=20.0s；不重试；返回本地 draft_answer
+[ct-advisor][ERR] code=COZE_HTTP_ERROR auto_fixable=false retry_safe=false requires_network=true detail="HTTPError: HTTP Error 500: Internal Server Error"
+[ct-advisor] async 不可用（async submit HTTP 500），回退同步 /run
+[coze] FALLBACK_TO_LOCAL_DRAFT 原因=HTTPError 超时=20.0s；不重试；返回本地 draft_answer
+[ct-advisor][ERR] code=COZE_HTTP_ERROR auto_fixable=false retry_safe=false requires_network=true detail="HTTPError: HTTP Error 500: Internal Server Error"
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[serve] 预热完成
+[serve] 监听 127.0.0.1:18771
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run
+[ct-advisor] async 不可用（async submit HTTP 500），回退同步 /run
+[coze] FALLBACK_TO_LOCAL_DRAFT 原因=HTTPError 超时=20.0s；不重试；返回本地 draft_answer
+[ct-advisor][ERR] code=COZE_HTTP_ERROR auto_fixable=false retry_safe=false requires_network=true detail="HTTPError: HTTP Error 500: Internal Server Error"
+[ct-advisor] async 不可用（async submit HTTP 500），回退同步 /run
+[coze] FALLBACK_TO_LOCAL_DRAFT 原因=HTTPError 超时=20.0s；不重试；返回本地 draft_answer
+[ct-advisor][ERR] code=COZE_HTTP_ERROR auto_fixable=false retry_safe=false requires_network=true detail="HTTPError: HTTP Error 500: Internal Server Error"
+[ct-advisor] async 不可用（async submit: no task_id），回退同步 /run

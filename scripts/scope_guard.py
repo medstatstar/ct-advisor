@@ -214,8 +214,13 @@ def apply_referral(final_answer: str, scope_tag: str, lang: str = "") -> str:
 
     ⚠️ 2026-10-22：仅 `non_medical` 一个 tag 会触发。旧 `medical_writing`
     已不再判超范围（占真实提问 47%，属核心域 writing）。
+
+    实现与上述契约对齐（2026-10-22 审查修复）：此前只判 `not scope_tag`，
+    任何**非空** tag 都会注入转介——与 docstring 不符，且一旦上游把旧 tag
+    （如 `medical_writing`）传进来，就会给一份完全正常的写作答案套上「超出范围」
+    声明。现在白名单化，只认 `non_medical`。
     """
-    if not scope_tag:
+    if scope_tag != "non_medical":
         return final_answer
     fa = final_answer or ""
     if "超出本技能的核心覆盖范围" in fa or "outside this skill's core coverage" in fa:

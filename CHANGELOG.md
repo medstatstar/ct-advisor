@@ -1,5 +1,20 @@
 # Changelog
 
+## （待部署）2026-10-22 · v1.3.24 主链完整审查：5 处实质缺陷 + 2 处契约漂移
+
+> 来源：用户要求「完整检查技能的主路径流程，确保代码正确无误」。逐段读了 entry → serve → orchestrate → refiner → 出口，并用本机假 Coze 端点跑通真实链路。**7 项问题全部有实测证据，修完后 12 个自带测试套件 rc=0 + 端到端 14/14 + 修复断言 16/16。**
+
+- **P0 失败提示污染缓存（`session_store.py`）**：`record()` 不做任何准入判定，Coze 失败时把「⚠️ 服务不可用」写进 `global_cache` / `dedup` / `history`，于是 30 分钟内重问同一问题会**命中缓存直接回放错误、根本不再出站**（实测：写入失败提示后 `cache_get` 立即命中）。这正是 orchestrate.answer_cache 在 2026-10-16 修过的同类缺陷在新模块里的重演。修：新增 `_is_cacheable_answer()`，**写入与读取两侧**都过闸（读侧让历史污染数据自动失效，无需手工清库）。
+- **P0 错误通道缺 ⚠️ 前缀（`orchestrate.py`）**：`connection_error` 分支文本 "精校服务连接失败…" 是全仓唯一不带 ⚠️ 的错误通道，直接导致上一条的判定漏网。已统一。
+- **P0 `answer_cache` key 缺 `output_format`（`answer_cache.py` / `orchestrate.py`）**：doc 请求会命中 auto 缓存的短答案（1000 字上限），**doc 模式被静默旁路**。与 v1.3.18 在 `session_store.cache_key` 上的修复是同一缺陷的两处实例。已纳入 key。
+- **P1 子进程隐式 locale 解码（`entry.py` ×3、`r_libs.py`）**：`subprocess.run(..., text=True)` 未指定编码，靠父进程 locale 解码；子进程却固定输出 UTF-8。中文 Windows（cp936）下会得到乱码，或抛 `UnicodeDecodeError` 被上层降级成「技能结果缝合失败」——**把编码问题伪装成技能故障**。涉及附件转换、澄清循环、card-inline 三条主链路径。修：entry 三处显式 `encoding="utf-8"`；R 输出改多候选解码（UTF-8 → cp936 → replace，因 R 编码随其自身 locale 变）。
+- **P1 `apply_referral` 实现与 docstring 矛盾（`scope_guard.py`）**：文档写「仅 `non_medical` 触发」，实现却是「任何非空 tag 都注入转介」，旧 tag 一传入就给正常答案套上「超出范围」声明。已白名单化。
+- **P2 协议标记解析歧义（文档）**：答案正文若引用 `<<<CT_ANSWER_END>>>`（用户恰好在问这套协议），任何 `split(MARK, 1)[0]` 的消费者都会把答案从那里切断——**SKILL.md 原先给的验证代码正是这种写法**，本次审查中它先骗过了我自己。改为锚定「最后一个合法尾部」（标记独占一行 + 紧跟 checksum）。
+- **P2 断言过期（`test_local_guards.py`）**：4 项仍期望「写作类 → 超范围」，与 L5 契约相反，长期显示 FAIL 会掩盖真实回归。已同步，并补一条「纯消费类」用例保住转介路径的覆盖。
+- **顺带核实（非缺陷，留存记录）**：一次提问出现 2 次 POST 是 `/async_run` 探测失败后回退 `/run` 的设计行为（假端点不实现异步协议），真实环境为单次异步请求；`workbench/` 与 `adapters/coze/` 无改动。
+- **验证**：12 个自带测试套件全部 rc=0（session_store / answer_cache / scope_guard 15/15 / orchestrate 11/11 / seven_flows 8/8 / tool_router 63/63 / local_guards ALL PASS / doc_payload 32/0 / office_ingest 33/0 / adapter_audit 4/0 / route_drift / ooxml_sync）；端到端 14/14（穿链 / 缓存复用 / 失败不缓存 / 恢复后正常）；修复断言 16/16；全仓 `compileall` 通过。
+
+
 ## （待部署）2026-10-22 · v1.3.23 `answer_file` 改为绝对 ASCII 路径：让模型「读文件」真正一键可达
 
 > 来源：用户追问「既然硬盘上已经写下了原始返回的临时文件，能否让大模型直接去处理这个临时文件，解决乱码问题？」——能，而且这正是设计意图；但原实现给的是**相对路径**，模型还得自己拼技能根，多一步就多一个失败点。

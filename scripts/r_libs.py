@@ -146,6 +146,25 @@ def _safe_r_path_literal(path):
     return path.replace("\\", "/")
 
 
+def _decode_r_output(raw) -> str:
+    """把 R 进程输出字节解成文本：UTF-8 优先 → cp936 回退 → replace 保底。
+
+    2026-10-22 审查：R 的输出编码由 **R 自身** 的 locale 决定，与本 Python 进程
+    locale 不一定一致（英文 R + 中文 Windows、或用 RStudio 预置的 UTF-8 locale）。
+    任何单一只认一种编码的写法，都会在另一半机器上把「R 执行成功」误判成失败。
+    """
+    if not raw:
+        return ""
+    if isinstance(raw, str):
+        return raw
+    for enc in ("utf-8", "cp936"):
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def sanitize_output(raw, max_lines=200, max_col=200):
     """Strip file paths and truncate output before showing it to the user."""
     cleaned = re.sub(
@@ -295,13 +314,17 @@ def run_r(code, confirmed=False, preamble=""):
                 + ". Generated R must not call shell/file-destroy/network/quit/Sys.sleep.")
 
     # NOTE: invoked as a list (no shell), so no command/shell injection is possible.
+    # 编码（2026-10-22 审查修复）：不用 `text=True` 的隐式 locale 解码——R 的输出
+    # 编码取决于 R 自身的 locale，与本进程 locale 不一定一致；两边错配时，
+    # 中文结果要么变乱码、要么抛 UnicodeDecodeError 被误判成「R 执行失败」。
+    # 改为字节捕获 + 多候选解码（UTF-8 → cp936 → replace），两种宿主都安全。
     try:
         proc = subprocess.run(
             [rscript, '--vanilla', tmp],
-            capture_output=True, text=True, timeout=300,
+            capture_output=True, timeout=300,
             **_hidden_kwargs()
         )
-        raw = (proc.stdout or '') + (proc.stderr or '')
+        raw = _decode_r_output(proc.stdout) + _decode_r_output(proc.stderr)
         return sanitize_output(raw)
     except subprocess.TimeoutExpired:
         return t("error.r_timeout")

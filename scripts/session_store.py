@@ -52,6 +52,27 @@ DEDUP_SIM = 0.90           # 近似相似度阈值（quick_ratio）
 DEDUP_MAX_PER_SESSION = 20 # 每 session 保留条数（滚动）
 
 
+# ── 缓存准入：什么答案**不许**当答案缓存 ────────────────────────────────────
+# 2026-10-22 主链审查修复（P0）：失败提示此前会被原样写进 global_cache / dedup /
+# history，后果是 30 分钟内重问同一问题**命中缓存直接返回该提示、根本不再出站**——
+# 形成「Coze 已恢复却一直报错」的新故障；同时 history 里的错误摘要还会被当作上下文
+# 注入后续轮次。orchestrate.answer_cache 侧早有同类判定（2026-10-16 复审发现），
+# 本模块当时漏掉了。
+# 写入与读取**两侧**都用它：写入拦截新污染，读取让历史遗留的污染数据自动失效。
+_UNCACHEABLE_PREFIXES = ("⚠️", "⚠")
+_UNCACHEABLE_MARKS = ("<<<CT_TOOL_DELEGATE>>>",)
+
+
+def _is_cacheable_answer(answer: str) -> bool:
+    """可缓存 = 非空、不是已知错误通道文本、不是待执行的委托卡。"""
+    a = (answer or "").strip()
+    if not a:
+        return False
+    if a.startswith(_UNCACHEABLE_PREFIXES):
+        return False
+    return not any(m in a for m in _UNCACHEABLE_MARKS)
+
+
 # ── 跨平台文件锁 ──────────────────────────────────────────────────────────────
 def _lock_ctx():
     """返回上下文管理器：进入临界区前获取文件锁，退出释放。失败静默降级。"""
@@ -215,8 +236,11 @@ def record(session_id: str, question: str, answer: str,
     - 写入本 session dedup 库（近窗近似重复短路）
     session_id 为空 → 仍写 global_cache，但不写 history/dedup（单轮模式）。
     任何异常静默忽略。
+
+    **准入门槛（2026-10-22）**：`_is_cacheable_answer` 不通过的答案（错误提示 /
+    委托卡 / 空）一律不写——既不进 global_cache，也不进 history 与 dedup。
     """
-    if not (answer or "").strip():
+    if not _is_cacheable_answer(answer):
         return
     now = time.time()
     summ = (answer_summary or "").strip() or _summarize(answer)
@@ -264,7 +288,10 @@ def cache_get(question: str, doc_context: str = "", difficulty: str = "",
             return ""
         if time.time() - float(obj.get("ts") or 0) > CACHE_TTL:
             return ""
-        return obj.get("answer") or ""
+        ans = obj.get("answer") or ""
+        # 读侧准入（2026-10-22）：历史遗留的「错误提示缓存」在此自动失效，
+        # 无需人工清理 store 文件。
+        return ans if _is_cacheable_answer(ans) else ""
     except Exception:  # noqa: BLE001
         return ""
 
@@ -296,7 +323,7 @@ def dedup_check(session_id: str, question: str,
             sim = _similar(question or "", e.get("q") or "")
             if sim >= DEDUP_SIM and sim > best_sim:
                 best_sim, best = sim, e
-        if best and (best.get("answer") or "").strip():
+        if best and _is_cacheable_answer(best.get("answer")):
             secs = max(0, int(now - (best.get("ts") or now)))
             return True, best["answer"], secs
         return False, None, 0

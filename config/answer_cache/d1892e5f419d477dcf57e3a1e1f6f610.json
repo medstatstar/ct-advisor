@@ -1,0 +1,1 @@
+{"ts": 1792631045.493029, "answer": "## 样本量估算\n\n双臂优效性，α=0.05，power 80%，每组 104 例。\n标记内文本 <<<CT_ANSWER_END>>> 不应截断。\n\n\n---\n\n## 补充信息（来源：ct-samplesize）\n\n{\n  \"n_per_group\": 162,\n  \"total\": 324,\n  \"power\": 0.8,\n  \"solve_for\": \"n\"\n}\n\n💡 *以上为该技能结果的可读摘要；如需核实或获取更详细的原始输出，建议直接使用 `ct-samplesize` 技能。*"}
