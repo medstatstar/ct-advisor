@@ -1,5 +1,19 @@
 # Changelog
 
+## （待部署）2026-10-22 · v1.3.20 返回侧同样归一化（前端不再吃 base64）+ 控制台编码兜底
+
+> 来源：用户追问「把这套『明文 + 尾部标记』也推到返回侧（让前端也不吃 B64）」，并追加「中文 Windows PowerShell 需要先设 `[Console]::OutputEncoding`，这个操作是否可能被跳过，此时有无补救」。
+>
+> v1.3.19 只收了**去程**（CLI stdout），**回程**仍在各自客户端里各写一份解码器：浏览器端 `decodeB64Utf8()` + `_raw_b64_result` 分支。协议一旦要改，N 个客户端就有 N 个落点，正是当年双路径问题的同构复现。
+
+- **归一化下沉到代理（服务端单点）**：`workbench/ct-advisor-proxy.py` 新增 `_normalize_payload_bytes()` / `_normalize_answer_str()` / `_normalize_answer_obj()`——转发前把上游 JSON 里的 B64 信封（`<<<CT_ANSWER_B64_START>>>…<<<CT_ANSWER_B64_END>>>`）与整串 B64 解成「明文 + `<<<CT_ANSWER_END>>>`」。接入点：`/run`、`/async_run`、`/stream_run`、`/task/{id}`、`/cancel/{id}`，以及缓存命中的伪 task 与 `_shortcut` 信封（覆盖旧版本写进缓存的 B64）。
+- **只碰答案键**：`_ANSWER_KEYS = {final_answer, result, answer, content, output, text, reply, response}`，`doc_context` 等含 base64 的其它字段原样透传；递归深度 ≤4。**铁律：任何异常（非法 JSON / 解码失败 / 无变化）一律原样返回上游字节**——归一化是增强，永远不能成为新的故障点。
+- **防误伤**：整串 B64 仅在「解码结果是含换行或中文的可读文本」时才替换（≥95% 可打印、无 NUL），避免把纯英文长答案误判成 base64（实测 198 字符英文串未被误伤）。
+- **前端删解码器**：`workbench/index.html` 移除 `decodeB64Utf8()` 与 `extractAnswer` 的 `_raw_b64_result` 分支；`stripDelimiters()` 只做「去标记 + 去 `checksum:` 行」。若仍收到残留 B64（旧代理/直连上游）→ **显式告警并回显载荷前 160 字符**，绝不静默吞掉答案（静默失败比乱码更糟）。
+- **编码设置被跳过的兜底（自动，无需用户动作）**：`entry.py` 每次出口**无条件**另存一份 UTF-8 明文到 `%TEMP%/ct-advisor/last_answer.md`（`--answer-file PATH` 改路径，`--no-answer-file` 关闭）。终端为 cp936 时另打一条**纯 ASCII** 首行告警 `[ct-advisor] WARN: console encoding=… (not UTF-8)` + 文件路径。SKILL.md 同步改写纪律：出现乱码 → **读该文件交付，不得重跑 Coze**（缓存本就会以 0 次出站重放）；读引擎自带的兜底产物合规，手工中转 stdout 不合规。
+- **同步**：`workbench/publish/` 由 `publish-kit/build_publish.py` 重建（10 文件，0.25 MB，无残留）。
+- **验证（实测）**：Python 侧 12/12、JS 侧 7/7 通过——B64 信封/纯 B64/明文幂等/英文不误伤/JSON 归一化/非答案键不动/坏 JSON 原样/二次归一化幂等/兜底文件含明文且不含 B64/checksum 外部独立复算一致；残留 B64 在前端触发告警而非空输出。
+
 ## （待部署）2026-10-22 · v1.3.19 单一路径：对外出口改为明文 + 尾部校验（彻底移除 base64 双入口）
 
 > 来源：用户追问「`ask.py` 与 `entry.py` 有什么区别／为什么会有两个路径」，随后拍板「既然是历史问题就彻底解决，变成一个单一的路径」。

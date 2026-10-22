@@ -160,6 +160,28 @@ def _emit_output(output: str, args) -> None:
 # 体积对比（6000 字纯中文）：明文 18 KB / base64 24 KB（正好压住 Bash 通道上限）。
 PLAIN_END_MARK = "<<<CT_ANSWER_END>>>"
 
+#: 控制台编码兜底（2026-10-22）：明文出口的正确性依赖 stdout 为 UTF-8，而中文
+#: Windows PowerShell 默认 cp936——用户可能忘记/跳过 `[Console]::OutputEncoding`
+#: 设置，此时中文在终端会变乱码（字节本身没坏，显示层坏了）。硬兜底 = **每次
+#: 都把明文答案另存一份 UTF-8 文件**，终端坏掉也能从文件完整读回（agent 用 Read
+#: 工具读文件走 UTF-8，与控制台编码无关）。固定文件名便于直接复用，不靠发现。
+ANSWER_FILE_NAME = "last_answer.md"
+
+
+def _is_utf8_stream(stream) -> bool:
+    """stdout/stderr 的编码是否 UTF-8（含 cp65001，Windows 控制台代码页 65001）。"""
+    enc = (getattr(stream, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+    return enc in ("utf8", "utf8sig", "cp65001")
+
+
+def _answer_file_path(args=None):
+    """兜底答案文件路径：--answer-file 优先；否则 %TEMP%/ct-advisor/last_answer.md。"""
+    import tempfile
+    explicit = getattr(args, "answer_file", None) if args is not None else None
+    if explicit:
+        return Path(explicit)
+    return Path(tempfile.gettempdir()) / "ct-advisor" / ANSWER_FILE_NAME
+
 
 def _checksum16(text: str) -> str:
     """与 B64 信封同口径的 sha256 前 16 位。"""
@@ -171,12 +193,39 @@ def _emit_plain(output: str, args) -> None:
 
     结束标记放在**尾部**而非包裹首尾：一旦被通道截断，标记与 checksum 会一起
     消失，失败信号一眼可辨；B64 时代则必须先解码才会发现结构损坏。
+
+    编码兜底（2026-10-22）：无论终端编码如何，明文恒另存一份 UTF-8 文件
+    （--no-answer-file 关闭）。终端是 cp936 时额外在**首行**打一条纯 ASCII 告警，
+    保证「设置被跳过」也有可读出口，而不是给用户一屏乱码。
     """
     plain = _extract_plain(output)          # B64 信封 → 明文；非信封原样返回
     norm = (plain or "").replace("\r\n", "\n")
     if not norm.endswith("\n"):
         norm += "\n"
-    _emit_output(f"{norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(norm)}\n", args)
+    payload = f"{norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(norm)}\n"
+
+    # 1) 无条件 UTF-8 落盘（兜底出口；失败不影响 stdout 主路径）
+    note = ""
+    if not getattr(args, "no_answer_file", False):
+        try:
+            ap = _answer_file_path(args)
+            ap.parent.mkdir(parents=True, exist_ok=True)
+            ap.write_text(payload, encoding="utf-8")
+            note = str(ap)
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"[entry] 答案兜底文件写入失败: {type(e).__name__}: {e}\n")
+
+    # 2) 控制台编码自检：非 UTF-8 终端只给一条 ASCII 告警（不阻断输出）
+    if sys.stdout.isatty() and not _is_utf8_stream(sys.stdout):
+        enc = (getattr(sys.stdout, "encoding", "") or "?")
+        sys.stdout.write(
+            "[ct-advisor] WARN: console encoding=%s (not UTF-8). Chinese text below "
+            "may look garbled; the intact answer is at:\n  %s\n"
+            "Fix: [Console]::OutputEncoding=[Text.Encoding]::UTF8 "
+            "(or read the file above).\n" % (enc, note or "(not written)")
+        )
+        sys.stdout.flush()
+    _emit_output(payload, args)
 
 
 def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
@@ -325,8 +374,13 @@ def main():
     ap.add_argument("--config", default=str(SKILL_ROOT / "config.json"))
     ap.add_argument("--max-clarify", type=int, default=3, help="澄清轮数上限")
     ap.add_argument("--out", default=None,
-                    help="把完整 stdout（含 B64 块与 checksum）写入该文件；"
+                    help="把完整 stdout（明文答案 + 尾部标记 + checksum）写入该文件；"
                          "stdout 只打印一行确认，避免长载荷经过 agent 上下文")
+    ap.add_argument("--answer-file", default=None,
+                    help="编码兜底文件路径（默认 %%TEMP%%/ct-advisor/last_answer.md）："
+                         "明文答案恒以 UTF-8 另存一份，控制台编码错乱时可从此文件读回")
+    ap.add_argument("--no-answer-file", action="store_true",
+                    help="关闭兜底文件写入（仅在确定 stdout 编码正确时使用）")
     ap.add_argument("--b64", action="store_true",
                     help="应急：输出旧的 base64 信封（仅当明文通道出现编码问题时使用；"
                          "内部协议仍为 B64，本开关只影响对外 stdout 形态）")
@@ -543,7 +597,15 @@ if __name__ == "__main__":
             _norm = ("⚠️ 技能执行出现未预期错误，无法生成答案。\n\n"
                      f"{type(_e).__name__}: {_e}\n\n"
                      "请稍后重试；若持续出现，请把本条提示与上方 stderr 反馈给技能维护者。\n")
-            sys.stdout.write(f"{_norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(_norm)}\n")
+            _payload = f"{_norm}{PLAIN_END_MARK}\nchecksum: {_checksum16(_norm)}\n"
+            # 与正常出口同口径：兜底文案也落一份 UTF-8 文件，控制台编码错乱时仍可读回
+            try:
+                _ap = _answer_file_path()
+                _ap.parent.mkdir(parents=True, exist_ok=True)
+                _ap.write_text(_payload, encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
+            sys.stdout.write(_payload)
         except Exception:  # noqa: BLE001
             pass
         sys.exit(1)

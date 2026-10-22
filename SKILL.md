@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.19
+version: 1.3.20
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -80,6 +80,10 @@ tier: A
 > v1.3.9 is now strictly an *internal* transport between code modules (`orchestrate` →
 > `serve` / `refine_answer` → `entry`); `entry.py` unwraps it exactly once at the process
 > boundary. `scripts/ask.py` survives only as a zero-logic forwarding shim for stale callers.
+> Since **v1.3.20** the same rule holds on the *return* side: the workbench proxy
+> (`workbench/ct-advisor-proxy.py`) unwraps any base64 payload in the upstream JSON before
+> forwarding it, so **every client receives plain text** — the browser no longer ships a
+> decoder (`decodeB64Utf8` / `_raw_b64_result` were removed in the same commit).
 >
 > **Why the two-layer history is gone.** v1.3.9 introduced base64 to survive cp936 console
 > mojibake, but that forced the LLM to hand-copy a ~2.6k-char random string into a second
@@ -205,10 +209,24 @@ if MARK in stdout:
 > file redirection / WSL are byte-faithful with no action needed. On a Chinese-Windows
 > PowerShell host, set `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8` **before**
 > invoking it — with plain CJK output this setting is load-bearing again (under the old base64
-> envelope it was not). If you see `鏈熶复…`-style mojibake, switch the channel to Git Bash
-> instead of fighting the console, and **never re-run Coze for an encoding problem**: a local
-> `session_store` cache hit replays the same answer with **zero** outbound calls. Do NOT "fix"
-> encoding by writing stdout to a temp file.
+> envelope it was not).
+>
+> 🔴 **Fallback for a skipped/mistyped encoding setting (automatic · 2026-10-22)**: because that
+> one-line setting is easy to forget or to apply *after* the call (an in-effect-only-for-later-
+> commands mistake), `entry.py` **always writes a second, intact copy** of the plain answer to
+> `%TEMP%/ct-advisor/last_answer.md` (UTF-8, no BOM, overwritten per call; `--answer-file PATH`
+> overrides the location, `--no-answer-file` disables it). If stdout shows `鏈熶复…`-style
+> mojibake, or the ASCII warning line `[ct-advisor] WARN: console encoding=…` appears, the run
+> itself still SUCCEEDED — **Read that file and deliver from it; never re-run Coze for an encoding
+> problem** (a local `session_store` cache hit replays the same answer with **zero** outbound
+> calls anyway). Reading the engine's own fallback artifact is sanctioned; hand-rolling a temp-file
+> relay for stdout, or re-encoding/re-transporting the answer yourself, is not.
+>
+> One-line self-check before blaming the skill: `[Console]::OutputEncoding.WebName` must print
+> `utf-8`. Note `$OutputEncoding` is a **different** variable (it governs stdin sent to native
+> programs) and setting it alone does not help; and the setting is **per-process**, so it must be
+> applied in the *same* shell invocation that runs `entry.py`, not in an earlier one.
+
 
 > 🔴 **No host-model fallback (HARD GATE · 2026-10-15)**: ct-advisor is coze-only **by design** — there is no local knowledge base or database, so a host-model direct answer on a clinical question has no domain substrate and is **forbidden as a fallback** (a bare host-model answer was evaluated and rejected: quality cannot be guaranteed without the cloud knowledge base and tool chain). The same tiering rule means attachment / `doc_context` content must **never** leave the Coze channel. The ONLY sanctioned recovery for a broken capture is: **repair the capture → re-send once (≤1, usually served by the local cache)**. Everything else stops and reports.
 
