@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.22
+version: 1.3.23
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -74,7 +74,7 @@ tier: A
 > {the answer text, as many lines as it needs}
 > <<<CT_ANSWER_END>>>
 > checksum: {sha256[:16]}
-> answer_file: _answers/{checksum}.md
+> answer_file: C:/Users/<user>/.workbuddy/skills/ct-advisor/_answers/{checksum}.md
 > ```
 >
 > **One entry point, one output shape, one protocol, one place where the protocol is produced.**
@@ -159,7 +159,7 @@ ASCII pointer to the answer file**:
 {the answer text, as many lines as it needs}
 <<<CT_ANSWER_END>>>
 checksum: {sha256[:16] of everything before the marker, LF-normalized}
-answer_file: _answers/{checksum}.md
+answer_file: C:/Users/<user>/.workbuddy/skills/ct-advisor/_answers/{checksum}.md
 ```
 
 The marker sits at the **end** on purpose: any channel truncation removes it together with
@@ -167,9 +167,12 @@ the checksum, so a damaged capture is obvious at a glance instead of silently pa
 checksum covers the answer body only (everything from the first byte up to and including the
 newline immediately before the marker), so it is trivially reproducible.
 
-`answer_file` is a **relative ASCII path** (skill root ⇒ `_answers/{sha16}.md`) precisely so it
-survives any console code page — a user name or directory in CJK would otherwise be the one part
-of the message that turns to mojibake. The file holds byte-identical content to the stdout body.
+`answer_file` is an **absolute ASCII path**, so you can hand it straight to the file-read tool
+with no path assembly. The absolute form is used only when it is pure ASCII; if the skill lives
+under a CJK path (user name / directory), the value degrades to the relative `_answers/{sha16}.md`
+instead — that is the one form guaranteed readable in a garbled console, and you then join it with
+the skill root you already know. Either way the file holds **byte-identical** content to the
+stdout body.
 
 > **Where base64 no longer lives (v1.3.21)**: nowhere. `orchestrate._finalize`,
 > `refine_answer._emit_plain` and `serve./ask` all pass **plain text**; the marker/checksum pair
@@ -187,7 +190,7 @@ question: **is the trailing `<<<CT_ANSWER_END>>>` marker there?**
 | 1 | Marker + `checksum:` present, body non-empty | Capture complete | Deliver the body verbatim (`answer_file:` line included, it is not part of the answer). `checksum:` re-verification is optional here — the marker's presence already proves the capture was not cut. |
 | 2 | Marker absent, or `checksum:` line missing | The tool channel truncated the capture | Re-capture the **same** command with Bash / Git Bash. **Do NOT re-run Coze.** |
 | 3 | Marker present but checksum mismatch (code below) | Real corruption, not truncation | Do NOT deliver. Report expected vs actual and stop — never loop re-runs. |
-| 4 | Body looks garbled but marker + checksum are intact | Display-layer code page, data intact | Read `answer_file` (UTF-8 on disk) and deliver that. No re-run. **If the `answer_file:` line is missing** (both candidate dirs unwritable), stop and report — never decode or guess the text. |
+| 4 | Body looks garbled but marker + checksum are intact | Display-layer code page, data intact | **Read the `answer_file:` path exactly as printed** (absolute ASCII — verified to survive the capture that destroyed the body) and deliver everything before `<<<CT_ANSWER_END>>>`. No re-run. **If that line is missing** (both candidate dirs unwritable), stop and report — never decode or guess the text. |
 
 Re-running without capture evidence is a protocol violation: in the 2026-10-15/16 incidents it
 made one question fire 2–3 times, dragging a single Q&A to minutes.
@@ -218,18 +221,29 @@ if MARK in stdout:
 > What is *not* solved by that, and cannot be: a **terminal** may still render UTF-8 bytes through
 > its own code page (`鏈熶复…`). That is a display-layer problem, so the engine does not try to
 > detect it — instead every run also writes the identical bytes to
-> `<skill>/_answers/{checksum}.md` and prints `answer_file: _answers/{checksum}.md`. If the text
-> looks garbled, **read that file and deliver from it; never re-run Coze for an encoding problem**
-> (a `session_store` cache hit would replay the same answer with zero outbound calls anyway). The
-> path is ASCII by construction, so it stays readable in the very console that garbled the answer.
-> If `_answers/` is unwritable (network share ACL refuses overwrite) the engine reuses an
-> identical existing file instead of rewriting it, and falls back to the absolute
-> `%TEMP%/ct-advisor/{checksum}.md` — in that case the `answer_file:` value is absolute; use it
-> as-is.
+> `<skill>/_answers/{checksum}.md` and prints an **absolute ASCII** `answer_file:` line.
 >
-> 🔴 **There is NO decode fallback, and a model must not attempt one (HARD GATE · 2026-10-22)**:
-> don't ask the host model to "repair", "restore", or "guess" garbled text — not you, not a
-> sub-agent, not any local model. This is not a capability gap, it is information loss. A cp936
+> 🔴 **The sanctioned repair is "read the source file", NOT "decode the garbled text"**: if stdout
+> looks garbled, do exactly this —
+>
+> 1. take the path from the `answer_file:` line **as printed**. It is pure ASCII, so it survives the
+>    very code page that mangled the answer (verified: in a simulated cp936 capture the whole answer
+>    body was destroyed while this line came through byte-intact);
+> 2. open it with the file-read tool — file reads are UTF-8 by default and independent of the
+>    console code page;
+> 3. deliver everything **before** `<<<CT_ANSWER_END>>>` verbatim.
+>
+> This is **not** a model "fixing" the text. The file never travelled through the console, so its
+> bytes are the original ones; the model only moves bytes it did not author — precisely the role
+> the HARD GATE allows. That is why reading the file works where every decode attempt fails.
+> If `_answers/` is unwritable (network-share ACL refuses overwrite) the engine reuses an identical
+> existing file instead of rewriting it, and falls back to `%TEMP%/ct-advisor/{checksum}.md` — the
+> `answer_file:` value stays absolute, so the same three steps apply unchanged.
+>
+> 🔴 **No decoding of the garbled STRING — by anyone (HARD GATE · 2026-10-22)**: "read the file"
+> above and "decode the mojibake" are different acts; **only the first is permitted**. Never ask the
+> host model to repair / restore / guess echoed garbled text — not you, not a sub-agent, not any
+> local model. This is not a capability gap, it is information loss. A cp936
 > console is **not** a reversible double-encoding: many UTF-8 bytes are illegal under GBK, so the
 > console substitutes `U+FFFD` and the original bytes are gone. Measured on a 127-char / 330-byte
 > CJK answer: 13 `U+FFFD` substitutions, every repair chain (`cp936` / `gb18030` / `cp1252` /

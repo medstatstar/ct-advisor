@@ -143,6 +143,22 @@ def _answer_body(output: str) -> str:
     return s.strip("\n")
 
 
+def _answer_ref(p: Path, is_primary: bool) -> str:
+    """`answer_file:` 的取值：优先**绝对 POSIX 路径**，让 agent 一次 Read 就能取回原文。
+
+    为什么不是相对路径：相对路径要求 agent 自己拼技能根，多一步就可能拼错或
+    拼不到（cwd 不同）；而绝对路径是自解释的。
+
+    唯一的约束是**这一行必须保持纯 ASCII**——它是乱码终端里唯一的指路牌，
+    一旦含非 ASCII 就会和控制台一起坏掉。所以绝对路径含非 ASCII（如中文用户名）
+    时，退回相对技能根的形式（全 ASCII），由 agent 拼上已知的技能根。
+    """
+    abs_posix = p.as_posix()
+    if abs_posix.isascii():
+        return abs_posix
+    return f"{ANS_DIR_NAME}/{p.name}" if is_primary else abs_posix
+
+
 def _write_answer_file(payload: str, cs: str) -> str:
     """把答案落到磁盘，返回 `answer_file:` 行的取值；两处都写不进去才返回空串。
 
@@ -150,21 +166,20 @@ def _write_answer_file(payload: str, cs: str) -> str:
        覆盖既有文件会抛 `PermissionError 13`；而同一答案重复运行必然撞同一个
        sha16（缓存重放 / 同一问题重问）。无脑重写会把兜底通道打成「无文件」，
        比乱码更糟——所以先比内容，一致就直接复用。
-    2) 首选失败退 `%TEMP%/ct-advisor/`。首选目录给的是**相对技能根**的 ASCII 路径
-       （任何代码页都可读）；TEMP 只能给绝对路径，属最后手段。
+    2) 首选失败退 `%TEMP%/ct-advisor/`。首选目录给绝对路径（ASCII 时）；TEMP 只能
+       给绝对路径，属最后手段。
     """
     name = f"{cs}.md"
     for idx, d in enumerate((SKILL_ROOT / ANS_DIR_NAME, ANS_FALLBACK_DIR)):
         p = d / name
-        shown = f"{ANS_DIR_NAME}/{name}" if idx == 0 else p.as_posix()
         try:
             d.mkdir(parents=True, exist_ok=True)
             if p.exists() and p.read_text(encoding="utf-8") == payload:
-                return shown
+                return _answer_ref(p, idx == 0)
             p.write_text(payload, encoding="utf-8")
             if idx:
                 sys.stderr.write(f"[entry] 技能目录不可写，答案已改存 {p.as_posix()}\n")
-            return shown
+            return _answer_ref(p, idx == 0)
         except Exception as e:  # noqa: BLE001
             sys.stderr.write(f"[entry] 答案文件写入失败({d}): {type(e).__name__}: {e}\n")
     return ""
