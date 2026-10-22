@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.21
+version: 1.3.22
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -187,7 +187,7 @@ question: **is the trailing `<<<CT_ANSWER_END>>>` marker there?**
 | 1 | Marker + `checksum:` present, body non-empty | Capture complete | Deliver the body verbatim (`answer_file:` line included, it is not part of the answer). `checksum:` re-verification is optional here — the marker's presence already proves the capture was not cut. |
 | 2 | Marker absent, or `checksum:` line missing | The tool channel truncated the capture | Re-capture the **same** command with Bash / Git Bash. **Do NOT re-run Coze.** |
 | 3 | Marker present but checksum mismatch (code below) | Real corruption, not truncation | Do NOT deliver. Report expected vs actual and stop — never loop re-runs. |
-| 4 | Body looks garbled but marker + checksum are intact | Display-layer code page, data intact | Read `answer_file` (UTF-8 on disk) and deliver that. No re-run. |
+| 4 | Body looks garbled but marker + checksum are intact | Display-layer code page, data intact | Read `answer_file` (UTF-8 on disk) and deliver that. No re-run. **If the `answer_file:` line is missing** (both candidate dirs unwritable), stop and report — never decode or guess the text. |
 
 Re-running without capture evidence is a protocol violation: in the 2026-10-15/16 incidents it
 made one question fire 2–3 times, dragging a single Q&A to minutes.
@@ -222,6 +222,23 @@ if MARK in stdout:
 > looks garbled, **read that file and deliver from it; never re-run Coze for an encoding problem**
 > (a `session_store` cache hit would replay the same answer with zero outbound calls anyway). The
 > path is ASCII by construction, so it stays readable in the very console that garbled the answer.
+> If `_answers/` is unwritable (network share ACL refuses overwrite) the engine reuses an
+> identical existing file instead of rewriting it, and falls back to the absolute
+> `%TEMP%/ct-advisor/{checksum}.md` — in that case the `answer_file:` value is absolute; use it
+> as-is.
+>
+> 🔴 **There is NO decode fallback, and a model must not attempt one (HARD GATE · 2026-10-22)**:
+> don't ask the host model to "repair", "restore", or "guess" garbled text — not you, not a
+> sub-agent, not any local model. This is not a capability gap, it is information loss. A cp936
+> console is **not** a reversible double-encoding: many UTF-8 bytes are illegal under GBK, so the
+> console substitutes `U+FFFD` and the original bytes are gone. Measured on a 127-char / 330-byte
+> CJK answer: 13 `U+FFFD` substitutions, every repair chain (`cp936` / `gb18030` / `cp1252` /
+> `latin-1` re-encode → UTF-8 decode) failed — even the `checksum:` line could not be recovered.
+> Any "repaired" text you produce is invention: unverifiable against the checksum, and a
+> rewrite of a clinical answer, which violates ALCOA+ and the HARD GATE. The **only** sanctioned
+> recovery is reading `answer_file`; if that file does not exist, report the capture failure and
+> stop — never deliver guessed text. (Latin-1 style 1:1 mis-decoding *is* reversible in theory,
+> but the verdict is still "read the file", because the file is both cheaper and provably exact.)
 >
 > Optional hygiene, not a requirement: `[Console]::OutputEncoding = [Text.Encoding]::UTF8` before a
 > PowerShell invocation makes the *screen* readable too. Note `$OutputEncoding` is a **different**

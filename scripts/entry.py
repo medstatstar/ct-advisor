@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -122,6 +123,10 @@ PLAIN_END_MARK = "<<<CT_ANSWER_END>>>"
 #: 避免用户名/目录含中文时路径本身在 cp936 控制台再次变成乱码。
 ANS_DIR_NAME = "_answers"
 
+#: 兜底目录（首选 `_answers/` 写不进去时用，如网络共享 ACL 拒绝）。作用只有一个：
+#: 保证「终端乱码时还有一份完整明文可读」这条通道不会因为写盘失败而消失。
+ANS_FALLBACK_DIR = Path(tempfile.gettempdir()) / "ct-advisor"
+
 
 def _checksum16(text: str) -> str:
     """答案正文（LF 口径）的 sha256 前 16 位。"""
@@ -138,6 +143,33 @@ def _answer_body(output: str) -> str:
     return s.strip("\n")
 
 
+def _write_answer_file(payload: str, cs: str) -> str:
+    """把答案落到磁盘，返回 `answer_file:` 行的取值；两处都写不进去才返回空串。
+
+    1) **同名且内容相同 → 跳过写入**。技能目录在网络共享上，ACL 为 creator-owner，
+       覆盖既有文件会抛 `PermissionError 13`；而同一答案重复运行必然撞同一个
+       sha16（缓存重放 / 同一问题重问）。无脑重写会把兜底通道打成「无文件」，
+       比乱码更糟——所以先比内容，一致就直接复用。
+    2) 首选失败退 `%TEMP%/ct-advisor/`。首选目录给的是**相对技能根**的 ASCII 路径
+       （任何代码页都可读）；TEMP 只能给绝对路径，属最后手段。
+    """
+    name = f"{cs}.md"
+    for idx, d in enumerate((SKILL_ROOT / ANS_DIR_NAME, ANS_FALLBACK_DIR)):
+        p = d / name
+        shown = f"{ANS_DIR_NAME}/{name}" if idx == 0 else p.as_posix()
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            if p.exists() and p.read_text(encoding="utf-8") == payload:
+                return shown
+            p.write_text(payload, encoding="utf-8")
+            if idx:
+                sys.stderr.write(f"[entry] 技能目录不可写，答案已改存 {p.as_posix()}\n")
+            return shown
+        except Exception as e:  # noqa: BLE001
+            sys.stderr.write(f"[entry] 答案文件写入失败({d}): {type(e).__name__}: {e}\n")
+    return ""
+
+
 def _emit_plain(output: str, exit_code: int = 0) -> None:
     """唯一出口：写答案文件（UTF-8）→ 按 UTF-8 字节写 stdout → 退出。
 
@@ -150,14 +182,9 @@ def _emit_plain(output: str, exit_code: int = 0) -> None:
     cs = _checksum16(body + "\n")          # 校验口径 = 标记之前的全部字节（含尾换行）
     payload = f"{body}\n{PLAIN_END_MARK}\nchecksum: {cs}\n"
 
-    rel = f"{ANS_DIR_NAME}/{cs}.md"
-    try:
-        d = SKILL_ROOT / ANS_DIR_NAME
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"{cs}.md").write_text(payload, encoding="utf-8")
-        payload += f"answer_file: {rel}\n"
-    except Exception as e:  # noqa: BLE001
-        sys.stderr.write(f"[entry] 答案文件写入失败: {type(e).__name__}: {e}\n")
+    ref = _write_answer_file(payload, cs)
+    if ref:
+        payload += f"answer_file: {ref}\n"
 
     try:
         sys.stdout.flush()
@@ -175,7 +202,6 @@ def _handle_attachment_oversized(attach_path: str, question: str) -> tuple:
     （经 /upload_file → mode=file_id），与 <5MB 原文件上传同一条通道。
     解析失败 / 格式不支持时返回 (带 ⚠️ 提示的 question, "")。
     """
-    import tempfile
     p = Path(attach_path)
     ext = p.suffix.lower()
 
