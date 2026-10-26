@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-26 · v1.3.27 · §22.24 AI-as-intervention 双轨治理
+
+- **§22.24 P1·l AI-as-intervention 双轨治理框架**（SKILL.md §11）：ct-advisor 总入口路由双轨分类（前瞻性评估+SPIRIT-AI/CONSORT-AI vs 工作流准确性+TRIPOD-AI/ICH E6(R3)）（EClinicalMedicine 2026-10）。
+
+## 2026-10-23 · v1.3.26 工作台反馈链路闭环 + 报错话术人话化 + 假功能下线
+
+> 来源：用户三连问——「👍/👎 点完把导出 docx 一起点灰了」「表格/PPT 这些输出选项实现了吗，没实现就锁掉」「反馈数据到底有没有回 Coze，没有的话点了有什么意义」。三个全是真问题。
+
+- **反馈/导出解耦**：👍/👎 与「📄 导出 docx」共用 `.fb-btn` class，反馈后 `querySelectorAll(".fb-btn")` 把导出按钮一起 disable。现禁用选择器精确到 `.fb-btn[data-r]`，导出按钮改独立 `ex-btn` class。
+- **假选项下线**：output_format 的「提纲/表格/PPT 大纲」引擎侧零实现（docs/answer_length_format_deviation_20261022.md 已定性），从下拉框移除，仅留「自动 / 成文（可发布）」。
+- **反馈 relay 全链路（本次核心）**：此前 👍/👎 只落本地 `feedback_log.jsonl`，Coze 完全感知不到。现：前端暂存 `{run_id, rating, question}`（question 200 字截断）→ 下一次提问随 `query_meta.feedback` 透传 → Coze 端 `async_feishu_writer` 后台回写对应 advisorlog 行 Accuracy：**👍→good、👎→poor**（用户口径：小写 + poor）。行定位主键为 original_question 包含匹配（前 60 字）+ 7 天回溯窗取最新；run_id 列存在则优先精确匹配（run_id 进 ADVISORLOG_FIELDS_OPTIONAL 机会性写入）。
+- **兼容性**：feedback 缺省 None → 老客户端逐字节一致；表未建 run_id 列自动降级；relay 全程容错不阻断主写入；feedback 同时进 final_answer JSON 信封（零 schema 审计）。
+- **报错话术**：技能缺失不再往报告正文缝「找不到技能脚本: 路径」——proxy 探测候选扩为 4 个（~、WORKBUDDY_SKILLS、SKILL_ROOT 上级、SKILL_ROOT，落空时全路径进 _srv_log），对外话术改为「本机未安装该技能（网络版/云端部署不内置本地技能）+ 官方来源提示」；前端失败缝合分三类（结果/技能缺失/通用失败），内部细节只留日志。
+- **部署**：Coze 端已出 `ct-advisor_coze_v1.45_20261023.zip`（COZE_VERSION=1.45，md5 f44e56b70f2dc2bb8140ad96acef0bc5）；工作台重启 run_app.bat 生效。
+- **测试**：前端（node 解析 + localStorage 桩 + 缝合分类）、proxy（脚本解析/话术）、Coze writer（mock 飞书 API 端到端 7 场景 + 老客户端兼容 + 非法 feedback 忽略）全过；静态核查 FE/PX/FA/WR 共 18 项全过。
+
+## 2026-10-23（补）· v1.3.26 工作台 ct-base 规范合规整改（对照 ct-base 机检 C6a/C6b/C7 + §4.1/§5.2/§7.2/§13）
+
+> 来源：用户「检查 ct-advisor 的工作台页面还有哪些地方不符合规范」后要求「都改」。逐项对照 ct-base/workbench 规范，共 21 项不合规全部修复。
+
+- **P0 发布红线**：`workbench/publish/` 开发残留（feedback_log.jsonl 用户反馈数据、_proxy.log、__pycache__、7 个 .prev/.pre-fix/.sync-new 副本）经 `publish-kit/build_publish.py` 白名单重建剪除，现仅 10 个白名单文件；`app.config.json` 补齐 `appName`/`domainPrefix`(恒 `ct-advisor`)/`shareLink`(恒 `https://ct-advisor.app.workbuddy.host/`)/`startCmd` 四必填字段，已通过 schema 校验。
+- **P1 强制条款**：同步 ct-base 最新 `tokens.css`（含 `--wb-fs-*` 七档字号）、`wb-list.css/js`（每页条数选择器 + 搜索防抖）；68 处裸 px 字号全部令牌化（`var(--wb-fs-*)`）；自造别名 `--wb-acc/--wb-bd/--wb-tx` 替换为规范令牌；补 `#wb-cthome` 返回 CT 首页钮 + `#wb-footer` 页脚（工作台名称 v版本 · 基于 ct-base 标准框架构建）；顶栏 `.langbtn/.iconbtn` 改为 34px/6px 11px/--wb-fs-sm（10-23 基线）；窄屏导航改吸顶横条 sticky + flex-direction:row（10-20 口径），`main` 加 `overflow-wrap:anywhere`；proxy 加 gzip 协商压缩 + 86400/60 分级缓存（§7.2）；`workbench.config.json` 对齐 schema（`brand`→`theme.brand`、`tokenFile`→`tokenEmbed:true`、补 `version`、给 `lists[]` 补 `columns`），已通过 jsonschema 校验；AGENTS.md 版本锚点 v1.2.0→v1.3.26；wb-bug 图标换规范对话气泡 path。
+- **P2 轻微**：删隐藏 `display:none` 设置钮（不可达死入口）与底部 Tab（已改吸顶横条）；输入框聚焦光环 `0 0 0 3px var(--wb-brand-soft)`；异步按钮 busy 态；`.navitem`→`.wb-navitem` 类名校正；约 15–20 处硬编码中文（typing 提示 / 👍 已反馈 / 📄 导出 docx / stitch 正文 / 运行请求失败 等）全部收编 I18N（字典 zh/en 139/139 对齐，含 bLab 20/20、samples 3/3、tasks 7/7）；`EMBEDDED_CFG` 内嵌配置兜底关闭 file:// 直开端点空白缺口；根目录 16 个开发残留（*.prev/*.bak-20261023/*.new/*.old-original-DUPLICATE-can-delete/dbg_*.txt/proxy.err/__pycache__）按确切路径删除。
+- **协同变更**：ct-base `workbench.config.schema.json` 补 `views[]` 定义（家族共同缺口：advisor 多视图导航的声明式元数据，此前 `additionalProperties:false` 下非法），`views` 子项要求 `id`+`label(zh/en)`。
+
 ## （待部署）2026-10-22 · v1.3.23 `answer_file` 改为绝对 ASCII 路径：让模型「读文件」真正一键可达
 
 > 来源：用户追问「既然硬盘上已经写下了原始返回的临时文件，能否让大模型直接去处理这个临时文件，解决乱码问题？」——能，而且这正是设计意图；但原实现给的是**相对路径**，模型还得自己拼技能根，多一步就多一个失败点。
