@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.25
+version: 1.3.26
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -355,6 +355,8 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 7. Signals are emitted from failure paths only (`adapters/errsignal.py::emit_err_signal`). If an `[ERR]` line appears on a run that returned a valid answer, treat it as a skill defect and report it.
 
 **Note on `[DEP-MISS]`:** before 2026-10-15 a missing `requests` library surfaced as `[DEP-MISS]` + an install prompt. The transport now uses stdlib `urllib`, so this failure class no longer exists; the handler remains as dormant defensive code.
+
+**2026-10-26 ct-base §22.24 双轨治理框架**：本技能作为 ct- 系列总入口路由 ct-samplesize/ct-registry/ct-safety/ct-literature/ct-protocol，凡涉及 AI-as-intervention（前瞻性评估 + SPIRIT-AI/CONSORT-AI） vs AI-for-trial-operations（工作流准确性 + TRIPOD-AI/ICH E6(R3)）的分类判定，按 §22.24 双轨治理框架执行（EClinicalMedicine 2026-10）。
 
 ---
 
