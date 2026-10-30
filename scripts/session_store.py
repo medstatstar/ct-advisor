@@ -57,6 +57,31 @@ HIST_MAX_PREV_LEN = 200    # 单条 answer_summary 上限（防膨胀）
 # ── 答案缓存 ────────────────────────────────────────────────────────────────
 CACHE_TTL = int(os.environ.get("CT_ADVISOR_ANSWER_TTL", "1800"))  # 默认 30 分钟
 
+# 2026-10-30（缓存键分区，P0）：
+#   缓存价值来自**跨用户命中**（不同用户提同一问题直接复用），所以缓存必须在服务端，
+#   不能放客户端（客户端缓存只在单浏览器内有效，跨用户零收益）。
+#   但这与「连续对话」存在结构性张力：
+#     - 跨用户复用要求键**只含问题**，否则每个用户历史不同 → 永不命中；
+#     - 上下文正确性要求键**含历史**，否则追问会命中别处的答案。
+#   解法：按「是否携带上下文」分区。
+#     · 历史为空（首轮独立问题，跨用户重复度最高）→ 键含 hk="h0"，**写**全局缓存，跨用户复用；
+#     · 历史非空（追问句如「那这个怎么办」，跨用户不可能重复）→ 键含真实历史指纹，
+#       只写本会话 dedup（防重复计费），**不写**全局缓存，避免污染跨用户缓存。
+# CACHE_VERSION：云端 bot 升级后旧答案整体失效，避免用户吃到上一版答案（曾误判成「升级没生效」）。
+CACHE_VERSION = os.environ.get("CT_ADVISOR_CACHE_VER", "bot1.48")
+CACHE_HK_EMPTY = "h0"          # 无上下文分区标识（全局可复用）
+
+# 2026-10-30（用户要求 · 彻底关闭客户端缓存，避免与云端冲突）：
+#   关掉的是「答案复用」的两条路径——
+#     · global_cache（精确指纹，跨用户复用）
+#     · dedup（会话内近似去重）
+#   目的：消除「云端已升级 / 已修正，客户端仍回旧答案」这一类冲突，答案一律以云端为准。
+#   **不关** history（多轮上下文注入不是缓存，属上下文正确性的一部分，必须保留）。
+#   恢复：设环境变量 CT_ADVISOR_LOCAL_CACHE=1。
+#   改动本文件必须同步 workbench/session_store.py 与 workbench/publish/session_store.py。
+LOCAL_CACHE_ENABLED = os.environ.get(
+    "CT_ADVISOR_LOCAL_CACHE", "0").strip().lower() in ("1", "true", "yes", "on")
+
 # ── 幂等去重（近窗近似重复）─────────────────────────────────────────────────
 DEDUP_WINDOW = 600         # 10 分钟（覆盖实测重发间隔 12~232s）
 DEDUP_SIM = 0.90           # 近似相似度阈值（quick_ratio）
@@ -129,14 +154,41 @@ def _save(data: dict) -> None:
 
 
 # ── 指纹 / 相似度 ──────────────────────────────────────────────────────────────
+def hist_fingerprint(history=None) -> str:
+    """会话上下文指纹（缓存键分区用）。无上下文 → "h0"（跨用户可复用区）。
+
+    只取每轮 question（追问的语义由前序问题决定，答案正文过长且易变），按序拼接后取短哈希。
+    任何异常 → "h?"（不可复用区，宁可不命中也不串答案）。
+    """
+    try:
+        if not history or not isinstance(history, (list, tuple)):
+            return CACHE_HK_EMPTY
+        parts = []
+        for h in history:
+            if not isinstance(h, dict):
+                continue
+            q = h.get("question") or h.get("q") or h.get("content") or ""
+            q = str(q).strip()
+            if q:
+                parts.append(q[:120])
+        if not parts:
+            return CACHE_HK_EMPTY
+        raw = "||".join(parts)
+        return "h" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    except Exception:  # noqa: BLE001
+        return "h?"
+
+
 def cache_key(question: str, doc_context: str = "", difficulty: str = "",
-              output_format: str = "") -> str:
-    """问题指纹。同问题 + 同附件载荷 + 同难度 + 同输出形态 → 同 key。
+              output_format: str = "", history_key: str = CACHE_HK_EMPTY) -> str:
+    """问题指纹。同问题 + 同附件载荷 + 同难度 + 同输出形态 + **同上下文分区** → 同 key。
 
     2026-10-22：纳入 output_format——doc 与 auto 答案必须分区缓存，否则选 doc 会命中
     auto 缓存拿到被截断的短文（见 answer_length_format_deviation_20261022.md F2）。
+    2026-10-30：纳入 history_key + CACHE_VERSION——上下文变了答案就该变；bot 升级后旧答案作废。
     """
-    raw = f"{(question or '').strip()}|{doc_context or ''}|{difficulty or ''}|{output_format or ''}"
+    raw = (f"{(question or '').strip()}|{doc_context or ''}|{difficulty or ''}"
+           f"|{output_format or ''}|{history_key or CACHE_HK_EMPTY}|{CACHE_VERSION}")
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
@@ -218,29 +270,48 @@ def history(session_id: str, now: float = None) -> list:
 
 def record(session_id: str, question: str, answer: str,
            answer_summary: str = "", difficulty: str = "",
-           doc_context: str = "", output_format: str = "") -> None:
+           doc_context: str = "", output_format: str = "",
+           history_key: str = "") -> None:
     """记录一轮真实产生的问答（出站成功后调用，非命中短路时）。
 
     - 写入 history（供后续轮次注入上下文）
-    - 写入 global_cache（问题指纹 → 答案，跨 session 复用）
+    - 写入 global_cache（**仅无上下文分区 h0**；追问写入会污染跨用户缓存）
     - 写入本 session dedup 库（近窗近似重复短路）
-    session_id 为空 → 仍写 global_cache，但不写 history/dedup（单轮模式）。
+    session_id 为空 → 仍可写 global_cache，但不写 history/dedup（单轮模式）。
+    history_key 为空 → 由「写入前的服务端历史」自动推导，与提问侧口径一致。
     任何异常静默忽略。
     """
     if not (answer or "").strip():
         return
     now = time.time()
     summ = (answer_summary or "").strip() or _summarize(answer)
-    key = cache_key(question, doc_context, difficulty, output_format)
     with _lock_ctx():
         data = _load()
-        gcache = data.setdefault("global_cache", {})
-        gcache[key] = {"ts": now, "answer": answer}
-        # 全局缓存只保留最近 200 条，防无限膨胀
-        if len(gcache) > 200:
-            oldest = sorted(gcache.items(), key=lambda kv: kv[1].get("ts", 0))[:50]
-            for k, _ in oldest:
-                gcache.pop(k, None)
+        # 上下文分区必须在**写入本轮 history 之前**推导，否则会把自己的问题算进指纹。
+        hk = (history_key or "").strip()
+        if not hk:
+            try:
+                _sess = (data.get("sessions") or {}).get(session_id) if session_id else None
+                _raw = (_sess or {}).get("history") or []
+                _pruned = _prune_history(_raw, now)
+                # 2026-10-30 修正：指纹口径必须与提问侧 `hist_fingerprint(history)` 一致。
+                # 旧实现只取 question、丢掉 answer_summary → 同一段历史在**写入侧**与
+                # **读取侧**算出不同指纹 → 分区错位（重开缓存开关后表现为永不命中或误命中）。
+                # `_prune_history` 已返回契约形态 [{question, answer_summary}]，直接传入即可。
+                hk = hist_fingerprint(_pruned)
+            except Exception:  # noqa: BLE001
+                hk = "h?"
+        key = cache_key(question, doc_context, difficulty, output_format, hk)
+        # 只有「无上下文」分区写全局缓存 → 跨用户可复用区（首轮独立问题）
+        # 2026-10-30：客户端缓存总开关关闭时不再写入（读取侧也已恒空）。
+        if LOCAL_CACHE_ENABLED and hk == CACHE_HK_EMPTY:
+            gcache = data.setdefault("global_cache", {})
+            gcache[key] = {"ts": now, "answer": answer}
+            # 全局缓存只保留最近 200 条，防无限膨胀
+            if len(gcache) > 200:
+                oldest = sorted(gcache.items(), key=lambda kv: kv[1].get("ts", 0))[:50]
+                for k, _ in oldest:
+                    gcache.pop(k, None)
 
         if session_id:
             sessions = data.setdefault("sessions", {})
@@ -252,20 +323,34 @@ def record(session_id: str, question: str, answer: str,
                     "answer_summary": summ,
                 }], now)
             sess["history"] = sess["history"][-HIST_TTL_ROUNDS:]
-            # dedup 库
-            dup = sess.get("dedup", [])
-            dup.append({"ts": now, "q": (question or "").strip(),
-                        "answer": answer, "key": key, "fmt": output_format})
-            dup = [e for e in dup if now - (e.get("ts") or 0) <= DEDUP_WINDOW]
-            sess["dedup"] = dup[-DEDUP_MAX_PER_SESSION:]
+            # dedup 库：**仅首轮**记录。追问不参与缓存体系（答案由上下文决定，
+            # 复用任何历史答案都是错的），因此不写，避免 session_store.json 无谓膨胀。
+            # 2026-10-30：客户端缓存总开关关闭时不再写入（读取侧也已恒未命中）。
+            if LOCAL_CACHE_ENABLED and hk == CACHE_HK_EMPTY:
+                dup = sess.get("dedup", [])
+                dup.append({"ts": now, "q": (question or "").strip(),
+                            "answer": answer, "key": key, "fmt": output_format, "hk": hk})
+                dup = [e for e in dup if now - (e.get("ts") or 0) <= DEDUP_WINDOW]
+                sess["dedup"] = dup[-DEDUP_MAX_PER_SESSION:]
             sess["ts"] = now
         _save(data)
 
 
 def cache_get(question: str, doc_context: str = "", difficulty: str = "",
-              output_format: str = "") -> str:
-    """全局精确指纹缓存命中 → 返回答案；否则空串。"""
-    key = cache_key(question, doc_context, difficulty, output_format)
+              output_format: str = "", history_key: str = CACHE_HK_EMPTY) -> str:
+    """全局精确指纹缓存命中 → 返回答案；否则空串。
+
+    history_key 非 h0（追问场景）→ 直接不命中：全局缓存只服务「无上下文」分区，
+    追问的正确性必须靠真实运行，不能拿别处答案顶上。
+
+    2026-10-30：客户端缓存已总开关关闭（LOCAL_CACHE_ENABLED=False）→ 恒返回空串，
+    答案一律以云端为准。恢复见模块顶部说明。
+    """
+    if not LOCAL_CACHE_ENABLED:
+        return ""
+    if (history_key or CACHE_HK_EMPTY) != CACHE_HK_EMPTY:
+        return ""
+    key = cache_key(question, doc_context, difficulty, output_format, history_key)
     if not key:
         return ""
     try:
@@ -281,13 +366,21 @@ def cache_get(question: str, doc_context: str = "", difficulty: str = "",
 
 
 def dedup_check(session_id: str, question: str,
-                window: int = DEDUP_WINDOW, output_format: str = "") -> tuple:
+                window: int = DEDUP_WINDOW, output_format: str = "",
+                history_key: str = "") -> tuple:
     """同 session 近窗近似重复检测。
 
     返回 (is_dup, prev_answer, secs_ago)：is_dup 且 prev_answer 非空 → 调用方应短路直回。
     session_id 为空 → 不查（单轮模式），返回 (False, None, 0)。
     output_format：仅当两侧均显式指定且不一致时跳过（doc 不短路到 auto 答案）。
+    history_key：非空时要求上下文分区一致——同一句话在不同上下文里答案应当不同，
+        否则第 1 轮问过的题在第 8 轮再问会拿到第 1 轮的答案（2026-10-30 修复）。
+
+    2026-10-30：客户端缓存已总开关关闭（LOCAL_CACHE_ENABLED=False）→ 恒返回未命中，
+    重复请求一律真实出站。恢复见模块顶部说明。
     """
+    if not LOCAL_CACHE_ENABLED:
+        return False, None, 0
     if not session_id:
         return False, None, 0
     try:
@@ -303,6 +396,9 @@ def dedup_check(session_id: str, question: str,
                 continue
             # 输出形态不同 → 视为不同请求（doc 不应复用 auto 答案）
             if output_format and e.get("fmt") and e.get("fmt") != output_format:
+                continue
+            # 上下文分区不同 → 不能复用（旧记录无 hk，按 h0 处理）
+            if history_key and (e.get("hk") or CACHE_HK_EMPTY) != history_key:
                 continue
             sim = _similar(question or "", e.get("q") or "")
             if sim >= DEDUP_SIM and sim > best_sim:
@@ -336,6 +432,9 @@ if __name__ == "__main__":
     # 直接改模块级常量指向临时目录（仅自测用）
     STORE_PATH = Path(_tmp) / "session_store.json"
     LOCK_PATH = Path(_tmp) / ".session_store.lock"
+    # 2026-10-30：客户端缓存默认关闭（生产态）。自测要验证缓存/去重逻辑本身，
+    # 故此处强制打开；末尾再切回关闭态验证「开关确实生效」。
+    LOCAL_CACHE_ENABLED = True
 
     sid = "sha256:selftest"
     q1 = "多中心研究中如果一个中心突然要退出怎么处理"
@@ -362,4 +461,36 @@ if __name__ == "__main__":
     clear_session(sid)
     assert history(sid) == [], "clear 后 history 应空"
     assert cache_get(q1) == ans1, "clear 不清全局缓存"
+
+    # ── 2026-10-30：上下文分区（跨用户复用 vs 追问隔离）──────────────────────
+    assert hist_fingerprint(None) == CACHE_HK_EMPTY, "None 历史应落 h0 分区"
+    assert hist_fingerprint([]) == CACHE_HK_EMPTY, "空历史应落 h0 分区"
+    hk_a = hist_fingerprint([{"question": "问题A"}])
+    hk_b = hist_fingerprint([{"question": "问题B"}])
+    assert hk_a != hk_b and hk_a.startswith("h") and hk_a != CACHE_HK_EMPTY, "不同上下文指纹应不同"
+
+    sid3 = "sha256:selftest-ctx"
+    record(sid3, "首轮独立问题", "首轮答案")       # 历史空 → h0 → 写全局缓存
+    assert cache_get("首轮独立问题") == "首轮答案", "首轮应进全局缓存（跨用户可复用）"
+    record(sid3, "追问句", "追问答案")             # 历史非空 → 不写全局缓存
+    assert cache_get("追问句") == "", "追问不应进全局缓存（会污染跨用户缓存）"
+    # 非 h0 分区永不命中全局缓存
+    assert cache_get("首轮独立问题", history_key=hk_a) == "", "非 h0 分区不得命中全局缓存"
+    # dedup 也按上下文分区隔离：同一句话在不同上下文不能复用
+    _hk_now = hist_fingerprint([{"question": "首轮独立问题"}])   # 模拟「已聊过一轮」的上下文
+    _dh, _dv, _ = dedup_check(sid3, "首轮独立问题", history_key=_hk_now)
+    assert not _dh, "同一句话在不同上下文不应 dedup 命中（否则串答案）"
+    _dh2, _dv2, _ = dedup_check(sid3, "首轮独立问题", history_key=CACHE_HK_EMPTY)
+    assert _dh2 and _dv2 == "首轮答案", "同上下文内重复提交仍应命中（防重复计费）"
+
+    # ── 2026-10-30：客户端缓存总开关（生产默认关闭）验证 ────────────────────
+    LOCAL_CACHE_ENABLED = False
+    assert cache_get("首轮独立问题") == "", "关闭态：精确缓存必须不命中"
+    _dh3, _dv3, _ = dedup_check(sid3, "首轮独立问题", history_key=CACHE_HK_EMPTY)
+    assert not _dh3, "关闭态：近似去重必须不命中"
+    record(sid3, "关闭态新问题", "关闭态新答案")
+    assert cache_get("关闭态新问题") == "", "关闭态：不得写入全局缓存"
+    assert len(history(sid3)) == 3, "关闭态：history 仍须照常写入（上下文不是缓存，不能关）"
+    LOCAL_CACHE_ENABLED = True   # 复原
+
     print("session_store self-test: ALL PASSED")

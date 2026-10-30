@@ -21,6 +21,14 @@
   - 任何异常一律静默回退为「不命中 / 不写入」，绝不阻断主流程。
   - 只缓存「纯答案」形态；委托块（<<<CT_TOOL_DELEGATE>>>）由调用方排除。
 
+⚠️ 2026-10-30 总开关关闭（用户定形）：
+  本模块的 key **不含对话历史**，因此「同一问题的首轮与追问」会共享同一条答案 ——
+  这正是用户明确禁止的行为（缓存只应在**云端**、且**只服务首轮独立问题**）。
+  现与其他本地缓存（session_store.global_cache / dedup_guard）统一受
+  `CT_ADVISOR_LOCAL_CACHE` 控制，**默认关闭**：`get()` 恒返回空串、`put()` 空操作。
+  关闭后「重跑同一问题」不再本地短路，改由云端缓存处理（跨用户命中更有价值）。
+  恢复：设环境变量 `CT_ADVISOR_LOCAL_CACHE=1`。
+
 依赖：stdlib-only（hashlib / json / os / time / pathlib）。
 """
 
@@ -34,6 +42,12 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# 本地答案缓存总开关（2026-10-30，与 session_store.LOCAL_CACHE_ENABLED 同口径、同环境变量）。
+# 默认关闭：答案缓存权收归云端 Coze，避免「云端已升级 / 已修正，客户端仍回旧答案」，
+# 更避免「本地无历史 key 的缓存把首轮答案喂给追问」。
+LOCAL_CACHE_ENABLED = os.environ.get(
+    "CT_ADVISOR_LOCAL_CACHE", "0").strip().lower() in ("1", "true", "yes", "on")
 
 # 与 dedup_guard.WINDOW 保持同口径（30 分钟）
 TTL = int(os.environ.get("CT_ADVISOR_ANSWER_TTL", "1800"))
@@ -58,7 +72,9 @@ def key_of(question: str, doc_context: str = "", difficulty: str = "") -> str:
 
 
 def get(key: str) -> str:
-    """命中则返回缓存答案；未命中 / 过期 / 任何异常 → 空串。"""
+    """命中则返回缓存答案；未命中 / 过期 / 开关关闭 / 任何异常 → 空串。"""
+    if not LOCAL_CACHE_ENABLED:
+        return ""
     if not key:
         return ""
     try:
@@ -74,7 +90,9 @@ def get(key: str) -> str:
 
 
 def put(key: str, answer: str) -> None:
-    """写入一次「问题指纹 → 答案」。空值 / 异常静默忽略。"""
+    """写入一次「问题指纹 → 答案」。开关关闭 / 空值 / 异常静默忽略。"""
+    if not LOCAL_CACHE_ENABLED:
+        return
     if not key or not (answer or "").strip():
         return
     try:
@@ -121,6 +139,14 @@ if __name__ == "__main__":
     k1 = key_of(q1)
     k2 = key_of(q2)
 
+    # 默认关闭态断言（2026-10-30）：get 恒空、put 不落盘
+    LOCAL_CACHE_ENABLED = False
+    put(k1, "关闭态答案")
+    print("关闭态 get 恒空:", get(k1) == "")
+    print("关闭态 put 不落盘:", not (_dir() / f"{k1}.json").exists())
+
+    # 强制开启后再验读写语义
+    LOCAL_CACHE_ENABLED = True
     print("key 稳定:", k1 == key_of(q1))
     print("不同问题 key 不同:", k1 != k2)
     print("初始未命中:", get(k1) == "")

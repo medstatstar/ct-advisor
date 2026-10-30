@@ -1,5 +1,337 @@
 # Changelog
 
+## 2026-10-30 · v1.3.38 本地客户端缓存治理：关闭本地答案缓存/去重，一律由云端承担
+
+### 背景
+v1.3.30 之后线上出现「本地侧答案缓存/去重短路」与「范围路由标签宽松注入」两类问题：本地缓存会串答案（见 v1.3.37 的 P0），
+且范围路由 `apply_referral` 只要 tag 非空就注入，过宽。本次把答案缓存与去重**完全交还云端**，本地只做确定性的 vague 闸门、附件解码与多轮上下文注入。
+
+### 改动
+- **`scripts/answer_cache.py` / `scripts/dedup_guard.py`**：受统一开关 `CT_ADVISOR_LOCAL_CACHE` 控制，默认**关闭**——
+  `get` 恒返回空（不命中）、`put` 为空操作。本地不再保留答案缓存与去重记录。
+- **`scripts/session_store.py`**：新增 `LOCAL_CACHE_ENABLED` 总开关（默认关闭），`record()` 的分区指纹改用 `_prune_history()` 契约形态；
+  全局答案缓存与近窗去重仅在开关打开时生效（默认不写）。
+- **`scripts/entry.py`**：新增 `_history_key` 会话指纹字段，统一多轮上下文的归一化口径。
+- **`scripts/scope_guard.py`**：`apply_referral` 收紧为**严格白名单**（原「tag 非空就注入」改为仅白名单 tag 可注入），避免范围路由被无关 tag 污染。
+- **`SKILL.md`**：summary/description 改为「答案缓存与去重一律由云端承担（本地不缓存答案）」，与运行时行为对齐。
+
+### 不变量
+- 仅当明确非医药/生命科学语境才给建设性转介建议；本地侧不做知识库检索、不做本地网络检索。
+- 云端（Coze）仍承担答案缓存与去重，为独立问题服务；本次仅撤掉本地侧的冗余副本。
+- `adapters/coze/`（含 v1.58 后置契约审计 selfcheck 节点）按 §16.8 不随本包发布，仍走 Coze 云端部署通道。
+
+## 2026-10-30 · v1.3.37 【P0】修复缓存串答案：短问句近似匹配误命中（Coze v1.57）
+
+### 事故
+线上实测：问「CTCAE是什么？」返回的是**「IDMC」的答案**，`cache_hit=True`、0.4s。
+问 A 得 B 的答案——比"答案变浅"严重一个量级。
+
+### 根因
+Tier2 用字符 n-gram **Jaccard** 做近似匹配（`JACCARD_THRESHOLD = 0.50`）。
+短问句的 token 集极小（各 6 个），两条完全不同的问题共享「是/什/么/什么」就够顶到阈值：
+
+| 对比 | Jaccard | 结果 |
+|---|---|---|
+| `CTCAE是什么？` vs `什么是IDMC？` | 4/8 = **0.500** | 恰好越过 0.50 → 误命中 |
+| `什么是GCP` vs `什么是ICH` | **0.714** | 越得更多 → 必然误命中 |
+
+既有的「长度对称性护栏」挡不住——两侧都短，长度比值接近 1，护栏放行。
+
+### 修复
+新增 `MIN_TIER2_QUERY_LEN = 12`：**归一后长度 < 12 的问题一律不参与 Tier2 近似匹配**。
+理由：短问题重生成只需几秒（simple 档实测 8s），而答错的代价远高于重算。
+Tier1 精确命中不受影响（同一问题重复提问仍正确命中）。
+
+**为什么不是调高 `JACCARD_THRESHOLD`**：实测正常的「同题换说法」Jaccard 可低至 **0.579**，
+把阈值抬到 0.62 会误伤真命中；而 0.714 那类误命中照样拦不住。长度护栏才是正确切法。
+
+### 部署
+- `adapters/coze/ct-advisor_coze_v1.57_20261030.zip`（COZE_VERSION=1.57，
+  md5 `f65d2098cd962810a6969975fcda925b`，121 files / 1.10 MB）。
+  **本包含 v1.55 / v1.56 全部改动**，直接部署 v1.57 即可。
+
+### 复盘：为什么现在才暴露
+v1.52 上线「首轮独占缓存」后，Tier2 的扫描面从「全部条目」收窄到「同历史指纹的条目」，
+但首轮恰恰是短问句最密集的场景——短问句 + 无历史 + 阈值 0.50，三个条件叠在一起才触发。
+此前缓存命中率低，这个问题被掩盖了。
+
+## 2026-10-30 · v1.3.36 出包前静态检查（precheck_nodes.py）+ ToolRouter 类迁入 state.py（Coze v1.56）
+
+> 承接 v1.3.35：发布回退已连续出现在 v1.47–v1.52 与 v1.54，靠人工发现太晚，改为机器拦截。
+
+### Added
+**`adapters/coze/scripts/precheck_nodes.py`** —— 用 AST 解析做节点签名 ↔ state.py 一致性检查，
+`pack.py` 在打包前自动调用，**不合规直接拒绝出包**：
+
+| 项 | 内容 | 处置 |
+|---|---|---|
+| C1 | `*_node` 的 state 参数无类型注解 / 不以 `Input` 结尾 | 阻断 |
+| C2 | 返回注解不以 `Output` 结尾 | 阻断 |
+| C3 | C1/C2 引用的类未在 `graphs/state.py` 定义 | 阻断 |
+| C4 | 节点模块内自定义 `*Input`/`*Output` 类 | 阻断 |
+| C6 | 函数体内 `return {...}` 裸 dict | 阻断 |
+| C5 | 函数体内有 import | **仅告警** |
+
+C5 降级理由：函数内 import 不影响 pydantic 校验，且 `cache_check` / `doc_ingest` /
+`full_analysis` / `generate_organized_problems` 四个节点刻意用懒加载减少冷启动
+（首次运行报出 20 处，全是既有写法）。硬拦会造成大面积误报。
+
+**反向测试已通过**：构造一个 `def bad_node(state, config, runtime) -> dict` + 模块内自定义
+`FooOutput` + 函数内 import + 裸 dict 返回的假节点，precheck 报出 4 处违规、退出码 1。
+
+### Changed
+- **`ToolRouterInput` / `ToolRouterOutput` 从 `tool_router_node.py` 迁入 `state.py`**。
+  原先在节点文件内定义，与「state.py 统一定义 + 节点 import」的范式不一致——这是 precheck
+  首次运行报出的**真实偏差**（C4），不是误报。
+- `tool_router_node.py` 改为 `from graphs.state import ToolRouterInput, ToolRouterOutput`，
+  并移除不再需要的 `pydantic` 导入。
+
+### 部署
+- `adapters/coze/ct-advisor_coze_v1.56_20261030.zip`（COZE_VERSION=1.56，
+  md5 `be063e2c005a4ac7a9f9162e3ae69120`，121 files / 1.10 MB）。
+  **本包含 v1.55 的全部改动**（三 V 节点签名规范化 + 6 个类补齐），部署 v1.56 即可，
+  无需再单独部署 v1.55。
+
+## 2026-10-30 · v1.3.35 三个 V 节点签名规范化 + state.py 补齐 Input/Output（Coze v1.55）
+
+### 现象（部署 v1.54 时发现）
+包内 V-02/V-03/V-04 三个节点又回到**非规范签名**，且 `state.py` 里对应的 Input/Output 类
+**整组缺失**：
+
+| 检查项 | v1.54 实际状态 |
+|---|---|
+| 节点签名 | `def xxx_node(state, config, runtime) -> dict`，`state` 无类型注解 |
+| 返回值 | 裸 dict（`return {"protocol_params": ...}`） |
+| import 位置 | `LLMClient` / `SystemMessage` / `HumanMessage` / `re` 写在函数体内 |
+| `state.py` | 只有 `CacheCheck` / `DocIngest` / `GenerateOrganizedProblems` / `FullAnalysis` 四组，**缺 6 个 V 节点类** |
+
+这与 v1.47–v1.52 是**同款的发布回退**：本地源码被简化版覆盖，而平台侧仍按
+`QcChecklistOutput` 等模型做类型校验——正是 v1.50 那个 500 事故的土壤。
+
+### Changed（Coze v1.55）
+按 `CacheCheckInput/Output` 的既有范式全部补齐：
+
+1. **`state.py` 新增三组 Input/Output（6 个类）**：`ProtocolParamsInput/Output`、
+   `ValidateParamsInput/Output`、`QcChecklistInput/Output`，并在注释里写明
+   「改这三组类时必须同步 nodes 里对应节点的签名与返回值，否则同样会 500」。
+2. **`protocol_params_node`（V-02）**：规范签名，完全短路，返回
+   `ProtocolParamsOutput(protocol_params={endpoint/population/design/arms/sample_size: None})`。
+3. **`qc_checklist_node`（V-04）**：规范签名，完全短路，返回
+   `QcChecklistOutput(qc_checklist={checklist: [], summary: "skipped_by_perf"})`。
+4. **`validate_params_node`（V-03）**：**保留真实校验逻辑**（不短路），规范签名，
+   两处返回统一为 `ValidateParamsOutput(validation_result=result)`。
+5. 三个节点的函数体内 import 全部提到模块顶部。
+
+**保留 v1.51+ 关键语义**：短路必须给同构空壳、**绝不能返回 `None`**，否则平台 pydantic
+校验抛 `type=dict_type` → `/run` 500。
+
+### 部署
+- `adapters/coze/ct-advisor_coze_v1.55_20261030.zip`（COZE_VERSION=1.55，
+  md5 `ed89b1a32a7198e8307b3d2ae2a7c857`，120 files / 1.10 MB）。
+- 包内已逐项校验：6 个类齐全 / V-02 返回 `ProtocolParamsOutput` / V-03 返回
+  `ValidateParamsOutput` / V-04 返回 `QcChecklistOutput` / 无 `None` 短路残留。
+
+### 待办（防复发）
+发布回退已连续出现多版（v1.47–v1.52、v1.54）。建议加一条**出包前静态检查**：
+校验 `state.py` 的类清单包含全部节点的 Input/Output，且每个 `*_node` 的返回注解与其
+Output 类一致——类似 `test_context_continuity.py` 的 T16 parity，但针对节点签名。
+
+## 2026-10-30 · v1.3.34 thinking 按难度分流（Coze v1.54）
+
+> 承接 v1.3.33：500 修复后实测单次 35–42s，剩余耗时主要压在 `full_analysis` 单节点
+> （doubao-pro + `thinking=enabled` + `reasoning_effort=medium` + 8192 tok）。
+
+### Changed（云端 · Coze v1.54）
+- **仅当 `query_meta.difficulty` 精确等于 `simple` 时，把 `thinking` 降为 `disabled`**；
+  middle / complex 完全保持 cfg 原设置，质量红线不动。
+  依据：simple 档契约是「单点事实/定义，预期约 100 字、≤200 字」，深度思考链对这类答案
+  质量增益有限，却固定消耗 15–20s。
+- difficulty 由 `generate_organized_problems` 统一 LLM 重估后写入 `query_meta`；
+  **判不准时（middle / complex / 空值）一律不降档**，宁慢不降质。
+- 回滚：删 `full_analysis_node` 里那个 if 块即可恢复全局 `thinking=enabled`。
+- **本版只动 thinking 开关，未触碰返回值结构**，不存在 v1.50 那类 pydantic 校验风险。
+
+### 部署
+- `adapters/coze/ct-advisor_coze_v1.54_20261030.zip`（COZE_VERSION=1.54，
+  md5 `f4a2904544212641ec94650bef2856f9`，120 files / 1.10 MB）。需上传 Coze 平台后生效。
+
+### 部署后需观察
+1. simple 档问题耗时是否降到 20s 上下；
+2. **simple 档答案质量**——如果出现「本该展开却只给一两句」的情况，说明 difficulty 被误判为
+   simple，应立即回滚该 if 块（判错风险是本版唯一实质风险）。
+3. middle / complex 耗时应与 v1.53 持平（35–42s），若明显变化说明分流条件写错了。
+
+## 2026-10-30 · v1.3.33 紧急回修 v1.50 引入的 /run 500（Coze v1.53）
+
+### 故障现象
+v1.50 部署后**所有请求返回 500**（`error_code 201002`），在 35–38s 后才失败：
+
+```
+QcChecklistOutput(qc_checklist=None)
+pydantic ValidationError: qc_checklist  Input should be a valid dictionary [type=dict_type]
+  at graphs/nodes/qc_checklist_node.py:74
+```
+
+### 根因
+**Coze 平台会给节点返回值套一层 pydantic 模型做类型校验**（`QcChecklistOutput` 等 Output 模型
+在平台侧生成，本地 `src/` 里看不到）。v1.50 用 `return {"qc_checklist": None}` 短路 LLM 调用，
+类型校验在节点出口直接抛 `ValidationError`，整条 `/run` 崩掉。
+
+这是 v1.3.31 的**判断失误**：依据本地源码把节点返回值当成普通 dict，只做了 `py_compile`
+就出包，没意识到平台侧存在 Output 模型校验。
+
+### 修复（Coze v1.53）
+改为返回**与正常路径同构的空壳**，既通过类型校验、又不触发 LLM：
+
+| 节点 | v1.50（错） | v1.53（修） |
+|---|---|---|
+| `qc_checklist` | `None` | `{"checklist": [], "summary": "skipped_by_perf"}` |
+| `protocol_params` | `None` | `{"endpoint": None, "population": None, "design": None, "sample_size": None, "arms": None}` |
+
+`protocol_params` 用「键齐全、值全空」而非 `{}`，是为了不依赖平台模型是否对具体键做约束。
+性能收益与 v1.50 相同（省约 18s），用户可见内容不变。v1.53 同时包含 v1.52 的首轮独占缓存改动。
+
+### 教训（流程纪律）
+1. 改节点返回值前**必须假定平台会做 pydantic 校验**，空值一律给同构空壳，绝不用 `None`。
+2. 出包后不能只做本地 `py_compile`——应在 Coze 平台先发一次最小请求验证，再全量使用。
+3. `adapters/coze/` 被 `.gitignore` 忽略、无版本控制，故障后无法 `git revert`，
+   只能靠 `_version.py` 轨迹注释追溯。建议把 `src/` 纳入版本控制或做快照。
+
+## 2026-10-30 · v1.3.32 缓存只服务首轮独立问题 + 修好 v1.49 的「静默失效」上下文修复（Coze v1.52）
+
+> 来源：用户定形缓存语义——「技能使用缓存的价值是在不同用户提出相同问题的时候就可以直接命中，
+> 因此不能放在客户端，必须放在 Coze 端」+「连续追问完全不需要考虑打中缓存的问题，只为首轮独立问题考虑缓存」。
+> 承接同日 v1.3.31（客户端缓存关闭）：缓存权收归云端后，云端语义必须与之配套。
+
+### 根因（排查中发现一个 P0 级「假修复」，比缓存语义更要紧）
+- **v1.49 的三处上下文修复实际全部没生效**：`cache_manager._history_fp`、`cache_check_node` 质疑检测、
+  `full_analysis_node` 按轮截断，三处都写成
+  ```python
+  from utils.history_norm import normalize_history as _hn
+  _hn.normalize_history(...)      # _hn 是函数，不是模块 → 每次必抛 AttributeError
+  ```
+  异常被各自外围 `except ... : pass` 静默吞掉，于是全部走回退分支：
+  · messages 形态（`{role,content}`）历史指纹**恒为空串** → 指纹只随条数变化、与内容无关 → 跨会话串扰；
+  · 质疑检测的上下文**恒为空** → CLI/工作台链路的「质疑强制重生成」形同虚设；
+  · 按轮截断退化为不截断。
+  实测证据：修复前契约形态与 messages 形态指纹不同（后者为空串），修复后两者一致（`b62a3baa15`）。
+  这也解释了同日 v1.3.31 之前「上下文修复上线了但用户仍感觉连续对话不对」的困惑。
+
+### Changed（云端 · Coze v1.51 / v1.52）
+- **首轮独占缓存闸（读 + 写双闸，`cache_manager.is_first_turn()` 单一事实源）**
+  · 读侧 `cache_check_node`：非首轮（存在任何有效历史轮次）→ 直接 `cache_hit=False`，短路后面所有匹配；
+  · 写侧 `full_analysis_node`：非首轮跳过 `set_cache_answer`（库里只留首轮条目，Tier2 扫描面同步收敛）；
+  · 写侧 `set_cache_answer`：双保险硬闸——`history_fp` 非空或 `conversation_history` 非首轮一律拒绝入库。
+  · 判据按「归一化后**有效轮数**」而非指纹字符串：指纹对形态异常的历史可能退化为空串，
+    只判指纹会漏判成首轮。
+- **修正三处 `normalize_history` 调用方式**（`_hn(...)` 直接调用），恢复 v1.49 的设计意图。
+- 老库中可能已存在的「带历史」条目：被读侧首轮闸短路，永不命中，按 TTL（180 天）自然淘汰，无需迁移。
+- **v1.52 收尾三件（只补一致性，行为零变更）**：
+  ① `state.CacheCheckOutput` 补齐 `similarity` / `matched_question` 声明 —— 节点 8 处 return
+     一直在传，但输出模型未声明 → pydantic `extra='ignore'` **静默丢弃**：想按相似度分层统计
+     命中质量时字段恒缺失，排查时「代码传了但 state 里没有」也极易误判为节点未执行。
+  ② 新增 `cache_manager.purge_non_first_turn_entries()`；`get_cache_stats()` 增列
+     `non_first_turn_entries`。首轮独占下 `history_fp` 非空的存量条目**可证明不可达**
+     （读闸对非首轮直接 return miss；首轮指纹恒 `""`，Tier2 又只比同指纹条目），
+     却仍被 `_fetch_keys_questions()` 全表取出白扫 → 提供手动清理（幂等、策略关闭时不做任何事、
+     异常返回 0），**不在请求热路径自动执行**。
+  ③ `cache_check_node` 模块头与平台节点 `desc` 改为首轮独占语义，写明三闸顺序
+     （质疑轮 → 非首轮 → 带附件）。
+
+### 排查补充（同日前端+后端全量自检，用户要求「确保所有修改符合需求」）
+
+对今天全部改动逐层核对（前端 index.html / 代理 ct-advisor-proxy.py / 本地 scripts / Coze 三节点）
+后发现并修掉 4 处「需求未覆盖」与 1 处文档漂移：
+
+1. **客户端缓存只关了 2/4 条，另 2 套仍在写盘**（今天 14:42–15:08 仍有新文件落盘）
+   - `scripts/answer_cache.py`（主链路 entry→orchestrate 的精确答案缓存，key = 问题+doc+难度，
+     **不含历史** → 追问可命中首轮答案，正是用户禁止的形态）；TTL 30 分钟、文件级持久。
+   - `scripts/dedup_guard.py`（同 origin 近似去重后**复用旧答案**，本质同为本地答案缓存）。
+   - 二者现与 `session_store` 统一受 `CT_ADVISOR_LOCAL_CACHE` 控制、**默认关闭**：
+     `get()` 恒空 / `put()` 空操作 / `check()` 恒未命中 / `record()` 空操作。
+     自测同步补「关闭态」断言（`answer_cache.__main__`、`test_local_guards.py`）。
+2. **`session_store.record` 的分区指纹口径与读取侧不一致**：写入侧自动推导时只取
+   `question`、丢掉 `answer_summary`，而提问侧 `hist_fingerprint(history)` 含摘要 →
+   同一段历史两侧算出不同 hk。当前开关关闭故无实际影响，但重开即表现为「永不命中/误命中」。
+   已改为直接传 `_prune_history(...)` 的契约形态。
+3. **`scope_guard.apply_referral` 文档与实现相反**：docstring 写「仅 `non_medical` 触发」，
+   实现却是 `if not scope_tag: return` —— 任何非空 tag（含旧 `medical_writing`）都会注入
+   超范围转介声明。已收紧为严格白名单；调用点（proxy/entry 只在 `assess()` 超范围时注入
+   `scope_hint`，唯一取值即 `non_medical`）→ 线上行为不变，`test_local_guards.py` 转绿。
+   三份副本（`scripts/` 真源 / `workbench/` / `workbench/publish/`）同步，T16 parity 通过。
+4. **发布包两个文件是过期副本**：`workbench/publish/history_norm.py`、`scope_guard.py` 仍是
+   旧 CRLF 版（缺「内嵌副本」说明）。已用 `build_publish.py` 重建（13 files / 0.36 MB），
+   五个关键文件与真源逐字节一致。
+5. **文档漂移**：`SKILL.md` 的 summary/description 仍宣称「本地…答案缓存/去重短路」，
+   与事实相反。已改为「答案缓存与去重一律由云端承担（仅为独立问题服务，本地不缓存答案）」。
+
+**新增回归测试 `scripts/tests/test_cache_policy.py`（28 项，全过）**：客户端三套缓存默认关闭 /
+history 不受开关影响 / 开启态分区语义（首轮写全局缓存、追问不写、仅首轮入 dedup）/
+分区指纹口径一致 / Coze `is_first_turn` 五形态 / 云端写闸三道拒绝。
+
+### 验证
+- `scripts/tests/test_context_continuity.py` 新增 **T17**（静态断言：import 别名后不得再带
+  `.normalize_history` 属性访问，防同类误用复发）→ **50 项全过**。
+- 缓存闸五场景实测（stub 平台依赖直调节点）：首轮未命中 → 写首轮条目 → 首轮命中 ✅；
+  同问题**带契约形态历史**追问 miss ✅；同问题**带 messages 形态历史**追问 miss ✅；质疑轮 miss ✅；
+  写侧：带 `history_fp` / 带 `conversation_history` 均拒绝入库 ✅（库内仅 1 条首轮条目）。
+
+### 部署
+- 已出包 `adapters/coze/ct-advisor_coze_v1.52_20261030.zip`
+  （`COZE_VERSION=1.52`，md5 `f6e9a59c78cc946a492ccffaa65ddc7c`，120 files / 1.09 MB）。
+  包内九项断言逐一校验通过（首轮读闸 / 写侧跳写 / set_cache_answer 硬闸 / purge / 输出字段声明 / 版本号）。
+  **需上传 Coze 平台重新部署后生效。**
+- v1.50 包（同日出包、未部署）已被本版取代，移入 `adapters/coze/_stale/` 防误部署；
+  与 v1.50 一并包含「两个空转 LLM 节点短路」优化（≈省 18s），无需单独部署 1.50。
+- 出包顺序纪律沿用：**先改 `_version.py` 的 COZE_VERSION 与 `pack.py` 的 OUT_NAME，再打包**。
+
+## 2026-10-30 · v1.3.31 客户端缓存关闭 + 云端两个空转 LLM 节点短路（Coze v1.50）
+
+> 来源：用户反馈「每次回答要等一两分钟」。追问排查后定位到两处互不相干的原因。
+
+### 性能诊断结论（先把误判排掉）
+- 单次 `/run` 稳定 60–75s，**不是超时、不是轮询、不是网关截断**：服务端 `main.py:96 TIMEOUT_SECONDS = 900`；
+  `refiner._call_coze` 是同步 `urllib.open()+read()`，Coze 一返回即刻交付。
+  实测 TTFB=65.36s、body 传输 0.00s、响应头 `X-Faas-Execution-Duration: 65047` —— 服务端自己算了 65 秒。
+- 真因：`graphs/graph.py` 每次请求固定串行 4 个 LLM 节点。
+
+### Changed（云端 · Coze v1.50）
+- **`protocol_params_node` / `qc_checklist_node` 入口直接短路**（`return {"xxx": None}`，删一行即回滚）。
+  逐节点核查「产物有没有消费者」后发现两个都没有：
+  · `structured_reply.build_structured_output()` 全库**零调用点**，最终答案只由 `full_analysis` 产出；
+  · `full_analysis` 不读 `protocol_params`（只用 query_meta / original_question / doc_evidence /
+    organized_problems / conversation_history）；
+  · `validate_params` 是纯代码节点，`protocol_params=None` 时自动跳过校验。
+  预期单次省约 18s（protocol_params ≈8s + qc_checklist ≈10s），**用户可见内容不变**。
+- **图结构与 state 契约完全不变**（未删节点、未改边），因此不存在 langgraph 编译风险。
+
+### Changed（本地）
+- **客户端缓存彻底关闭**（`session_store.LOCAL_CACHE_ENABLED`，默认 `False`）：`cache_get` 恒返回空、
+  `dedup_check` 恒未命中、`record` 不再写 global_cache / dedup；**`history` 保留**
+  （多轮上下文不是缓存，关掉会丢追问语境）。恢复：设 `CT_ADVISOR_LOCAL_CACHE=1`。
+  动机：缓存权收归云端，消除「云端已升级、客户端仍回旧答案」的冲突。
+- `entry.py` 接线缓存键分区：新增 `_history_key`（由 `hist_fingerprint(history())` 推导），
+  传给 `dedup_check` / `cache_get` / `record` 三处——此前三处均未传，`history_key` 恒取默认 `h0`，
+  分区形同虚设。
+- `workbench/session_store.py`、`workbench/publish/session_store.py` 与真源对齐
+  （此前真源已加「仅首轮写 dedup」逻辑，但 workbench 副本漏同步，T16 parity 失败）。
+
+### 未做（待决策，不在本版）
+- `full_analysis` 的 `thinking` / `reasoning_effort` 降档：省 20–30s，但直接影响答案质量，需单独评估。
+- `refiner.py` 改异步 `/async_run`：服务端已支持（`main.py:332`、`main.py:401`），
+  不减少总时长，只避免长任务撞客户端超时。
+  另注：`scripts/tests/test_refiner_async.py` 是**孤儿测试**（`import _AsyncTaskFailed` 直接 ImportError），
+  refiner 从未实现 async（`git log -S` 无记录），而 SKILL.md 宣称 v1.3.14 为 async-first —— 文档与代码不一致，待收敛。
+
+### 部署
+- 已出包 `adapters/coze/ct-advisor_coze_v1.50_20261030.zip`
+  （COZE_VERSION=1.50，md5 `fc8f59a39c6b3d1278b455ecda94b9fd`，120 files / 1.09 MB）。
+  **需上传 Coze 平台重新部署后生效**（本地改 prompt / 节点不影响云端既有 bot）。
+- ⚠️ 出包过程事故：`pack.py` 的 `OUT_NAME` 是硬编码的，本次先跑了一次打包才改版本号，
+  导致 v1.49 包被覆盖、原内容不可恢复。已把被污染的 v1.49 包移入 `adapters/coze/_stale/` 避免误部署；
+  线上 v1.49 不受影响（已部署的是云端副本）。**后续出包顺序必须是：先改 `_version.py` 的 COZE_VERSION
+  与 `pack.py` 的 `OUT_NAME`，再执行打包。**
+
 ## 2026-10-29 · v1.3.30 破解「三点惯性」二次加固（Coze v1.48）
 
 > 来源：用户部署 v1.47 后反馈「测试了几个问题，还是三个点」。核实结论——**v1.47 确实已生效**（飞书 advisorlog 12:11 起 `coze_version=1.47`），但 middle 档答案仍普遍 3 点，说明"放宽上限"这一手段不够。

@@ -145,3 +145,7 @@ _answers/
 
 # ── 2026-10-27 发布前检查自动补（F15/F20 · 双 ignore 对齐）──
 *.prev
+
+# ── 运行态答案缓存 + 服务日志（2026-10-30 发布前补；运行产物，绝不入版本库/发布包）──
+config/answer_cache/
+config/serve.log

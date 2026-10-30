@@ -436,15 +436,20 @@ def main():
     # 导致 Coze 永远只拿到单轮问题，用户被迫在「承接上一轮」里手工复述背景）────
     session_id = (args.session or "").strip()
     conversation_history = []
+    # 2026-10-30（缓存键分区接线）：上下文指纹必须在「本轮尚未写入历史」时算，
+    # 与 session_store.record 内部自动推导的口径一致（写入前历史）。
+    # 首轮独立问题 → "h0"（跨用户可复用）；追问 → 真实历史指纹（不写全局缓存）。
+    _history_key = "h0"
     try:
         import session_store as _ss
         conversation_history = _ss.history(session_id)
+        _history_key = _ss.hist_fingerprint(conversation_history)
         if conversation_history:
             sys.stderr.write(
                 f"[entry] 注入会话上下文 {len(conversation_history)} 轮 "
-                f"(P0-3 修复)\n")
+                f"(P0-3 修复) · 缓存分区 {_history_key}\n")
     except Exception:  # noqa: BLE001
-        pass
+        _history_key = "h?"
 
     payload = json.dumps({
         "query_meta": query_meta,
@@ -479,7 +484,8 @@ def main():
     try:
         import session_store as _ss
         _dh, _dans, _dsecs = _ss.dedup_check(session_id, original_question,
-                                            output_format=_output_format)
+                                            output_format=_output_format,
+                                            history_key=_history_key)
         if _dh and _dans:
             sys.stderr.write(
                 f"[entry] 近窗重复命中（{_dsecs}s 前）→ 本地短路复用，不出站\n")
@@ -489,7 +495,8 @@ def main():
             _cached = _ss.cache_get(
                 original_question, doc_context,
                 query_meta.get("difficulty", ""),
-                output_format=_output_format)
+                output_format=_output_format,
+                history_key=_history_key)
             if _cached:
                 sys.stderr.write(
                     "[entry] 全局答案缓存命中 → 本地短路复用，不出站\n")
@@ -539,6 +546,7 @@ def main():
                     difficulty=query_meta.get("difficulty", ""),
                     doc_context=doc_context,
                     output_format=_output_format,
+                    history_key=_history_key,
                 )
         except Exception:  # noqa: BLE001
             pass

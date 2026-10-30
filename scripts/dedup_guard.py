@@ -17,6 +17,12 @@ ct-advisor — 同 origin 近似去重 + 本地答案缓存短路（改进 B，2
   - 仅当「存过答案」且「近期（WINDOW 秒内）」才短路，过期记录随写入滚动清理。
   - 任何异常一律回退为「不短路 / 不记录」（绝不阻断主流程）。
 
+⚠️ 2026-10-30 总开关关闭（用户定形）：
+  本模块复用「旧答案」本质是本地答案缓存，且 key 不含对话历史 → 追问可能命中
+  首轮答案。与 session_store.global_cache / answer_cache 统一受
+  `CT_ADVISOR_LOCAL_CACHE` 控制，**默认关闭**：`check()` 恒未命中、`record()` 空操作。
+  恢复：设环境变量 `CT_ADVISOR_LOCAL_CACHE=1`。
+
 依赖：stdlib-only（json / os / time / difflib）。
 """
 
@@ -26,6 +32,10 @@ import os
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# 本地答案缓存总开关（2026-10-30，与 session_store.LOCAL_CACHE_ENABLED 同口径、同环境变量）。
+LOCAL_CACHE_ENABLED = os.environ.get(
+    "CT_ADVISOR_LOCAL_CACHE", "0").strip().lower() in ("1", "true", "yes", "on")
 
 SIM_THRESHOLD = 0.90      # 近似相似度阈值（quick_ratio）
 WINDOW = 1800             # 近期窗口（秒，30 分钟）
@@ -85,6 +95,8 @@ def check(query_origin: str, question: str) -> tuple:
       - is_dup=True 且 prev_answer 非空 → 调用方应本地短路复用 prev_answer；
       - 任何异常 → (False, None, 0)。
     """
+    if not LOCAL_CACHE_ENABLED:
+        return False, None, 0
     try:
         origin = (query_origin or "").strip()
         if not origin:
@@ -111,7 +123,9 @@ def check(query_origin: str, question: str) -> tuple:
 
 
 def record(query_origin: str, question: str, answer: str) -> None:
-    """记录一次「问题→答案」，供后续去重短路。异常静默忽略。"""
+    """记录一次「问题→答案」，供后续去重短路。开关关闭 / 异常静默忽略。"""
+    if not LOCAL_CACHE_ENABLED:
+        return
     try:
         origin = (query_origin or "").strip()
         if not origin or not (answer or "").strip():
