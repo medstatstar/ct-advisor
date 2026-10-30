@@ -512,6 +512,122 @@ def _record_latency(mode: str, round_id: str, threshold: int) -> None:
         sys.stderr.write(f"[ct-advisor][latency] record skipped: {_e}\n")
 
 
+# ── 2026-10-25 本地域码守卫（反 SDTM 域幻觉，如编造 'IM' 影像发现域）────
+# 设计原则：① 仅作**输出前校验**，不作答、不引入知识（符合 Coze-only 架构）；
+# ② 上下文感知——仅当两字母码被显式框定为 SDTM 域时才校验，绝不误伤普通缩写
+#    （如 (PI) 研究者、(QC) 质控、IN/ON/US 等）；③ 防御式——任何异常都跳过、不阻断主流程；
+# ④ allowlist 缺失时**禁用**守卫（宁可漏检也不对真实标准域误报）。
+# 命中非标准域码时在答案末尾追加本地校验警告（不修改 Coze 原答案语义）。
+_SDTM_ALLOW_CACHE: dict = {}
+
+# 上下文感知：仅当码被显式框定为 SDTM 域时才校验（避免误伤普通缩写）。
+_SDTM_DOMAIN_PATTERNS = [
+    re.compile(r"\b([A-Z]{2})\s*(?:标准)?域\b"),                            # X域 / X标准域
+    re.compile(r"(?:SDTM|SDTMIG)\s*[:：]?\s*([A-Z]{2})\s*(?:域|[（(])"),     # SDTM X域 / SDTM X（
+    re.compile(r"(?:归入|放入|应归入|派入|分流到|分流至|落到|落入|置于|记录于|存放于|建议放入|默认归入)\W{0,6}([A-Z]{2})\s*(?:(?:标准)?域|[（(])"),  # 动词 X域/( / X标准域
+    re.compile(r"[（(][^）)]{0,40}?\b([A-Z]{2})\b[^）)]{0,40}?(?:影像|imaging|Imaging|Findings|发现)[）)]"),  # (…X…影像/发现)
+    re.compile(r"(?:影像|发现)\W{0,6}[（(]\s*([A-Z]{2})\b"),               # 影像/发现（X
+    re.compile(r"\bdomain\s+([A-Z]{2})\b"),                                # domain X
+]
+
+
+def _load_sdtm_allowlist() -> dict:
+    """载入 SDTMIG v3.4 标准域 allowlist（scripts/sdtm_domain_allowlist.json）。
+
+    失败则禁用守卫（返回空 dict）——绝不对真实标准域误报。
+    """
+    global _SDTM_ALLOW_CACHE
+    if _SDTM_ALLOW_CACHE:
+        return _SDTM_ALLOW_CACHE
+    p = ROOT / "scripts" / "sdtm_domain_allowlist.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as _e:  # noqa: BLE001
+        sys.stderr.write(f"[ct-advisor] sdtm_domain_allowlist load failed: {_e} (guard disabled)\n")
+        data = {}
+    _SDTM_ALLOW_CACHE = data
+    return data
+
+
+def _scan_sdtm_domain_codes(text: str, valid: Set[str]) -> list:
+    """返回答案中被框定为 SDTM 域、但不在标准 allowlist 中的两字母码列表。"""
+    found: list = []
+    for pat in _SDTM_DOMAIN_PATTERNS:
+        for m in pat.finditer(text):
+            code = m.group(1)
+            if code in valid:
+                continue
+            if code not in found:
+                found.append(code)
+    return found
+
+
+def _validate_sdtm_domains(answer: str, lang: str = "zh-CN") -> str:
+    """输出前 SDTM 域码守卫：通用负向闸门，拦截一切不在 SDTMIG v3.4 标准域目录中的域码断言。
+
+    本质不是「拦截某个特定码」，而是「凡被框定为 SDTM 域、却不在标准域目录里的两字母码一律拦截」。
+    IM 等仅作为已知高频幻觉的加料纠错示例（见 curated_hallucinations），allowlist 才是判定依据。
+    命中时在答案末尾追加本地校验警告；任何异常均原样返回、不阻断主流程。
+    """
+    if not answer or not answer.strip():
+        return answer
+    try:
+        allow = _load_sdtm_allowlist()
+        if not allow:
+            return answer  # allowlist 缺失 → 禁用守卫
+        valid = set(allow.get("domains", {})) | set(allow.get("non_standard_codes", []))
+        if not valid:
+            return answer
+        found = _scan_sdtm_domain_codes(answer, valid)
+        # curated_hallucinations 兜底强匹配：对已知高频幻觉码（如 IM），即便未触发上述强模式、
+        # 只要出现在影像/域语境也拦。这是 allowlist 之外的加料纠错，绝不改变「非标准码即拦」的主体逻辑。
+        for code, _note in (allow.get("curated_hallucinations") or {}).items():
+            mm = re.search(r"\b" + re.escape(code) + r"\b", answer)
+            if not mm:
+                continue
+            ctx = answer[max(0, mm.start() - 20): mm.end() + 20]
+            if re.search(r"影像|imaging|Imaging|Findings|发现|SDTM|域|domain", ctx):
+                if code not in found:
+                    found.append(code)
+        if not found:
+            return answer
+        known = allow.get("curated_hallucinations") or {}
+        reasons = []
+        for code in found:
+            if code in known:
+                reasons.append(f"{code}：{known[code]}")
+            elif lang == "zh-CN":
+                reasons.append(
+                    f"{code} 不在 SDTMIG v3.4 标准域清单；若为申办方自定义（sponsor）域，"
+                    f"请按项目 SDTM 映射规范（SDTM spec）核实，勿当作 CDISC 标准域引用。")
+            else:
+                reasons.append(
+                    f"{code} is not in the SDTMIG v3.4 standard domain list; if it is a "
+                    f"sponsor-defined custom domain, verify against the project SDTM specification "
+                    f"and do not cite it as a CDISC standard domain.")
+        if lang == "zh-CN":
+            block = (
+                "\n\n> ⚠️ **本地域码自动校验（ct-advisor）**：答案中出现的 SDTM 域代码 "
+                + "、".join(f"`{c}`" for c in found)
+                + " 不在 SDTMIG v3.4 标准域目录中。\n>\n"
+                + "\n".join(f"> - {r}" for r in reasons)
+                + "\n>\n> 请以 CDISC SDTMIG v3.4 官方域目录及项目 SDTM spec 为准。"
+            )
+        else:
+            block = (
+                "\n\n> ⚠️ **Local SDTM domain-code check (ct-advisor)**: the following SDTM "
+                "domain code(s) in the answer are NOT in the SDTMIG v3.4 standard domain "
+                "directory: " + ", ".join(f"`{c}`" for c in found) + ".\n>\n"
+                + "\n".join(f"> - {r}" for r in reasons)
+                + "\n>\n> Refer to the official CDISC SDTMIG v3.4 domain list and the project SDTM spec."
+            )
+        sys.stderr.write(f"[ct-advisor] sdtm domain guard flagged: {found}\n")
+        return answer + block
+    except Exception as _e:  # noqa: BLE001  # 守卫失败绝不影响主流程
+        sys.stderr.write(f"[ct-advisor] sdtm domain guard skipped: {_e}\n")
+        return answer
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="ct-advisor answer refiner (Coze polish, single call)")
     ap.add_argument("payload", nargs="?", help="path to JSON file with the 3 variables (deprecated: use stdin or --payload-inline)")
@@ -849,6 +965,8 @@ def main() -> None:
                                    req.original_question, merged)
         except Exception:  # noqa: BLE001
             pass
+        # 2026-10-25：输出前 SDTM 域码守卫（通用负向闸门：凡不在 SDTMIG v3.4 标准域目录的域码断言即拦；IM 等仅示例）；防御式、不阻断。
+        merged = _validate_sdtm_domains(merged, lang=_detect_lang(req.original_question))
         _emit_plain(merged)
         sys.exit(0)
 
@@ -905,6 +1023,10 @@ def main() -> None:
                                    req.original_question, out["final_answer"])
         except Exception:  # noqa: BLE001
             pass
+        # 2026-10-25：输出前 SDTM 域码守卫（反域幻觉）；final_answer 内联校验。
+        if out.get("final_answer"):
+            out["final_answer"] = _validate_sdtm_domains(
+                out["final_answer"], lang=_detect_lang(req.original_question))
         sys.stdout.write(json.dumps(out, ensure_ascii=False))
         sys.exit(0)
 
@@ -1015,6 +1137,8 @@ def main() -> None:
             t("error.fallback_diagnose", error=last_error or "unknown") + "\n"
         )
     else:
+        # 2026-10-25：输出前 SDTM 域码守卫（通用负向闸门：凡不在 SDTMIG v3.4 标准域目录的域码断言即拦；IM 等仅示例）；防御式、不阻断。
+        final = _validate_sdtm_domains(final, lang=_detect_lang(req.original_question))
         sys.stdout.write(final)
     sys.exit(0)
 

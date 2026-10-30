@@ -1,0 +1,80 @@
+{
+  "$schema": "../ct-base/testing/ctqa.config.schema.json",
+  "skill": "ct-advisor",
+  "workbench": {
+    "dir": "workbench",
+    "entry": "index.html"
+  },
+  "prompt": {
+    "build_payload": "ctqa_p3_wrapper:build_payload",
+    "sample_env": "tests/ctqa/p3_sample.json",
+    "sanitize": "sanitize:sanitize",
+    "sanitize_mode": "redact",
+    "volatile_keys": [
+      "skill_version",
+      "request_id",
+      "timestamp"
+    ],
+    "sensitive_allow": [
+      "user_language"
+    ]
+  },
+  "static": {
+    "i18n_object": null,
+    "python_files": [
+      "workbench/ct-advisor-proxy.py",
+      "workbench/llm_loader.py"
+    ],
+    "cli_files": [],
+    "cjk_dict_allow": [
+      "langLabel"
+    ],
+    "smoke_nodes": [
+      "wb-input",
+      "wb-result",
+      "wb-thread",
+      "wb-footer"
+    ]
+  },
+  "browser": {
+    "test_module": "browser_tests:run",
+    "entry_selector": "#qinput",
+    "screenshots_on_fail": true
+  },
+  "coze": {
+    "dir": "adapters/coze",
+    "tests_dir": "adapters/coze/tests"
+  },
+  "layers": {
+    "enable": [
+      "W0",
+      "W1",
+      "W2I",
+      "W2B",
+      "P3",
+      "C0"
+    ]
+  },
+  "skill_tests": [
+    {
+      "layer": "W2",
+      "title": "工作台全量 UI 回归 L1–L4V（79+ 条逐条导入）",
+      "mode": "script",
+      "target": "workbench/tests/run_all.py",
+      "args": [
+        "--layer",
+        "L1",
+        "L2",
+        "L3",
+        "L4S",
+        "L4R",
+        "L4V"
+      ],
+      "result_json": "workbench/tests/reports/report.json",
+      "python": "C:/Tools/anaconda3/python.exe",
+      "severity": "P1",
+      "timeout": 600,
+      "_note": "L1 用 page.evaluate 跑页面内真实函数（esc/md2html/detectVague/cliCmd），属浏览器执行而非静态分析，故不应挂在 W1；L2/L3 DOM 与端到端；L4S/L4R/L4V 安全/健壮/响应式。result_json 让每条用例独立进入统一模型（不再 1 条聚合）。"
+    }
+  ]
+}

@@ -34,6 +34,17 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# 2026-10-30（部署布局缺陷修复）：数据根目录可被环境变量覆盖。
+# 背景：workbench/publish/ 是**扁平拷贝**（不含 scripts/），随工作台发布上云后
+#   技能根目录不存在 → 内嵌副本的 `parent.parent` 会指向不可写/无意义的位置。
+#   此时由代理设置 CT_ADVISOR_DATA_ROOT=应用根目录，使落盘位置稳定可写。
+# 本地开发（scripts/ 真源在位）不设该变量 → 行为与修复前完全一致。
+_ENV_DATA_ROOT = os.environ.get("CT_ADVISOR_DATA_ROOT", "").strip()
+if _ENV_DATA_ROOT:
+    try:
+        ROOT = Path(_ENV_DATA_ROOT).expanduser().resolve()
+    except Exception:  # noqa: BLE001
+        pass
 STORE_PATH = ROOT / "config" / "session_store.json"
 LOCK_PATH = ROOT / "config" / ".session_store.lock"
 

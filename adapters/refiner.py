@@ -507,6 +507,16 @@ class RefineRequest:
         # 6.5) conversation_history（2026-08-25 混合上下文）：非 list 一律归一为空 list
         if not isinstance(self.conversation_history, list):
             self.conversation_history = []
+        # 2026-10-30 修复（上下文交互缺陷 8）：除类型检查外，**按契约归一形态/顺序/摘要/轮数**。
+        # 此前仅校验 isinstance(list) → 任何非契约形态（messages 形态 {role,content} 等）
+        # 都会原样直达 Coze，后端 _history_fp 取空、"最近5轮"截断按条击穿 → 上下文事实为空。
+        # 归一器 import 失败时保留原值（不阻断主流程）。
+        if self.conversation_history:
+            try:
+                import history_norm as _hn
+                self.conversation_history = _hn.normalize_history(self.conversation_history)
+            except Exception:  # noqa: BLE001
+                pass
         # 6.6) doc_context / scope_hint（2026-09-23 本地守卫）：非 str 一律归一为空串
         if not isinstance(self.doc_context, str):
             self.doc_context = ""

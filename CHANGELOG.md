@@ -1,5 +1,73 @@
 # Changelog
 
+## 2026-10-29 · v1.3.30 破解「三点惯性」二次加固（Coze v1.48）
+
+> 来源：用户部署 v1.47 后反馈「测试了几个问题，还是三个点」。核实结论——**v1.47 确实已生效**（飞书 advisorlog 12:11 起 `coze_version=1.47`），但 middle 档答案仍普遍 3 点，说明"放宽上限"这一手段不够。
+
+### 根因（v1.47 为何失效）
+1. **只去禁令、没给依据**：`≤3` 改成 `2–5` 只是取消上限，模型没有"该写几条"的推导规则 → 默认回到训练先验的高频值 3。
+2. **「一、二、三」是三点惯性的直接载体**：中文数字编号一旦起头，写完"三"就自然收尾（实测 10-29 13:17 / 14:05 两条 3 点答案全部用「一、二、三」骨架）。
+3. 契约内另有密集的"三"锚点（C2 的 `①…②…③…`、C1 的"≤3 句"），持续强化"三件套"审美。
+
+### Changed
+- **`config/shared_contract.md` / `full_analysis_cfg.json:sp` / `review_cfg.json:sp`（同步留档）**：
+  - C3 表：middle 结构 → **段落式为主（1–3 段连贯论述）**，确需列举时按实际项数 2–5 条、用 `1.` `2.`、**不用「一、二、三」**；complex → **按语义 2–5 段**，**避免「一、二、三」三段式**。
+  - 反凑数 bullet 升级为**三条硬规则 + 三条判例**：① 条数 = `original_question` 里的独立要素数（1/2/4/5 都正常，无标准条数）；② **3 是默认值陷阱**——不得为对称把 2 条补成 3 条、也不得把 4–5 条硬压成 3 条；③ **禁用「一、二、三」三段式骨架**。判例：解释型（为什么 A 不 B）= **1 段结论 + 2 条依据**；清单型按实际项数（常见 4–6，超 5 先合并）；是非型仍按 C11 三段（**结论完整性红线不受影响**）。
+  - 统一问答架构"逐点支撑"→"**按语义分段**"（不强制编号）；C2 可选清单示例去掉第三个 `③`；两处"改用加粗或「一、二、三」编号段"→"加粗小标题或 `1.` `2.` 编号"；C13 措辞去掉"一、二、三段落"。
+
+### 部署
+- 已出包 `adapters/coze/ct-advisor_coze_v1.48_20261029.zip`（COZE_VERSION=1.48，md5 `dafa4a2f2970e9b34e46459e091a93fb`，119 files / 1.08 MB）。
+- 验证方法（本轮新增，可复用）：`python probe_version.py "<问题>"` 直连 `https://ct-advisor.coze.site/run` 实测；再用 `ct-update/scripts/feishu_log_fetch.py --days 1` 拉日志核对 `coze_version` 与答案要点数。
+
+## 2026-10-29 · v1.3.29 放宽「固定三点」结构约束（2–5 点）
+
+> 来源：用户反馈「很多简单类问题的回答都是三点，不多不少全部都是三点，看上去有点怪异，能否按实际情况 2–5 点」。
+
+### Changed
+- **根因**：作答契约 C3 的 middle 档写「**≤3 个要点**」、complex 档写「允许**「一、二、三」**编号段」——上限 + 示例双重暗示把 3 变成了模型的**目标值**，导致中等/简单题普遍恰好三点、观感机械（simple 档本应单段，问题多为被判 middle 的题）。
+- **`adapters/coze/config/shared_contract.md`（C3 表）**：middle `≤3 个要点` → **`2–5 个要点`（按内容实际需要取数）**；complex `允许「一、二、三」编号段` → **`2–5 段`**（「一、二、三…」编号或加粗段落标题均可）。
+- **新增反凑数原则（C3 下第一条 bullet）**：要点数取「回答该问题实际需要的条数」，**2–5 条都正常**；不得为凑 3 条拆分同一要点 / 硬加同义项 / 注水，也不得把实际需要 4–5 条的内容硬压成 3 条；1 条够用按 simple 单段；超 5 条先合并同类项或提示拆分提问；**要点数不是评分项**。
+- **同步落点**：`config/full_analysis_cfg.json:sp`（C3 表 + 「难度即预算」middle/complex 两行 + 自检清单新增 15b 反凑数检查）、`config/review_cfg.json:sp`（孤儿配置，仅留档同步，不进包）、`src/graphs/nodes/_version.py` 版本轨迹。
+- **未动**：字数天花板（simple ≤200 / middle ≤700 / complex ≤1000）、C1 先答后展、C2 边界锁定、C4 单一推荐、C11 结论完整性全部不变——本次只放开「要点条数」这一维。
+
+### 部署
+- 已出包 `adapters/coze/ct-advisor_coze_v1.47_20261029.zip`（COZE_VERSION=1.47，md5 `ec0868f3e55116c46b58080ed6bed95e`，119 files / 1.08 MB）。**需上传 Coze 平台重新部署后生效**（本地改 prompt 不影响云端既有 bot）。
+- 包内自检：`config/full_analysis_cfg.json` 与 `config/shared_contract.md` 已无 `≤3 个要点` 残留，`2–5` 分别出现 6 / 3 次；`assets/coze-output-guidelines-v1.3.md` 规则 13 同步限定「2–5 段」；`.coze` / `uv.lock` 在包，`review_cfg.json` 按约定不进包。
+
+## 2026-10-28 · v1.3.28 测试配置与 webguard 回归修复（ct-qa 全量跑测）
+
+### Fixed
+- **`adapters/coze/tests/test_webguard_proxy.py` 静默失效（P1，测试从未真正执行）**：
+  2026-10-24 起 `workbench/ct-advisor-proxy.py` 把 antiscrape 改为**懒加载**（`_as` 默认 `None`，
+  须显式调 `_wg_as()`），但本测试仍按旧实现直读 `pg._as` → Part A 第 62 行
+  `AttributeError: 'NoneType' object has no attribute 'compute_pseudoid'`，进程 exit 1，
+  **Part B/C/D 共 40+ 条限流 / 拒止表 / 拒绝短路 / 信息泄露断言一条都没跑过**
+  （C0 层长期只显示「exit code 1（无断言执行）」被当作噪音）。
+  修复：`load_proxy()` 内显式触发 `mod._wg_as()`；新增 `require_as(pg)` 守卫，
+  antiscrape 不可用时打印 `[SKIP]` 跳过依赖用例而非崩溃。
+  **修复后：PASS=47 FAIL=0**（原先 0 断言）。
+- **`ctqa.config.json` 的 `layers.enable` 含未注册层 `W3`**（框架静默丢弃 → 假启用）。移除。
+
+### 验证
+- `python -m ctqa run --skill <ct-advisor>`：**PASS 57 / FAIL 0 / WARN 3 / ERROR 0 → 绿灯**（exit 0），
+  C0 由 `WARN 1 / PASS 4` 转为 `PASS 5 / WARN 0`。
+- 剩余 3 项 WARN 均为记录级、非缺陷：`W0-010` 页面有 1 处内联 `<style>`（设计允许，
+  tokens.css 已外链且 `W0-009` PASS）；`W1-005` 事件协议启发式告警（前端走 fetch JSON、
+  不使用 SSE `ev.ev` 分支，后端 py 中亦无 progress/stage/tick 事件，判定为检查器假阳）；
+  `W2B-022` 资源级 404（ct-qa 静态服务无后端 `/api/*`，环境噪音）。
+
+## 2026-10-28 · v1.3.27 工作台前端测试标准流程固化（Standard Process）
+
+> 来源：用户要求"将针对 ct-advisor 工作台页面的测试方案写入技能作为标准流程"。
+> 把既有 8 层全自动化测试套件（`workbench/tests/`，132 通过 / 0 失败 / 2 告警，连跑三轮稳定）从一次性任务升级为技能开发契约。
+
+- **新增 `references/WORKBENCH_TESTING.md`**：工作台前端强制回归流程的权威 SOP。含适用范围、标准循环（基线→改动→全量→门禁→修复回归→验收→发布门禁）、命令速查、L0–L5 分层一览、mock 后端契约、严重度与门禁、修复-回归闭环纪律、verify_fixes 验收、文件保管红线、发布门禁、已知坑（5 条维护经验）、已固化根因清单（6 项回归必查点）、记录要求。
+- **`AGENTS.md` 新增「🔴 Workbench Frontend Testing (Standard Process — MANDATORY GATE)」**：把测试定为**强制门禁**——任何 `workbench/` 前端文件改动必须全量跑通 `tests/run_all.py`，P0/P1 失败即红灯阻断发布；并写明触发条件、标准循环七步、文件保管红线、以及"为何存在"（一次捕获 6 个真实缺陷）。
+- **`workbench/tests/README.md`** 维持实操速查定位，与 SOP 互指。
+- **测试结论（固化基调）**：全量 132 通过 / 0 失败 / 2 告警；退出码 0/1；`verify_fixes.py` 修复前后对照已通过。
+- **保管红线写入**：`index.html.bak-*`（verify_fixes 对照依赖）与 `tests/__requests.jsonl`（审计依赖）禁止删除。
+- **未改动任何发布产物**：仅为流程文档化，未触发 git 推送 / 平台发布。
+
 ## 2026-10-26 · v1.3.27 · §22.24 AI-as-intervention 双轨治理
 
 - **§22.24 P1·l AI-as-intervention 双轨治理框架**（SKILL.md §11）：ct-advisor 总入口路由双轨分类（前瞻性评估+SPIRIT-AI/CONSORT-AI vs 工作流准确性+TRIPOD-AI/ICH E6(R3)）（EClinicalMedicine 2026-10）。
@@ -296,8 +364,8 @@
 > 本条记录 coze 侧部署件与文档登记；本地 scripts 有一处扫描器改动（`discover_siblings.py` 纳入非 ct- 前缀兄弟技能，见下）。sibling_registry 重生成已于 2026-10-14 补齐：以 `CT_SKILLS_DIR=\\filesrv\C$\Users\WintoneFileSrv\.workbuddy\skills`（UNC 指向 filesrv 真实库）重扫，技能集合 20→23，`--check` 由 3 条差异转为全绿（正面回应上轮「沙箱环境扫描完整性存疑」的跳过理由）；上轮留档的 `scripts/sibling_registry.json.new` 已不在，留档机制作废。
 
 - **coze 侧（部署件，zip 交付：`ct-advisor_coze_v1.39_20261014.zip`，120 文件 / 9.13MB，含 md5）**：新增 3 份知识件 `ref-topic-m12-ddi.md` / `ref-topic-p21-data-rules.md` / `ref-topic-tooling-landscape.md`（直落 filesrv knowledge/）；`src/kb/__init__.py::_CATEGORY_KNOWLEDGE` 扩展（d/f+=m12、g+=p21+tooling、h+=p21）；`knowledge/reference-index.md` 增 Topic 专题系列节；`knowledge_index.json` 重建（29 文件 / 1205 章节 / 4688 键）。文件级 + 章节级路由端到端验证 3/3 命中。
-- **权威底料登记（ct-base/references/）**：`m12_thresholds.md`（ICH M12 Step4/5 切点，28 项数值核验 27/28 通过，附官方原文 PDF）+ `pinnacle21_validation_rules/`（SDTM/SEND/ADaM/Define-XML 共 1770 条公开规则 JSON）+ `certara_software_portfolio_analysis.md`（Certara 56 产品 / 8 大族深度分析）。
-- **SKILL.md · External Tool References 扩容（v1.3.0→v1.3.4，`.new` 交付）**：登记 Pinnacle 21 Validation Rules 公开 API 与 ICH M12 DDI 切点两族权威外部资产，指向 ct-base/references 落盘位置与对应 Coze KB topic。
+- **权威底料登记（ct-base/references/）**：`m12_thresholds.md`（ICH M12 Step4/5 切点，28 项数值核验 27/28 通过，附官方原文 PDF）+ 公开验证规则库（SDTM/SEND/ADaM/Define-XML 共 1770 条公开规则 JSON，具体名称与来源登记于 ct-base §21.5 竞品登记册）+ 软件产品组合分析底料（行业头部厂商 56 产品 / 8 大族深度分析，登记于 ct-base §21.5）。
+- **SKILL.md · External Tool References 扩容（v1.3.0→v1.3.4，`.new` 交付）**：登记公开验证规则 API 与 ICH M12 DDI 切点两族权威外部资产，指向 ct-base/references 落盘位置与对应 Coze KB topic。
 - **本地数据件 · `scripts/sibling_registry.json` 按 UNC 真实库重扫**：以 `CT_SKILLS_DIR=\\filesrv\C$\Users\WintoneFileSrv\.workbuddy\skills` 重扫（默认值 `~/.workbuddy/skills` 仅在本机恰好等价，换执行上下文即漂移——发布包内 `source_dir`/`install_path` 会留机器相关路径）。结果：**16 个技能版本刷新**（旧表停更于 2026-09-29，如 ct-registry 0.10.0→0.13.3、ct-samplesize 5.7.27→5.10.1、ct-sdtm 0.2.0→1.3.0、ct-literature 1.1.3→1.4.7）；`source_dir`/`install_path` 改记 UNC 形态（纯信息字段，无执行链消费——已 grep 确认）；另纳入 3 个非 ct- 前缀兄弟（见下条），集合 20→23。
 - **扫描器改动 · `scripts/discover_siblings.py` 纳入非 ct- 前缀兄弟技能**：meta-analysis / statsoft-cli / statdata-transfer 是 tool_mapping tier=A 的合法兄弟，但目录名不带 `ct-` 前缀，被目录名前缀过滤（原 :213）挡在注册表外——`--check` 三条「未扫描到」的根因（早前误判「真实库无此三目录」系只 glob 了 `ct-*` 所致，三目录实际均在技能库内）。修法：新增 `_known_sibling_names()`，从 `tool_mapping.json` 的 `tiers.registry` 派生非 ct- 白名单（单一数据源、不硬编码），`scan_all_skills` 与 `_scan_skill` 两处过滤同步放宽；技能库里大量无关技能（clinical / drug-discovery-search 等）仍不进注册表。重扫验证：注册表 23 技能，三条新条目数据正确（meta-analysis 2.20.1 / statsoft-cli 2.8.4 / statdata-transfer 2.2.1，均 tier=A、published=true、UNC install_path，summary/triggers 完整）；capability_index 在 literature_search / pipeline_intel / registry_search / statistical_analysis / tlg_generation 五桶自然扩展；`--check` 输出「✓ 注册表与 tool_mapping.json tiers.registry 一致」。py_compile 过；`test_seven_flows.py` 仅在注释中提及 suggest_footer，对本改动无直接覆盖（欠账，后续补）。
 - **经评估不需变更**：`tool_mapping.json`（仅覆盖 4 个 Tier-A 执行卡技能，ct-update 属运维型技能不发执行卡）；`kw_lexicon.json`（药物名词典，M12/DDI/P21 话题按架构归 Coze 侧，本地无知识库红线不变）；`entry.py`/`route.py` 等管道代码（HARD GATE 稳定区）。

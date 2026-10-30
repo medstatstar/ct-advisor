@@ -467,13 +467,23 @@ def _build_request(raw: str) -> RefineRequest:
         _st = (obj or {}).get("suggested_task")
         if _st and isinstance(_st, str) and _st.strip():
             _qm.setdefault("task_category", _st.strip())
+    # 2026-10-30 修复（上下文交互缺陷 7）：此前 conversation_history **原样透传**，
+    # 任何非契约形态（messages 形态 {role,content} 等）都会直达 Coze →
+    # 后端 _history_fp 取空 + "最近5轮"截断按条击穿 → 上下文事实为空。
+    # 现按契约（question/answer_summary、升序、每轮 1 条、摘要 ≤200 字、轮数有界）归一后再传。
+    try:
+        import history_norm as _hn
+        _conversation_history = _hn.normalize_history(
+            (obj or {}).get("conversation_history"))
+    except Exception:  # noqa: BLE001  归一化失败不阻断主流程 → 退回空历史
+        _conversation_history = []
     req = RefineRequest(
         query_meta=_qm,
         original_question=str((obj or {}).get("original_question", "")),
         draft_answer=str((obj or {}).get("draft_answer", "")),
         doc_context=str((obj or {}).get("doc_context", "") or ""),
         scope_hint=str((obj or {}).get("scope_hint", "") or ""),
-        conversation_history=(obj or {}).get("conversation_history", []) or [],
+        conversation_history=_conversation_history,
         is_followup=bool((obj or {}).get("is_followup", False)),
     )
     return req

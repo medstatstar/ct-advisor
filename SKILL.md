@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.27
+version: 1.3.30
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）与答案缓存/去重短路（省云端耗时）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -251,7 +251,7 @@ This skill has implemented four performance optimizations; see `PERF_SOP.md` for
 - **L2 Parallel warm-up** (`scripts/orchestrate.py`): eliminates stacked serial imports.
 - **L3 Inline verification discipline**: sha256 is computed inline in memory and only on a suspected mismatch — the plain-text exit's trailing marker already proves completeness. Zero LLM round-trips.
 - **L4 Single-command + unified session store (2026-10-16 · unified & multi-turn 2026-10-22 · **single path 2026-10-22**)**: `scripts/entry.py` now emits the **final plain-text answer in one call** — no decode step, no second script, and the payload shrinks from 4× (base64 of CJK) back to 1×. `scripts/ask.py` is retained only as a zero-logic forwarder for stale callers. The unified `scripts/session_store.py` (shared by **both** entry.py and the workbench proxy) gives a 30-min cross-session answer cache + a 10-min in-session near-duplicate dedup, so a re-send / repeated question costs **0 Coze calls**; it also injects multi-turn `conversation_history` into the Coze payload so context carries across rounds (previously the history was computed but never injected — root cause of 18% "承接上一轮" manual recaps). Root cause fixed: the `dedup_guard` short-circuit had never been reachable from `entry.py` (guard wired only into the `refine_answer.py` CLI; `query_origin` never set by entry.py), so every re-run was a real Coze round-trip — three of them for a single question in the 2026-10-16 log.
-- **L5 Scope broadening via domain router (2026-10-22)**: `scripts/scope_guard.py` was rewritten as a controlled-vocabulary domain router (multi-label: compliance / ops / writing / design / stats / safety / registry / data / rws / methodology / medical / device / vet). The three real high-frequency blocks users actually use — **合规应答 / 项目运营 / 交付物撰写** — are now first-class in-scope core domains (a writing / outline / template question is NO LONGER treated as out-of-scope); only a clearly non-medical / non-life-science question (e.g. consumer electronics, finance, FMCG) emits a constructive referral. 0% out-of-scope on the 68 real questions from the past-30-day Feishu advisorlog.
+- **L5 Scope broadening via domain router (2026-10-22)**: `scripts/scope_guard.py` was rewritten as a controlled-vocabulary domain router (multi-label: compliance / ops / writing / design / stats / safety / registry / data / rws / methodology / medical / device / vet). The three real high-frequency blocks users actually use — **regulatory response / trial operations / deliverable drafting** — are now first-class in-scope core domains (a writing / outline / template question is NO LONGER treated as out-of-scope); only a clearly non-medical / non-life-science question (e.g. consumer electronics, finance, FMCG) emits a constructive referral. 0% out-of-scope on the 68 real questions from the past-30-day Feishu advisorlog.
 
 **⚠️ Deployment restriction (important)**: the skill directory lives on a network share whose ACL is creator-owner — you can create new files, but **overwriting pre-installed existing files raises `PermissionError 13`**, and deletion is also blocked by a trash hook. Therefore, any change to `scripts/*.py` / `SKILL.md` should be written as a same-directory `.new` copy, then overwritten on the user's local machine with `move /Y` (command in `PERF_SOP.md` §4, or run `scripts/_perf_deploy.py`).
 
@@ -265,13 +265,13 @@ Local modules enrich the Coze payload: multi-turn `conversation_history`, 30-min
 
 ## Capability Domains — Expanded Coverage (2026-10-22)
 
-Coverage was broadened per user mandate: the three previously-uncovered but high-frequency real-user blocks — **合规应答 / 项目运营 / 交付物撰写** — are now first-class in-scope core domains (mapped to `scope_guard` labels `compliance` / `ops` / `writing`). They are **never** empty-refused; only clearly non-medical / non-life-science questions get a constructive referral. Full sub-topic catalog + authoritative anchors (ICH / NMPA / CDE / TransCelerate / DIA / CASRAI / EQUATOR, searched 2026-10-22) live in **`docs/capability_domains.md`**. Summary:
+Coverage was broadened per user mandate: the three previously-uncovered but high-frequency real-user blocks — **regulatory response / trial operations / deliverable drafting** — are now first-class in-scope core domains (mapped to `scope_guard` labels `compliance` / `ops` / `writing`). They are **never** empty-refused; only clearly non-medical / non-life-science questions get a constructive referral. Full sub-topic catalog + authoritative anchors (ICH / NMPA / CDE / TransCelerate / DIA / CASRAI / EQUATOR, searched 2026-10-22) live in **`docs/capability_domains.md`**. Summary:
 
 | Domain (label) | What the advisor answers | Key authoritative anchors |
 |---|---|---|
-| 合规应答 `compliance` | GCP 原则与适用、中国 GCP 落地、核查/稽查 readiness、方案偏离与 CAPA、安全性报告、登记与信息公示（CTR 号 + 30 天时限）、监管函件/沟通交流、知情同意与弱势受试者保护 | ICH E6(R3) 11 原则（2025-07-23 生效）· NMPA GCP 2020 第 57 号 · CDE《登记与信息公示管理规范》2020 第 9 号 + 平台 chinadrugtrials.org.cn |
-| 项目运营 `ops` | 研究中心启动、TMF / 必备文件（DIA TMF Reference Model v3 + MAGI ISF）、监查模式（RBM / 中心化 / hybrid）、RBQM（QTL 1–5 / KRI 10–25、CtQ 因素）、供应商/CRO 管理、入组留存、关中心与 DBL | TransCelerate RBM & QTL Framework · DIA TMF RM (tmfrefmodel.com) · ICH E8(R1) · CASRAI TMF 指南 |
-| 交付物撰写 `writing` | 方案（CPT/eCPT）、SAP（ICH E9(R1) 估计目标五属性 + Gamble 55 项清单）、CSR、IB、ICF、器械文档（ISO 14155）、登记类文件 | TransCelerate CC&R（2026 对齐 ICH M11）· ICH E9(R1) · EMA addendum · CASRAI SAP 模板 · EQUATOR |
+| Regulatory response `compliance` | GCP principles and applicability, China GCP implementation, inspection/audit readiness, protocol deviation and CAPA, safety reporting, registration and information disclosure (CTR number + 30-day deadline), regulatory correspondence / agency communication, informed consent and protection of vulnerable subjects | ICH E6(R3) 11 原则（2025-07-23 生效）· NMPA GCP 2020 第 57 号 · CDE《登记与信息公示管理规范》2020 第 9 号 + 平台 chinadrugtrials.org.cn |
+| Trial operations `ops` | Site activation, TMF / essential documents (DIA TMF Reference Model v3 + MAGI ISF), monitoring models (RBM / centralised / hybrid), RBQM (QTL 1-5 / KRI 10-25, CtQ factors), vendor/CRO management, enrolment and retention, site close-out and DBL | TransCelerate RBM & QTL Framework · DIA TMF RM (tmfrefmodel.com) · ICH E8(R1) · CASRAI TMF 指南 |
+| Deliverable drafting `writing` | Protocol (CPT/eCPT), SAP (ICH E9(R1) estimand five attributes + Gamble 55-item checklist), CSR, IB, ICF, device documentation (ISO 14155), registration documents | TransCelerate CC&R（2026 对齐 ICH M11）· ICH E9(R1) · EMA addendum · CASRAI SAP 模板 · EQUATOR |
 
 Assistance boundaries (enforced in-engine, documented in the doc): ✅ explain clauses / give decision frameworks / checklists / templates; ⚠️ never substitute legal, regulatory, or medical-writing conclusions — route to `ct-registry` / `ct-stats` / `ct-samplesize` / submission path as noted. The three domains are **locally routed**; Coze only needs to honour `domain_hint`.
 
@@ -356,7 +356,7 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 
 **Note on `[DEP-MISS]`:** before 2026-10-15 a missing `requests` library surfaced as `[DEP-MISS]` + an install prompt. The transport now uses stdlib `urllib`, so this failure class no longer exists; the handler remains as dormant defensive code.
 
-**2026-10-26 ct-base §22.24 双轨治理框架**：本技能作为 ct- 系列总入口路由 ct-samplesize/ct-registry/ct-safety/ct-literature/ct-protocol，凡涉及 AI-as-intervention（前瞻性评估 + SPIRIT-AI/CONSORT-AI） vs AI-for-trial-operations（工作流准确性 + TRIPOD-AI/ICH E6(R3)）的分类判定，按 §22.24 双轨治理框架执行（EClinicalMedicine 2026-10）。
+**2026-10-26 · ct-base §22.24 dual-track governance framework**: as the ct-series single entry point routing to ct-samplesize/ct-registry/ct-safety/ct-literature/ct-protocol, any classification judgement involving AI-as-intervention (prospective evaluation + SPIRIT-AI/CONSORT-AI) vs AI-for-trial-operations (workflow accuracy + TRIPOD-AI/ICH E6(R3)) follows the §22.24 dual-track governance framework (EClinicalMedicine 2026-10).
 
 ---
 

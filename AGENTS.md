@@ -1,4 +1,4 @@
-# AGENTS.md — ct-advisor v1.2.0 (ct- series A-tier entry point)
+# AGENTS.md — ct-advisor v1.3.26 (ct- series A-tier entry point)
 
 > This document is ct-advisor's self-improvement contract. It follows ct-base AGENTS.md structure and is written in English per §4 (references·AGENTS are English-only for published ct- skills).
 
@@ -6,7 +6,7 @@
 
 `ct-advisor`: the single front door for the entire `ct-*` clinical-trial skill family — a methodology & regulatory-evidence advisor (A-tier) that routes real-data / competitive-intel asks to sibling data skills (ct-registry / ct-safety / ct-literature / ct-samplesize / meta-analysis). **All domain expertise lives on the Coze cloud side. The local side retains ZERO knowledge base and performs ZERO local network retrieval.**
 
-## 🔴 Core Architecture (v1.2.0, 2026-09-25)
+## 🔴 Core Architecture (v1.3.26, current)
 
 **The local LLM is a PIPE, not an author.** Its ONE AND ONLY action is:
 
@@ -109,3 +109,24 @@ python scripts/entry.py --q "<user question>" [--attach "<path>"]
 ## Deliverable boundary (v1.24 · 2026-09-23)
 
 The deliverable of this skill is **text only**. When the user asks for the revised document back, say on the **first line** that this feature is **not available** — only written suggestions — and then provide the suggestions as copy-ready text.
+
+---
+
+## 🔴 Workbench Frontend Testing (Standard Process — MANDATORY GATE)
+
+The workbench frontend (`workbench/index.html` + `ct-advisor-proxy.py` + `wb-list.*` + `tokens.css`) is covered by a full automated regression suite in `workbench/tests/`. **This is a mandatory gate, not optional.**
+
+**Trigger** — any content change to the files above (CSS tokenization, i18n dict edit, event binding, fetch contract, proxy logic).
+
+**Standard loop** (full SOP in `references/WORKBENCH_TESTING.md`):
+1. Baseline: run the suite, confirm green before changing anything.
+2. Change: minimal root-cause fix, no unrelated refactor bundled in.
+3. Run: `C:/Tools/anaconda3/python.exe workbench/tests/run_all.py` → exit `0` = green.
+4. Gate: **any P0/P1 failure = red light, publish blocked.** P2/P3 may be deferred but must be logged.
+5. Fix–regress: locate `file:line` from `report.json`, fix, re-run until green; no "marked fixed without a green re-run".
+6. Verify: for P0/P1 fixes run `workbench/tests/verify_fixes.py` (before/after diff via `index.html.bak-*`).
+7. Publish gate: only after full green + verify pass may `run_app.bat` / `publish-kit` proceed.
+
+**Custody red lines** — never delete `workbench/index.html.bak-*` (verify_fixes needs it) or `workbench/tests/__requests.jsonl` mid-run.
+
+**Why this exists** — one pass caught 6 real defects: `esc()` not escaping `>` (injection surface), `loadLang()` `a || b ? c : d` precedence silently reverting language on refresh, missing value whitelist crashing init on dirty lang, `seedSamples()` not marking dirty (example history lost on refresh), markdown blockquote regex coupled to the un-escaped `>` (latent regression when esc was fixed), and `sendConsole()` missing `const T=t()` (long-input hint silently dead). Behavior tests (L2) are the real gate; the static `a || b ? c : d` heuristic is only a warn signal.
