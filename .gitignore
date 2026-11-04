@@ -149,3 +149,11 @@ _answers/
 # ── 运行态答案缓存 + 服务日志（2026-10-30 发布前补；运行产物，绝不入版本库/发布包）──
 config/answer_cache/
 config/serve.log
+
+# ── ct-update 周检自动补齐（2026-11-03） ──
+browser_tests.py
+ctqa.config.json
+
+# ── 运行态会话缓存（2026-11-04 修正 git add -A 误纳入）──
+# session_store.json.tmp 是本地答案缓存，不入版本库。
+*.tmp
