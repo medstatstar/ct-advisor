@@ -73,7 +73,9 @@ from adapters import build_refiner, RefineRequest, RefineResult, MissingDependen
 from scripts.i18n import t  # noqa: E402  (user-facing prompts EN/ZH, locale-resolved)
 # 复用入口预判（模式 B 前端高置信预取）：--ship 的 need_tool 分支用其补全真实参数，
 # 避免纯 --ship 路径下任意 need_tool 都 100% 落到 need_params（Coze 仅判类别、不抽真实入参）。
-from route_tool import predict as _predict_tool, suggest_footer  # noqa: E402
+from route_tool import (predict as _predict_tool, suggest_footer,  # noqa: E402
+                        complexity_hint_text, complexity_hint_prefix,
+                        has_complexity_hint)
 
 def _load_auto_approve_endpoints(config_path: str) -> Set[str]:
     """从 config.json 加载 auto_approve_endpoints 白名单。"""
@@ -244,6 +246,200 @@ def _render_skill_result(result, lang: str = "zh-CN") -> str:
     return str(result) if result is not None else ""
 
 
+def _stitch_hint(zh: bool) -> str:
+    """回程汇总提示（2026-11-09，由代码生成，非 LLM 追加）。
+
+    handoff 是单向的；用户分别跑完技能后，需要一条同样由代码驱动的回填路径，
+    否则混合调用没有「回程」。提示给出可直接执行的入口与 spec 格式。
+    """
+    spec = ('{"question":"<原问题>","results":[{"tool":"ct-registry",'
+            '"files":["<产物路径>"]}]}')
+    if zh:
+        return ("\n\n---\n\n💡 *回程汇总：上述技能跑完后，可把产物路径交给 "
+                "`entry.py --stitch '<JSON>'`（或 `@spec.json`），由代码在本地缝合；"
+                "默认不出站、不经 LLM、不改写数值。*\n\n格式：`" + spec + "`"
+                "\n\n*如需对结果做方法学解释，在 spec 里加 `\"interpret\":true`："
+                "仅把字段白名单内的**脱敏纯数值摘要**与代码构造的方法学问题发往 Coze，"
+                "原始产物、药名、方案名、受试者数据与原问题均不出域；未授权或无白名单数值时"
+                "自动只交付本地汇总。*")
+    spec_en = spec.replace("<原问题>", "<question>").replace("<产物路径>", "<path>")
+    return ("\n\n---\n\n*Return path: once the skills above have run, pass their output "
+            "paths to `entry.py --stitch '<JSON>'` (or `@spec.json`). The summary is "
+            "stitched locally by code — no egress by default, no LLM, no numeric rewriting.*"
+            "\n\nFormat: `" + spec_en + "`"
+            "\n\n*For a methodology interpretation of the results, add `\"interpret\":true` "
+            "to the spec: only allowlisted **sanitized numeric values** and a code-built "
+            "methodology question are sent to Coze. Raw outputs, drug/protocol names, "
+            "subject data and the original question never leave this machine; if the "
+            "endpoint is unauthorised or no allowlisted values exist, only the local "
+            "summary is delivered.*")
+
+
+def _complexity_tools(tool_out: dict) -> list:
+    """从执行结果归一化出本次涉及的兄弟技能列表（多工具信号，纯代码）。
+
+    deferred_tools 在真实执行流中是 [{tool, params, ...}] 字典列表，需取 tool 字段；
+    need_tools 内也可能夹带字典，统一归一化为字符串。
+    """
+    if not isinstance(tool_out, dict):
+        return []
+    tool = tool_out.get("tool")
+    deferred = tool_out.get("deferred_tools") or []
+    tools = list(tool_out.get("need_tools") or [])
+    if not tools and tool:
+        names = [tool]
+        for d in deferred:
+            if isinstance(d, dict):
+                if d.get("tool"):
+                    names.append(d["tool"])
+            elif d:
+                names.append(d)
+        tools = names
+    norm = []
+    for t in tools:
+        if isinstance(t, dict):
+            t = t.get("tool")
+        if t:
+            norm.append(t)
+    return norm
+
+
+def _complexity_hint(tool_out: dict, lang: str = "zh-CN") -> str:
+    """兼容旧调用：返回「末尾追加式」提示文本（出口层现已统一改用前置版）。
+
+    文本由 route_tool.complexity_hint_text 统一生成（单一真相源，避免两端措辞漂移）。
+    """
+    return complexity_hint_text(_complexity_tools(tool_out), lang)
+
+
+def _prepend_complexity(answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
+    """复杂混合调用安全提示前置到答案**最前**（2026-11-10 修复，幂等）。
+
+    原实现把提示追加在缝合答案末尾；若混合调用在扣子端卡死 / 超时回落，
+    ``_merge_answer`` 根本不执行，提示永不出现。前置后只要执行结果显示多工具，
+    提示就会随结果一并返回，用户第一眼即可看到「长时间无反馈请拆分重问」。
+    """
+    prefix = complexity_hint_prefix(_complexity_tools(tool_out), lang)
+    if not prefix or has_complexity_hint(answer or "", at_start=True):
+        return answer
+    return prefix + (answer or "")
+
+
+def _complexity_prefix_from_q(question: str, lang: str = "zh-CN",
+                              with_separator: bool = True) -> str:
+    """基于本地预判（零联网）直接由问题算出提示，供「调用之前 / 回落」场景使用。
+
+    本地 route_tool 预判即可判定多工具，**不依赖扣子端是否返回 complexity_hint
+    字段，也不依赖 _merge_answer 是否执行**。返回空串表示非复杂混合调用。
+    """
+    try:
+        pred = _predict_tool(question)
+        tools = (pred.get("need_tools") or []) if isinstance(pred, dict) else []
+    except Exception:  # noqa: BLE001
+        tools = []
+    return complexity_hint_prefix(tools, lang, with_separator=with_separator)
+
+
+def _with_q_prefix(text: str, prefix: str) -> str:
+    """幂等前置：答案里已有提示（如 --card-inline 子进程已加）则不重复添加。"""
+    if not prefix or has_complexity_hint(text or "", at_start=True):
+        return text
+    return prefix + (text or "")
+
+
+def _pre_call_complexity(question: str, lang: str = "zh-CN") -> str:
+    """「调用之前发出」+ 返回可前置到答案的前缀（两路同源，纯代码）。
+
+    HARD GATE 下本进程是同步子进程，stdout 在进程结束前不会被读取，故「调用之前」
+    能落地的最早通道是 stderr（调用前即写出，即便后续卡死也已留痕）；「与结果
+    一并返回」由返回值前缀在最终出口完成。
+    """
+    prefix = _complexity_prefix_from_q(question, lang, with_separator=True)
+    if prefix:
+        notice = _complexity_prefix_from_q(question, lang, with_separator=False)
+        if notice:
+            sys.stderr.write(
+                "[ct-advisor] 复杂混合调用预警（调用之前发出）：\n" + notice + "\n")
+    return prefix
+
+
+def _render_deferred_cards(tool_out: dict, lang: str = "zh-CN") -> str:
+    """混合跨技能：把 deferred_tools 渲染成**可直接调用的 @skill 卡片列表**（纯代码）。
+
+    2026-11-09：客户端已可直接调用本机注册技能。此前多源问题只在信封里带
+    deferred_tools、答案正文却只有主技能一张卡片，其余技能对用户完全不可见
+    （test_cross_skill_handoff.py B 组 8 条曾全部 FAIL）。这里让每个技能都带上
+    mention / 已按各自白名单拆分的参数 / 缺失参数 / 交付物 / B 档保密等级，
+    用户可分别一键调用，不必等 advisor「再逐个调用」。
+    """
+    deferred = tool_out.get("deferred_tools") or []
+    if not deferred:
+        return ""
+    zh = lang == "zh-CN"
+    lines = []
+    for d in deferred:
+        if not isinstance(d, dict):
+            continue
+        tool = d.get("tool") or ""
+        mention = d.get("mention") or ("@skill:%s" % tool)
+        p = d.get("params") or {}
+        p_txt = ("；" if zh else ", ").join(f"{k}={v}" for k, v in p.items()) \
+            or ("（无）" if zh else "(none)")
+        missing = d.get("missing") or []
+        miss_txt = "/".join(str(m) for m in missing) or ("无" if zh else "none")
+        deliv = d.get("deliverables") or ""
+        # 英文路径不复用中文交付物文案（避免中英混杂）
+        show_deliv = bool(deliv) and (
+            zh or not any("\u4e00" <= c <= "\u9fff" for c in str(deliv)))
+        conf = bool(d.get("confidential"))
+        # 本机未注册的技能不得伪装成可直接调用的 @skill 卡片（反幻觉 / 反误导）。
+        # 兼容旧执行卡信封：缺省 client_callable 视为可调用。
+        if d.get("client_callable", True) is False:
+            if zh:
+                lines.append(f"- `{tool}`：⚠️ 该技能当前**本机未注册**，客户端尚无法直接调用；"
+                             "请先在近端运行环境准备该技能。")
+            else:
+                lines.append(f"- `{tool}`: not registered locally; the client cannot invoke "
+                             "it directly yet — prepare the skill in the local runtime first.")
+            continue
+        if zh:
+            line = f"- `{mention}`" + (f"：{deliv}" if show_deliv else "")
+            line += f"｜已识别参数：{p_txt}｜需补齐：{miss_txt}"
+            if conf:
+                line += "｜⚠️ B 档涉密，请在本机执行"
+        else:
+            line = f"- `{mention}`" + (f": {deliv}" if show_deliv else "")
+            line += f" | params: {p_txt} | missing: {miss_txt}"
+            if conf:
+                line += " | Tier-B: run locally, confidential input"
+        hint = d.get("hint") if zh else (d.get("hint_en") or d.get("hint"))
+        if hint:
+            line += ("｜💡 " + hint) if zh else (" | " + hint)
+        lines.append(line)
+    if not lines:
+        return ""
+    has_callable = any(
+        isinstance(d, dict) and d.get("client_callable", True) is not False
+        for d in deferred)
+    if zh:
+        if has_callable:
+            return ("\n\n### 其余可直接调用的技能\n\n"
+                    "本次提问还涉及下列技能，可分别按卡片直接调用（各自参数已随附；"
+                    "标注「本机未注册」的需先在近端准备该技能）：\n"
+                    + "\n".join(lines))
+        return ("\n\n### 其余技能（当前本机未注册）\n\n"
+                "本次提问还涉及下列技能，但本机尚未注册，客户端暂时无法直接调用：\n"
+                + "\n".join(lines))
+    if has_callable:
+        return ("\n\n### Other skills you can invoke directly\n\n"
+                "This question also involves the skills below; invoke each from the client "
+                "with the params already extracted (items marked not registered must be "
+                "prepared in the local runtime first):\n" + "\n".join(lines))
+    return ("\n\n### Other skills (not registered locally)\n\n"
+            "The question also involves the skills below, which are not registered "
+            "locally yet and cannot be invoked from the client:\n" + "\n".join(lines))
+
+
 def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
     """确定性缝合：Coze 原答案 + 补充信息（含来源标签）。纯代码，不依赖 LLM。
 
@@ -254,15 +450,78 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
     status = tool_out.get("status")
     if status == "ok":
         res = _render_skill_result(tool_out.get("result"), lang)
+        extra = _render_deferred_cards(tool_out, lang)
         # 2026-09-10（用户要求）：调用兄弟技能后，缝合层追加一行「建议直接用该技能」——
         # 缝合结果是可读摘要，用户若要核实 / 获取更详细的原始输出，应直接运行该技能本身。
+        # 2026-11-09：混合跨技能时，其余技能也各自附上可直调的 @skill 卡片。
         if lang == "zh-CN":
-            return (f"{coze_answer}\n\n---\n\n## 补充信息（来源：{tool}）\n\n{res}"
-                    f"\n\n💡 *以上为该技能结果的可读摘要；如需核实或获取更详细的原始输出，"
-                    f"建议直接使用 `{tool}` 技能。*")
+                return (f"{coze_answer}\n\n---\n\n## 补充信息（来源：{tool}）\n\n{res}"
+                        f"\n\n💡 *以上为该技能结果的可读摘要；如需可复算结果或文件交付物，"
+                        f"请在客户端直接调用 `@skill:{tool}`。*") + extra
         return (f"{coze_answer}\n\n---\n\n## Supplementary data (Source: {tool})\n\n{res}"
-                f"\n\n💡 *The above is a readable summary of this skill's result; "
-                f"to verify it or get the full detailed output, run the `{tool}` skill directly.*")
+                        f"\n\n💡 *The above is a readable summary of this skill's result; "
+                        f"for reproducible results or file deliverables, invoke `@skill:{tool}` directly.*") + extra
+    if status == "handoff":
+        # 2026-11-09（客户端已可直接调用兄弟技能）：代码产出 @skill 卡片，
+        # 把执行权交回技能本体，避免用户只拿到 advisor 缝合的纯文本摘要。
+        # 🔴 卡片是答案正文的一部分，由 entry.py 单一出口输出；本地 LLM 不参与生成、
+        #    不得改写，也不得据此自行发起技能调用（SKILL.md HARD GATE）。
+        rp = tool_out.get("result") or {}
+        rp = rp if isinstance(rp, dict) else {}
+        mention = rp.get("mention") or f"@skill:{tool}"
+        pms = rp.get("params") or {}
+        missing = rp.get("missing") or []
+        purpose = rp.get("purpose") or ""
+        deliverables = rp.get("deliverables") or ""
+        confidential = bool(rp.get("confidential"))
+        zh = lang == "zh-CN"
+        param_txt = ("；" if zh else ", ").join(f"{k}={v}" for k, v in pms.items()) \
+            or ("（无）" if zh else "(none)")
+        # 英文路径不复用中文 payload（2026-09-10 unreleased_b 同款修复）：
+        # purpose / deliverables 来自 tool_mapping.json，恒为中文，直接拼会中英混杂。
+        def _ascii_only(text: str) -> bool:
+            return not any("\u4e00" <= c <= "\u9fff" for c in str(text))
+        p_line = ""
+        d_line = ""
+        if purpose and (zh or _ascii_only(purpose)):
+            p_line = f"- 用途：{purpose}\n" if zh else f"- Purpose: {purpose}\n"
+        if deliverables and (zh or _ascii_only(deliverables)):
+            d_line = (f"- 完整交付物：{deliverables}\n" if zh
+                      else f"- Full deliverables: {deliverables}\n")
+        miss_block = ""
+        if missing:
+            items = "\n".join(f"- {m}" for m in missing)
+            miss_block = (f"\n\n调用前建议补齐：\n{items}" if zh
+                          else f"\n\nSuggested params to supply:\n{items}")
+        guard = ""
+        if confidential:
+            guard = ("\n\n⚠️ 该技能属 B 档（输入涉密）：请在本机用它处理真实方案 / 受试者数据，"
+                     "不要把资料发往公共检索端点或 Coze 通道（F33 出域红线）。"
+                     if zh else
+                     "\n\n⚠️ Tier-B skill (confidential input): run it locally against real "
+                     "protocols / subject data; never send those materials to public endpoints.")
+        extra = _render_deferred_cards(tool_out, lang)
+        back = _stitch_hint(zh)
+        if zh:
+            return (f"{coze_answer}\n\n---\n\n## 可直接调用：{mention}\n\n"
+                    f"该技能已在本机注册，客户端可直接调用；ct-advisor 不再代跑 CLI，"
+                    f"以免只拿到速览摘要。\n"
+                    f"{p_line}"
+                    f"- 已识别参数：{param_txt}\n"
+                    f"{d_line}"
+                    f"{miss_block}{guard}\n\n"
+                    f"以上为本技能按自身能力给出的方法学回答；真实数据、可复算结果与文件"
+                    f"请以上述技能的实际输出为准。") + extra + back
+        return (f"{coze_answer}\n\n---\n\n## Invoke directly: {mention}\n\n"
+                f"This skill is registered locally and can be called from the client; "
+                f"ct-advisor does not run its CLI on your behalf, so you get the full "
+                f"deliverable instead of a brief summary.\n"
+                f"{p_line}"
+                f"- Params identified: {param_txt}\n"
+                f"{d_line}"
+                f"{miss_block}{guard}\n\n"
+                f"The answer above is ct-advisor's own methodology answer; rely on the "
+                f"skill's actual output for real data, reproducible results and files.") + extra + back
     if status == "need_params":
         mp = tool_out.get("result") or {}
         missing = mp.get("missing", []) if isinstance(mp, dict) else []
@@ -354,7 +613,8 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
                    "then produced from own capability and marked \"data not retrieved\".")
                 + tail)
     if status == "unreleased_b":
-        # 2026-09-10 A/B 档门控：B 档技能（输入涉密）不对外发布 → 直接说明 + 用自身能力作答。
+        # 2026-09-10 A/B 档门控；2026-11-09 口径：仅当技能**本机未注册**时走这里，
+        # 直接说明「本机未注册 / 不经公共市场分发」+ 用自身能力作答。已注册技能走 handoff。
         # 英文路径自带英文文案（payload 的 message / purpose_note 恒为中文，直接复用会让
         # 英文答案夹中文——2026-09-10 修）。
         rp = tool_out.get("result") or {}
@@ -363,23 +623,24 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
         registered = rp.get("registered", True)
         purpose = rp.get("purpose") or ""
         if lang == "zh-CN":
-            msg = rp.get("message") or f"{tool} 属 B 档技能，不对外发布。"
+            msg = rp.get("message") or f"{tool} 属 B 档技能（输入涉密），当前本机未注册、客户端无法直接调用。"
             note = rp.get("purpose_note") or ""
-            return (f"{coze_answer}\n\n---\n\n## 需调用的 B 档技能：{tool}（不对外发布）\n\n"
+            return (f"{coze_answer}\n\n---\n\n## 需调用的 B 档技能：{tool}（本机未注册）\n\n"
                     f"{msg}\n\n{note}\n\n"
                     f"以上回答基于 ct-advisor 自身能力与方法学框架给出；该技能的深度分析未实际执行，"
                     f"涉及需用真实方案 / 数据运行才能得出的结论请以本地技能结果为准。")
         if registered:
             msg = (f'The Tier-B skill "{tool}" (confidential input: subject data / protocol / CRF) '
-                   f'is **not publicly released** — no public repository, so it cannot be installed.')
+                   f'is not distributed through public marketplaces and is **not registered '
+                   f'locally**, so the client cannot invoke it directly.')
         else:
             msg = (f'"{tool}" is not in ct-advisor\'s skill registry and is treated as Tier B by '
-                   f'default — it is not publicly released and cannot be installed.')
+                   f'default — it is not registered locally and cannot be invoked here.')
         note = (f"The skill's capability (e.g. in-depth protocol review / statistical review / data QC) "
                 f"must run in its own local environment against real data; ct-advisor does not "
                 f"impersonate it.")
         p = f"- Purpose: {purpose}\n" if purpose else ""
-        return (f"{coze_answer}\n\n---\n\n## Tier-B skill required: {tool} (not publicly released)\n\n"
+        return (f"{coze_answer}\n\n---\n\n## Tier-B skill required: {tool} (not registered locally)\n\n"
                 f"{msg}\n{p}\n{note}\n\n"
                 f"The answer above is based on ct-advisor's own capability and methodology framework; "
                 f"the skill's in-depth analysis was not actually executed. For conclusions that require "
@@ -396,24 +657,24 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
         rp = rp if isinstance(rp, dict) else {}
         purpose = rp.get("purpose") or ""
         if lang == "zh-CN":
-            msg = rp.get("message") or f"{tool} 属 A 档技能但尚未公开发布，当前无法安装。"
+            msg = rp.get("message") or f"{tool} 属 A 档技能，未在 SkillHub 上架且当前本机未注册。"
             nxt = rp.get("next_step") or (
                 "可先分别调用已上架的兄弟技能（ct-registry / ct-safety / ct-literature）取数，"
                 "再由 ct-advisor 就地缝合；待该技能正式发布后再由它统一编排。")
             p = f"- 该技能用途：{purpose}\n" if purpose else ""
-            return (f"{coze_answer}\n\n---\n\n## 需调用的 A 档技能：{tool}（尚未公开发布）\n\n"
+            return (f"{coze_answer}\n\n---\n\n## 需调用的 A 档技能：{tool}（本机未注册）\n\n"
                     f"{msg}\n{p}"
                     f"以上回答基于 ct-advisor 自身能力与方法学框架给出；该技能未实际执行，"
                     f"凡需其取数或运行才能确认的内容（试验登记号、安全信号数值、文献条目、"
                     f"竞品情报评分等）均未经核验，请勿直接引用为事实。\n{nxt}")
-        msg = (f'The Tier-A skill "{tool}" (non-confidential input) has not been publicly '
-               f'released yet — it is not listed on SkillHub — so it cannot be installed now.')
+        msg = (f'The Tier-A skill "{tool}" (non-confidential input) is not listed on SkillHub '
+               f'and is **not registered locally**, so the client cannot invoke it now.')
         nxt = rp.get("next_step_en") or (
-            "In the meantime you can call the published sibling skills "
-            "(ct-registry / ct-safety / ct-literature) separately and have ct-advisor stitch "
-            "the results; once this skill is released it will orchestrate them itself.")
+            f"If the skill is available in your client, invoke @{tool} directly; otherwise "
+            "call ct-registry / ct-safety / ct-literature separately and have ct-advisor "
+            "stitch the results.")
         p = f"- Purpose: {purpose}\n" if purpose else ""
-        return (f"{coze_answer}\n\n---\n\n## Tier-A skill required: {tool} (not yet publicly released)\n\n"
+        return (f"{coze_answer}\n\n---\n\n## Tier-A skill required: {tool} (not registered locally)\n\n"
                 f"{msg}\n{p}"
                 f"The answer above is based on ct-advisor's own capability and methodology framework; "
                 f"the skill was not executed, so anything requiring its data or runtime (registry IDs, "
@@ -461,6 +722,20 @@ def _run_handle_need_tool(card: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"tool": card.get("need_tool"), "status": "error",
                 "result": f"{type(e).__name__}: {e}"}
+
+
+def _ensure_deferred(tool_out: dict, card: dict) -> dict:
+    """card-inline / ship 路径的混合调用兜底（2026-11-09，纯代码）。
+
+    执行卡若在传递中丢了 need_tools，handoff 就只剩主技能一张卡片。
+    复用 handle_need_tool.ensure_deferred 现场补齐；任何异常都原样返回，
+    绝不因兜底失败影响主答案。
+    """
+    try:
+        from handle_need_tool import ensure_deferred
+        return ensure_deferred(tool_out, card)
+    except Exception:  # noqa: BLE001
+        return tool_out
 
 
 def _emit_plain(text: str) -> None:
@@ -708,8 +983,15 @@ def main() -> None:
             sys.stderr.write(f"[ct-advisor] card-inline JSON 解析失败: {e}\n")
             sys.exit(1)
         coze_answer = card.get("draft_answer") or ""
-        tool_out = _run_handle_need_tool(card)
-        _emit_plain(_merge_answer(coze_answer, tool_out))
+        tool_out = _ensure_deferred(_run_handle_need_tool(card), card)
+        _q = card.get("original_question") or ""
+        _lang = _detect_lang(_q)
+        # 2026-11-10 修复：调用之前预警 + 与结果一并返回最前（幂等，双来源互补）
+        _q_prefix = _pre_call_complexity(_q, _lang)
+        _emit_plain(_with_q_prefix(
+            _prepend_complexity(
+                _merge_answer(coze_answer, tool_out, lang=_lang), tool_out, _lang),
+            _q_prefix))
         sys.exit(0)
 
     # Read priority (in-memory pipeline first, zero temp files):
@@ -822,6 +1104,15 @@ def main() -> None:
             sys.stdout.write(draft)
             sys.exit(0)
 
+    # ── 2026-11-10 修复：复杂混合调用安全提示 ──────────────────────────────
+    # 在**任何出站 / 技能调用之前**由本地零联网预判发出（stderr 实时预警），并返回
+    # 可前置到答案的前缀。各明文输出分支用 _with_q_prefix 幂等前置，覆盖扣子端
+    # 成功慢回 / 超时回落 / 未授权 / 缓存短路 —— 不再依赖 _merge_answer 是否执行，
+    # 也不依赖扣子端是否回传 complexity_hint 字段。结构化 JSON 与竞速（fire-only /
+    # collect）路径不注入正文以保持协议，但预警已在调用前发出。
+    _q_prefix = _pre_call_complexity(req.original_question,
+                                     _detect_lang(req.original_question))
+
     # ── 2026-09-23 改进（诊断报告落地）：转发前本地守卫 ──
     # 范围路由 / 大文档压缩 / 同 origin 去重；fire_only·collect 路径 no-op（遵守 race 硬闸门）。
     # 防御式：任何守卫异常都跳过，绝不阻断主流程（与 context_stitch 同策略）。
@@ -840,7 +1131,7 @@ def main() -> None:
                 "[ct-advisor] dedup short-circuit: replayed local cached answer "
                 "(no new Coze call sent)\n"
             )
-            _emit_plain(_go.answer)
+            _emit_plain(_with_q_prefix(_go.answer, _q_prefix))
             sys.exit(0)
     except Exception as _ge:  # noqa: BLE001
         sys.stderr.write(f"[ct-advisor] forward_guards skipped: {_ge}\n")
@@ -852,10 +1143,9 @@ def main() -> None:
             _get_endpoint_from_config(args.config), args.config
         ):
             # 未授权出站：无法获取 Coze 答案，明确告知 agent 走本地兜底
-            _emit_plain(
+            _emit_plain(_with_q_prefix(
                 "⚠️ 未授权出站到 Coze，无法获取精校答案。请确认允许后重试。"
-                "「答案未经过 Coze 精校，请谨慎使用」。"
-            )
+                "「答案未经过 Coze 精校，请谨慎使用」。", _q_prefix))
             sys.exit(0)
         try:
             result = build_refiner(config_path=args.config).refine_forward(req)
@@ -870,9 +1160,10 @@ def main() -> None:
             sys.stderr.write(
                 f"[ct-advisor] ship 失败（{type(e).__name__}）：Coze 不可用，需本地兜底\n"
             )
-            _emit_plain(
-                "⚠️ 无法连接 Coze 服务，答案未经过精校。请稍后重试。"
-            )
+            # 2026-11-10 修复：即便扣子端卡死/不可用，复杂混合调用提示仍须随
+            # 回落文案一并返回（本地预判独立保证，不依赖扣子端返回该字段）。
+            _emit_plain(_with_q_prefix(
+                "⚠️ 无法连接 Coze 服务，答案未经过精校。请稍后重试。", _q_prefix))
             sys.exit(0)
         coze_answer = result.final_answer or ""
         need_tool = result.need_tool
@@ -886,16 +1177,26 @@ def main() -> None:
                 for k, v in (pred.get("params") or {}).items():
                     if v not in (None, ""):
                         params.setdefault(k, v)
+            # 2026-11-09：ship 路径也要带上混合技能列表（Coze 侧 + 本地预判），
+            # 否则「代码跳过大模型」的直缝路径同样只剩单一技能卡片。
+            mixed_tools = list(dict.fromkeys(
+                list(getattr(result, "need_tools", None) or [])
+                + list(pred.get("need_tools") or [])
+                + ([need_tool] if need_tool else [])))
             card = {
                 "need_tool": need_tool,
+                "need_tools": mixed_tools,
                 "params": params,
                 "draft_answer": coze_answer,
                 "original_question": req.original_question,
             }
-            tool_out = _run_handle_need_tool(card)
+            tool_out = _ensure_deferred(_run_handle_need_tool(card), card)
             # 2026-08-21：缝合文案/标签随提问语言（结构化单元格数据保持原文）
-            merged = _merge_answer(coze_answer, tool_out,
-                                   lang=_detect_lang(req.original_question))
+            _lang = _detect_lang(req.original_question)
+            # 2026-11-10 修复：复杂混合调用提示前置到答案最前（与结果一并返回，
+            # 覆盖扣子端成功慢回 / 超时回落；本地预判即能独立保证，不依赖扣子端返回）。
+            merged = _prepend_complexity(
+                _merge_answer(coze_answer, tool_out, lang=_lang), tool_out, _lang)
         else:
             merged = coze_answer
         if not merged.strip():
@@ -967,7 +1268,7 @@ def main() -> None:
             pass
         # 2026-10-25：输出前 SDTM 域码守卫（通用负向闸门：凡不在 SDTMIG v3.4 标准域目录的域码断言即拦；IM 等仅示例）；防御式、不阻断。
         merged = _validate_sdtm_domains(merged, lang=_detect_lang(req.original_question))
-        _emit_plain(merged)
+        _emit_plain(_with_q_prefix(merged, _q_prefix))
         sys.exit(0)
 
     if args.forward:
@@ -1088,7 +1389,7 @@ def main() -> None:
         _get_endpoint_from_config(args.config), args.config
     ):
         sys.stderr.write(t("auth.serial_blocked") + "\n")
-        sys.stdout.write(draft)
+        sys.stdout.write(_with_q_prefix(draft, _q_prefix))
         sys.exit(0)
     last_error = ""
     # 回退消息报告的实际有效超时（长任务 300s / 普通 60s）。先给默认值，避免 build_refiner 失败时未定义。
@@ -1133,13 +1434,13 @@ def main() -> None:
     # 诊断兜底（2026-08-13）：Coze 失败且无本地草稿时输出友好询问（agent 应征得用户同意后
     # 自动运行 check_coze.py 诊断），而非空输出——空输出会被误判为"没有答案"。
     if not (final or "").strip():
-        sys.stdout.write(
-            t("error.fallback_diagnose", error=last_error or "unknown") + "\n"
-        )
+        sys.stdout.write(_with_q_prefix(
+            t("error.fallback_diagnose", error=last_error or "unknown") + "\n",
+            _q_prefix))
     else:
         # 2026-10-25：输出前 SDTM 域码守卫（通用负向闸门：凡不在 SDTMIG v3.4 标准域目录的域码断言即拦；IM 等仅示例）；防御式、不阻断。
         final = _validate_sdtm_domains(final, lang=_detect_lang(req.original_question))
-        sys.stdout.write(final)
+        sys.stdout.write(_with_q_prefix(final, _q_prefix))
     sys.exit(0)
 
 

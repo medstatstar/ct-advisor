@@ -29,6 +29,10 @@
     "cjk_dict_allow": [
       "langLabel"
     ],
+    "cjk_allow": [
+      "console\\.(error|warn|log)",
+      "\\.test\\(s\\)"
+    ],
     "smoke_nodes": [
       "wb-input",
       "wb-result",

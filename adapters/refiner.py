@@ -307,6 +307,34 @@ def _normalize_coze_message(raw: Any) -> Optional[dict]:
     return None
 
 
+# ── 2026-11-11 v1.68：云端返回结构对接校验（「对接不匹配」检测）──
+# 已知响应字段（coze /run 的 GraphOutput 契约）。用于判断返回结构是否与本地技能版本匹配。
+_KNOWN_RESPONSE_KEYS = (
+    "final_answer", "answer", "need_tool", "need_tools", "deferred_tools",
+    "params", "run_id", "message", "coze_version", "cached_answer", "cache_hit",
+)
+
+
+def _check_struct_mismatch(data: Any) -> bool:
+    """检测 coze 返回结构是否与本地技能版本不匹配。
+
+    返回 True 表示结构异常（应触发升级/改用 Web 应用提醒）：
+      ① data 非 dict；
+      ② 不含任何已知响应字段（完全未知结构）；
+      ③ 既无答案字段（final_answer/answer）又无委托字段（need_tool/need_tools/
+         deferred_tools）——handoff 场景 need_tool 有值属合法，不误报。
+    """
+    if not isinstance(data, dict):
+        return True
+    if not any(k in data for k in _KNOWN_RESPONSE_KEYS):
+        return True
+    if (not (data.get("final_answer") or data.get("answer") or data.get("cached_answer"))
+            and not (data.get("need_tool") or data.get("need_tools")
+                     or data.get("deferred_tools"))):
+        return True
+    return False
+
+
 # difficulty 枚举（2026-09-26 二值化：vague | forwarded；旧三档标签仅为历史 payload 兼容保留）
 DIFFICULTY_ENUM = ("vague", "forwarded", "simple", "middle", "complex")
 
@@ -384,6 +412,12 @@ class RefineResult:
     params: dict = field(default_factory=dict)  # 技能入参
     run_id: str = ""                  # 追踪用
     message: Optional[dict] = None     # §20.15：Coze 业务侧表面提示（顶层可选 message 字段归一化后）
+    # 2026-11-09：Coze 侧 tool_router 若返回多技能命中，必须带进本地，
+    # 否则预判未命中的混合问题在委托路径里只剩单一技能。缺省空列表，向后兼容。
+    need_tools: list = field(default_factory=list)
+    # 2026-11-11 v1.68：云端端点版本（出参侧，与飞书 coze_version 同源）。
+    # 空串 = 云端未声明（老版本 / 响应契约不匹配）→ 本地兜底提醒升级。
+    coze_version: str = ""
 
     def __post_init__(self):
         # 净化 final_answer：范围 ~ → -，避免渲染器误判删除线（见 _purify_tilde_range）
@@ -910,6 +944,21 @@ class CozeRefiner(Refiner):
         # 兼容（2026-09-09）：新版 Coze 工作流返回顶层 `final_answer`；老版本仍返回 `answer`。
         # 两 key 都认（final_answer 优先），任一命中即采用，都不命中才回退本地草稿。
         final = data.get("final_answer") or data.get("answer") or req.draft_answer
+        # 2026-11-10（v1.63）：响应顶层 `complexity_hint` 是云端「复杂混合调用」的
+        # **布尔标记**（结构化元数据；v1.62 曾为提示文案，已撤销），此处刻意不解析、
+        # 不渲染、不塞进 final_answer。用户可见的安全提示
+        # 由本地 entry.py 唯一出口基于 route_tool 零联网预判生成（调用前 stderr 预警
+        # + 答案最前前置），并在出口做去重剥离；双端各自渲染会导致用户看到两次。
+        # 云端多技能命中：need_tools / deferred_tools 两种键都认；可能是 JSON 字符串，
+        # 也可能是列表。任何异常形态一律安全降级为空列表（不影响主判 need_tool）。
+        _nt = data.get("need_tools") or data.get("deferred_tools") or []
+        if isinstance(_nt, str):
+            try:
+                _nt = json.loads(_nt)
+            except Exception:  # noqa: BLE001
+                _nt = []
+        if not isinstance(_nt, list):
+            _nt = []
         result = RefineResult(
             final_answer=strip_display_tags(final),
             cached_answer=data.get("cached_answer") or "",
@@ -917,9 +966,36 @@ class CozeRefiner(Refiner):
             need_tool=data.get("need_tool") or None,
             params=data.get("params") or {},
             run_id=str(data.get("run_id") or ""),
+            need_tools=[str(x) for x in _nt if x],
         )
         # §20.15：顶层可选 message 字段（Coze 业务侧表面提示），本地置顶渲染 banner
         result.message = _normalize_coze_message(data.get("message"))
+        # 2026-11-11 v1.68：解析云端端点版本（出参侧）。缺失时本地兜底提醒——
+        # 云端过旧 / 响应契约不匹配时，本地技能可能与云端对接异常，提示升级或改用 Web 应用。
+        result.coze_version = str(data.get("coze_version") or "")
+        # 2026-11-11 v1.68 增强：返回结构对接校验（「对接不匹配」检测）。
+        _struct_mismatch = _check_struct_mismatch(data)
+        if (not result.coze_version and result.message is None
+                and (result.final_answer or result.need_tool)):
+            result.message = {
+                "level": "warning",
+                "text": (
+                    "⚠️ 未获取到云端版本信息，当前技能与云端可能存在对接差异。\n"
+                    "建议升级 ct-advisor 技能到最新版；或直接使用 Web 应用 "
+                    "ct.medstatstar.com 获得完整体验。"
+                ),
+                "dismissible": True,
+            }
+        elif _struct_mismatch and result.message is None:
+            result.message = {
+                "level": "warning",
+                "text": (
+                    "⚠️ 检测到云端返回结构与当前技能版本可能不匹配（关键字段缺失）。\n"
+                    "建议升级 ct-advisor 技能到最新版；或直接使用 Web 应用 "
+                    "ct.medstatstar.com 获得完整体验。"
+                ),
+                "dismissible": True,
+            }
         return result
 
     def refine_forward(self, req: RefineRequest, timeout: float = None) -> RefineResult:

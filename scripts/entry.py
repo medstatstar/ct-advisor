@@ -77,6 +77,26 @@ def _hidden_kwargs() -> dict:
 from route import is_vague
 from orchestrate import ANSWER_END, run_orchestrate
 
+# ── query_origin 透传（2026-11-11 修复：advisorlog 5/9 非法根因）─────────────
+# ct-base §8.6 + cloud_brief §4 契约：query_origin 由本地客户端生成并两层透传，
+# 服务端禁止兜底生成。此前 entry.py 主链路出站 payload 缺该字段 → Coze advisorlog
+# 写入器拿不到合规 sha256，落 5/9 脏值，飞书日志归因与追踪价值受损。
+# 规范生成器 = hardware_id.hardware_id()（主板级 UUID/ MachineGuid → sha256:<64hex>）；
+# 异常时回退主机名哈希，保证永不崩、永不空（空值会被端点 §1.4 拒绝）。
+def _query_origin() -> str:
+    try:
+        from hardware_id import hardware_id
+        o = hardware_id()
+        if o and o.startswith("sha256:") and len(o) == 71:
+            return o
+    except Exception:  # noqa: BLE001 - 生成器不可用绝不阻断主流程
+        pass
+    try:
+        import hashlib, socket
+        return "sha256:" + hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()
+    except Exception:  # noqa: BLE001
+        return "sha256:" + "0" * 64
+
 # ── B1 task 推断（2026-10-08）：payload 增加 suggested_task 辅助 Coze 端标注 ──
 # 2026-10-16 修复：suggested_task 此前被 orchestrate._build_request 静默丢弃。
 # 现通过 query_meta.task_category 透传到 Coze（orchestrate.py 同步修改）。
@@ -112,6 +132,57 @@ MAX_FILE_BYTES = 5 * 1024 * 1024
 def _plain_text(text: str) -> str:
     """内部通篇明文：只做行尾归一。标记与 checksum 只在出口产生一次。"""
     return (text or "").replace("\r\n", "\n")
+
+
+# ── 2026-11-10：复杂混合调用安全提示（调用之前发出 + 与结果一并返回）─────────
+# 原实现把提示追加在缝合答案**末尾**，而 _merge_answer 只在 Coze 调用与兄弟技能
+# 执行全部完成后才运行：混合调用在扣子端卡死 / 超时回落时该分支根本不执行，提示
+# 彻底消失。本层在 entry.py 单一出口统一收口：出站前用本地零联网预判写 stderr
+# 预警，最终答案再把同一提示前置到最前（幂等），覆盖所有成功 / 回落 / 短路分支。
+_EARLY_HINT = ""      # 前置版（带分隔线），出口层拼接答案用
+_EARLY_NOTICE = ""    # 纯正文，出站前 stderr 实时预警用
+
+
+def _complexity_hint_pair(question: str) -> tuple:
+    """本地零联网预判 → (纯正文 notice, 前置版 prefix)，非复杂混合调用返回 ("","")。
+
+    只依赖 route_tool 的规则表，不触网、不依赖扣子端回传 complexity_hint 字段。
+    """
+    try:
+        from route_tool import predict as _pred, complexity_hint_prefix
+        p = _pred(question or "")
+        tools = (p.get("need_tools") or []) if isinstance(p, dict) else []
+        lang = "zh-CN" if re.search(r"[\u4e00-\u9fff]", question or "") else "en"
+        return (complexity_hint_prefix(tools, lang, with_separator=False),
+                complexity_hint_prefix(tools, lang, with_separator=True))
+    except Exception:  # noqa: BLE001 - 提示是附加安全信息，异常绝不阻断主流程
+        return ("", "")
+
+
+def _with_complexity_prefix(output: str, prefix: str) -> str:
+    """出口层去重 + 前置：全文恰好一次提示，且必在答案最前。
+
+    2026-11-10 v1.63：云端 `GraphOutput.complexity_hint` 已改为**纯布尔标记**
+    （v1.62 曾为提示文案，现已撤销），正常链路下本地 `refiner.py` 不解析、不渲染，
+    因此不会出现两次；但为兼容仍在跑的旧端点、并杜绝任何未来重复源（v1.62 文案
+    被消费端渲染进正文 / Coze LLM 自行写出同款提示 / --card-inline 子进程已前置 /
+    缓存答案里带着旧提示），这里统一先剥净正文里所有同款提示段，再前置一次。
+    无论上游怎么变，用户只看到一次；提示文本唯一真相源是本地 route_tool。
+    """
+    if not prefix:
+        return output
+    try:
+        from route_tool import strip_complexity_hint
+        body = strip_complexity_hint(output or "")
+    except Exception:  # noqa: BLE001 - 极端兜底：剥离不可用时退化为「已前置则不重复」
+        try:
+            from route_tool import has_complexity_hint
+            if has_complexity_hint(output or "", at_start=True):
+                return output
+        except Exception:  # noqa: BLE001
+            pass
+        body = output or ""
+    return prefix + body
 
 
 # ── 对外出口（2026-10-22 单一路径 · 唯一产生点）─────────────────────────────
@@ -300,6 +371,29 @@ def _run_clarify(original_question: str, max_rounds: int = 3) -> dict:
         return {"status": "decidable", "ambiguous": False, "questions": []}
 
 
+def _extract_call_info(card_json) -> tuple:
+    """从委托卡抽取「实际调用的兄弟技能 + 调用方法」。无卡（非 handoff）→ 本地直接作答。
+
+    返回 (called_tools: list, call_method: dict|str)。best-effort：任何异常 → 本地直接作答。
+    """
+    if not card_json:
+        return [], "local-direct"
+    try:
+        _c = json.loads(card_json)
+        if not isinstance(_c, dict):
+            return [], "local-direct"
+        _tools = _c.get("need_tools") or []
+        if isinstance(_tools, list) and _tools:
+            _primary = _c.get("need_tool") or _tools[0]
+        else:
+            _primary = _c.get("need_tool")
+            _tools = [_primary] if _primary else []
+        _params = _c.get("params") or _c.get("tool_params") or {}
+        return _tools, {"primary": _primary, "params": _params}
+    except Exception:  # noqa: BLE001
+        return [], "local-direct"
+
+
 def _extract_delegate_card(output: str) -> str | None:
     """从输出中提取 CT_TOOL_DELEGATE 块的 card JSON（若有）。
 
@@ -346,10 +440,15 @@ def _run_orchestrate(payload: str, config: str) -> str:
 
 
 def main():
+    global _EARLY_HINT, _EARLY_NOTICE
     ap = argparse.ArgumentParser(
         description="ct-advisor 唯一代码入口（本地 LLM 唯一允许动作）"
     )
-    ap.add_argument("--q", required=True, help="用户问题")
+    ap.add_argument("--q", default=None, help="用户问题（--stitch 回程汇总模式下可省略）")
+    ap.add_argument("--stitch", default=None,
+                    help="回程汇总：JSON spec 或 @spec.json，由代码在本地缝合多个兄弟技能的产物；"
+                         "默认不触网。spec.interpret=true 时额外请求 L3 方法学解释，"
+                         "仅外发字段白名单内的脱敏数值摘要（F33）")
     ap.add_argument("--attach", default=None, help="附件路径")
     ap.add_argument("--q-meta", default=None, help="可选 query_meta JSON")
     ap.add_argument("--config", default=str(SKILL_ROOT / "config.json"))
@@ -358,6 +457,29 @@ def main():
                     help="会话标识（跨轮上下文/去重键）：proxy 或飞书应传入稳定 ID；"
                          "缺失则退化为单轮（仍享全局答案缓存，仅无多轮上下文）")
     args = ap.parse_args()
+
+    # ── 0a) 回程汇总模式（2026-11-09，纯代码；默认零出站）────────────────
+    # 补齐混合 handoff 的「回程」：用户分别调用多个兄弟技能后，把产物路径交给
+    # 本入口，由代码机械解析并确定性缝合。仍是 entry.py 单一出口、同一明文协议；
+    # 不走 vague gate / 缓存 / 委托，产物内容全程留在本机（F33）。
+    # spec.interpret=true（用户显式）→ 追加 L3 方法学解释：由 interpret_results.py
+    # 仅外发白名单内的脱敏数值摘要 + 代码构造的纯方法学问题；用户原问题、
+    # 原始产物文本 / 文件名 / 路径 / 药名 / 方案名 / ID 一律不出域。
+    # 🔴 HARD GATE 不变：本地 LLM 的唯一动作依旧是运行 entry.py 并原样输出 stdout。
+    if args.stitch:
+        from stitch_results import run_stitch, load_spec
+        _spec = load_spec(args.stitch)
+        if bool(_spec.get("interpret")):
+            from interpret_results import run_interpret
+            sys.stderr.write(
+                "[entry] stitch+interpret 模式：本地汇总 + 脱敏数值摘要出站解释（F33 白名单）\n")
+            _emit_plain(run_interpret(_spec, run_stitch(args.stitch), args.config))
+        else:
+            sys.stderr.write("[entry] stitch 模式：本地代码汇总，不出站\n")
+            _emit_plain(run_stitch(args.stitch))
+        return
+    if not args.q:
+        ap.error("--q 为必填项（使用 --stitch 回程汇总模式时可省略）")
 
     # ── 0) 依赖预检（2026-10-15 修订：requests 已改为可选） ──
     # 传输层切换为 stdlib urllib（refiner._call_coze）后 requests 不再是必需依赖：
@@ -369,6 +491,9 @@ def main():
         sys.stderr.write("[entry] 未检测到 requests，使用 stdlib urllib 传输（功能不受影响）\n")
 
     original_question = args.q
+    # 2026-11-10：复杂混合调用提示在此（任何出站 / 技能调用之前）用本地零联网
+    # 预判算好；预警实际写出放在 5a 真实出站前，前置到答案放在唯一出口 7。
+    _EARLY_NOTICE, _EARLY_HINT = _complexity_hint_pair(original_question or "")
     # 2026-10-16 修复：非法 --q-meta JSON 此前会让 main 抛 JSONDecodeError 崩溃
     # （stdout 为空）。query_meta 只是可选元信息，解析失败应降级为空 dict 并继续。
     query_meta = {}
@@ -424,11 +549,20 @@ def main():
     # 使 Coze 端能获得范围路由标签（如 medical_writing）。
     _scope_hint = ""
     try:
-        from scope_guard import assess as _assess_scope
+        from scope_guard import assess as _assess_scope, domain_hint as _domain_hint
         _in_scope, _tag, _ = _assess_scope(original_question)
         if not _in_scope and _tag:
             _scope_hint = _tag
             sys.stderr.write(f"[entry] scope_guard: out-of-scope tag={_tag}\n")
+        # 2026-11-09：domain 走 query_meta.domain_hint 独立字段，**不写进 scope_hint**。
+        # 云端 full_analysis_node._doc_prompt_directive 把非空 scope_hint 一律渲染成
+        # 「可能超出本技能核心覆盖范围」，正常方法学问题若带 domain 会被错误标注。
+        # Coze KB 检索实际靠 extract_question_keywords(原问题) + category，
+        # scope_hint 从不参与路由（state.py 注明「仅透传，不参与检索」）。
+        _dh = _domain_hint(original_question)
+        if _dh:
+            query_meta["domain_hint"] = _dh
+            sys.stderr.write(f"[entry] scope_guard: domain_hint={_dh} -> query_meta\n")
     except Exception:
         pass
 
@@ -459,6 +593,8 @@ def main():
         "suggested_task": _infer_task(original_question),
         "scope_hint": _scope_hint,
         "conversation_history": conversation_history,
+        # 2026-11-11：补 query_origin 透传（修复 advisorlog 脏值；合规 sha256:<64hex>）
+        "query_origin": _query_origin(),
     }, ensure_ascii=False)
 
     # ── 4) vague → 澄清循环 ─────────────────────────────────────────────────
@@ -507,6 +643,14 @@ def main():
 
     if not shortcut:
         # ── 5a) 真实出站 ───────────────────────────────────────────────
+        # 2026-11-10 修复：安全提示必须在**出站 / 兄弟技能调用之前**发出。HARD GATE
+        # 下本进程是同步子进程，stdout 在进程结束前不会被读取，故最早可落地通道是
+        # stderr（调用前即写出，扣子端卡死时也已留痕）；最终答案另在出口把同一
+        # 提示前置到最前，双路保证「调用之前」与「与结果一并返回」。
+        if _EARLY_NOTICE:
+            sys.stderr.write(
+                "[entry] 复杂混合调用预警（出站/技能调用之前发出）：\n"
+                + _EARLY_NOTICE + "\n")
         sys.stderr.write("[entry] 进入编排（出站 Coze）...\n")
         try:
             output = _run_orchestrate(payload, args.config)
@@ -521,6 +665,15 @@ def main():
         card_json = _extract_delegate_card(output)
         if card_json:
             sys.stderr.write("[entry] 检测到工具委托，代码自动执行 card-inline\n")
+            # 2026-11-11：将合规 query_origin 注入委托卡（Coze 未必回显，
+            # 本地兜底确保 handle_need_tool → 子技能透传 origin 一致、飞书归因不断链）
+            try:
+                _card_obj = json.loads(card_json)
+                if isinstance(_card_obj, dict) and not _card_obj.get("query_origin"):
+                    _card_obj["query_origin"] = _query_origin()
+                    card_json = json.dumps(_card_obj, ensure_ascii=False)
+            except Exception:  # noqa: BLE001 - 解析失败则维持原卡，不阻断
+                pass
             _ci_out = ""
             try:
                 _ci_out = _run_card_inline(card_json, args.config)
@@ -535,6 +688,30 @@ def main():
                     "可能原因：技能参数不完整、技能执行超时或该技能当前不可用。\n"
                     "请补充必要信息后重试；若持续失败，请把本条提示与上方 stderr 反馈给技能维护者。"
                 )
+
+        # ── 6a) 回传真实答案 + 调用方法到 Coze（2026-11-11 Fix B）──────────
+        # handoff 路径下，Coze 初始写的 advisorlog 只有路由决策（空/非实质答案）；
+        # 本地产出真实答案后回调 /advisor_outcome，由 Coze upsert 单条权威记录
+        # （落实「日志留下实质性回答与调用方法」）。best-effort：异常一律吞掉，绝不阻断交付。
+        if card_json:
+            try:
+                from adapters.advisor_outcome import report_outcome
+                from adapters.refiner import _skill_version
+                from refine_answer import _get_endpoint_from_config
+                _endpoint = _get_endpoint_from_config(args.config)
+                if _endpoint:
+                    _called_tools, _call_method = _extract_call_info(card_json)
+                    report_outcome(_endpoint, {
+                        "query_origin": _query_origin(),
+                        "original_question": original_question,
+                        "final_answer": output,
+                        "called_tools": _called_tools,
+                        "call_method": _call_method,
+                        "skill_version": _skill_version(),
+                    })
+                    sys.stderr.write("[entry] advisor_outcome 回传已发起\n")
+            except Exception as _e:  # noqa: BLE001
+                sys.stderr.write(f"[entry] advisor_outcome 回传异常（忽略）: {type(_e).__name__}: {_e}\n")
 
         # ── 6b) 记录会话历史（仅真实出站；短路命中不重复记轮）────────
         try:
@@ -552,7 +729,9 @@ def main():
             pass
 
     # ── 7) 出口（唯一形态、唯一产生点；无开关）──────────────────────────
-    _emit_plain(output)
+    # 2026-11-10：复杂混合调用提示前置到答案最前（幂等）。无论 Coze 成功慢回、
+    # 超时回落、未授权、委托 card-inline 还是缓存短路，都随结果一并返回。
+    _emit_plain(_with_complexity_prefix(output, _EARLY_HINT))
 
 
 if __name__ == "__main__":
@@ -567,12 +746,12 @@ if __name__ == "__main__":
     except BaseException as _e:  # noqa: BLE001
         try:
             sys.stderr.write(f"[entry] 未捕获异常: {type(_e).__name__}: {_e}\n")
-            _emit_plain(
+            _msg = (
                 "⚠️ 技能执行出现未预期错误，无法生成答案。\n\n"
                 f"{type(_e).__name__}: {_e}\n\n"
-                "请稍后重试；若持续出现，请把本条提示与上方 stderr 反馈给技能维护者。",
-                exit_code=1,
+                "请稍后重试；若持续出现，请把本条提示与上方 stderr 反馈给技能维护者。"
             )
+            _emit_plain(_with_complexity_prefix(_msg, _EARLY_HINT), exit_code=1)
         except BaseException:  # noqa: BLE001
             pass
         sys.exit(1)

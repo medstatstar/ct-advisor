@@ -88,6 +88,57 @@ def _tokens(strings):
     return toks
 
 
+INTENT_CONTRACT = os.path.join(_SKILL, "config", "intent_contract.json")
+_INTENT_VARS = (
+    ("consult_depth", "_INTENT_CONSULT_DEPTH"),
+    ("exec_intent", "_INTENT_EXEC"),
+    ("retrieval_intent", "_INTENT_RETRIEVAL"),
+)
+
+
+def _intent_const(path, var):
+    """AST 提取模块级字符串常量（杜绝 import 触发云端专有依赖）。"""
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        tree = ast.parse(f.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name) and tgt.id == var:
+                    v = node.value
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                        return v.value
+    return None
+
+
+def _check_intent_contract():
+    """2026-11-09 阻断级门禁：契约 + 本地 + 云端三份意图词表逐字一致。
+
+    Coze 包源码不能跨技能 import 本地 JSON，故两端各持内嵌副本；
+    任何单边改动都必须在这里被拦下，否则会出现「本地不预判、云端仍委托」。
+    """
+    import json as _json
+    problems = []
+    try:
+        with open(INTENT_CONTRACT, "r", encoding="utf-8") as f:
+            patterns = _json.load(f)["patterns"]
+    except Exception as e:  # noqa: BLE001
+        return ["intent_contract.json 不可用: %s: %s" % (type(e).__name__, e)]
+    for key, var in _INTENT_VARS:
+        want = patterns.get(key)
+        if not want:
+            problems.append("契约缺 pattern %s" % key)
+            continue
+        for label, path in (("本地", LOCAL), ("云端", COZE)):
+            try:
+                got = _intent_const(path, var)
+            except Exception as e:  # noqa: BLE001
+                problems.append("%s %s AST 解析失败: %s" % (label, var, e))
+                continue
+            if got != want:
+                problems.append("%s %s 与 intent_contract.json 不一致" % (label, var))
+    return problems
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="工具路由规则两端漂移检测")
     ap.add_argument("--quiet", action="store_true")
@@ -105,9 +156,17 @@ def main() -> int:
             print("  解析失败: %r" % (e,))
         return 2
 
+    intent_problems = _check_intent_contract()
+    if intent_problems:
+        print("🔴 INTENT_CONTRACT_MISMATCH（阻断级，云端包发布前必须修复）")
+        for p in intent_problems:
+            print("    - %s" % p)
+        return 2
+
     problems = []
 
     if not args.quiet:
+        print("意图契约三副本 AST 一致性: ✅ 通过")
         print("工具路由规则 两端漂移检测")
         print("=" * 66)
         print("  本地  %s" % os.path.relpath(LOCAL, _SKILL))

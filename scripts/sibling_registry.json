@@ -1,6 +1,6 @@
 {
   "version": "2026-09-29",
-  "generated_at": "2026-10-31T19:14:33.158574",
+  "generated_at": "2026-11-10T07:19:13.568989",
   "source_dir": "C:\\Users\\Wintone\\.workbuddy\\skills",
   "skills": {
     "ct-adam": {
@@ -203,8 +203,8 @@
     "ct-literature": {
       "name": "ct-literature",
       "display_name": "Clinical Trial Literature Search / 临床试验文献检索专家",
-      "version": "1.6.2",
-      "summary": "全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。集成 Docling PDF 结构化解析。默认全流程免 key，无任何用户侧配置亦可使用。",
+      "version": "1.7.6",
+      "summary": "全数据源覆盖检索医学领域学术文献（OpenAlex + Europe PMC/MeSH + NCBI PubMed/MEDLINE + bioRxiv/medRxiv 预印本 + arXiv 方法学广度），归一化合并去重，可产出 CSM 安全性定性子集，协助提供OA文献PDF下载。集成 Docling PDF 结构化解析。默认全流程免 key，无任何用户侧配置亦可使用。",
       "triggers": [
         "systematic literature search",
         "系统文献检索",
@@ -214,7 +214,11 @@
         "跨数据库 文献检索",
         "Embase Cochrane Web of Science",
         "多数据库 系统综述",
-        "ct-literature"
+        "ct-literature",
+        "追溯某篇论文的引用 / 被引",
+        "X 的前后向文献 / 引文网络扩展",
+        "citation expand / snowball from <DOI/PMID/题名>",
+        "引导式检索剧本 / 读→扩→链"
       ],
       "tier": "A",
       "published": true,
@@ -268,7 +272,7 @@
     "ct-protocol": {
       "name": "ct-protocol",
       "display_name": "Clinical Trial Protocol Designer / 临床试验方案设计专家",
-      "version": "0.5.1",
+      "version": "0.15.2",
       "summary": "临床试验方案起草、评审与修订风险评分的本地离线专家，覆盖 ICH-GCP 与中国 GCP 语境，下游对接样本量/CRF/统计/CSR。集成 Docling 增强 PDF 结构化解析。",
       "triggers": [
         "clinical trial protocol",
@@ -311,7 +315,7 @@
     "ct-registry": {
       "name": "ct-registry",
       "display_name": "Clinical Trial Registry Search / 临床试验注册检索专家",
-      "version": "0.14.2",
+      "version": "0.14.5",
       "summary": "跨源检索全球临床试验注册库（ClinicalTrials.gov、CDE/ChiCTR/ISRCTN/DRKS/WHO ICTRP、PubChem），归一化聚合分期/状态/申办方/时间线/竞品格局，产出 JSON / Markdown，用于立项查重、对照设计与竞品格局分析。可选集成 pytrials 批量拉取 CT.gov 字段。零用户侧配置：检索端点凭证随包分发，开箱即用。",
       "triggers": [
         "clinical trial registry search",
@@ -350,7 +354,7 @@
     "ct-safety": {
       "name": "ct-safety",
       "display_name": "Clinical Trial Safety Signal / 临床试验安全信号专家",
-      "version": "0.10.5",
+      "version": "0.10.7",
       "summary": "基于 FDA FAERS 筛查药物-事件安全信号，计算 disproportionality（PRR / ROR / IC / EBGM，含 95% CI）与安全信号评分（0–100，T1–T4）。数据源：FDA FAERS（openFDA drug/event.json）、FDA 标签（drug/label.json）、中国 NMPA 药物警戒通报（cdr-adr.org.cn）、DailyMed 说明书、RxClass MED-RT、openFDA 召回执法、香港 ADR 警报。仅公开数据，零保密输入。",
       "triggers": [
         "FAERS safety signal",
@@ -375,7 +379,7 @@
     "ct-samplesize": {
       "name": "ct-samplesize",
       "display_name": "Clinical Trial Sample Size / 临床试验样本量专家",
-      "version": "5.14.2",
+      "version": "5.14.7",
       "summary": "为临床试验从业者提供的样本量与检验效能计算工具。本地无需安装 R，直接提供云端 R 计算服务（覆盖 67 种检验，并提供 SVG 出版级别图形）。自然语言驱动，默认回传完整 R 代码；默认按操作系统语言设定输出中文或英文（提示词可强制切换）。",
       "triggers": [
         "clinical trial sample size",
@@ -559,7 +563,7 @@
     "meta-analysis": {
       "name": "meta-analysis",
       "display_name": "Meta Analysis / 医学Meta分析",
-      "version": "2.22.1",
+      "version": "2.25.0",
       "summary": "基于 R 的全方位 Meta 分析技能，覆盖 RevMan + Stata 等价 + esc + RVE + 贝叶斯 NMA + 生存 Meta + TSA + 单组率 Meta + 诊断 Meta + 系统评价流程；输出森林图、漏斗图、异质性(I²)、发表偏倚、亚组分析、元回归、网络 Meta等共 23 种分析图形。所有分析提供可复现 R 代码。还可提供Meta选题方向判断 + 文献检索整理 + 筛选 + 数据提取功能。云端 R 引擎凭证随包分发，零用户侧配置。",
       "triggers": [
         "meta分析",
@@ -586,53 +590,6 @@
         "pipeline_intel",
         "registry_search",
         "tlg_generation"
-      ]
-    },
-    "statdata-transfer": {
-      "name": "statdata-transfer",
-      "display_name": "Statistical Data Format Converter / 统计数据格式转换器",
-      "version": "2.2.1",
-      "summary": "读入/转存 50+ 统计软件格式，对统计二进制格式完整保留变量标签/值标签/特殊缺失值等元数据。副作用声明（完整）：运行环境检查（scripts/check_env.py）；可应要求 pip 安装缺失包；写入主输出文件的同时可能生成 sidecar 元数据（CSV/TSV 旁 <名>_metadata.json、Parquet/Arrow 内嵌）及覆盖 .hyper 时的 .bak/.bak.1 备份；处理 .rda/.rds/.RData/.mtw/.mpj/.rec 时可调用本地 R 解释器，但该回退默认禁用，需 allow_r_exec=True 显式开启。",
-      "triggers": [
-        "statdata-transfer",
-        "统计数据格式转换",
-        "spss stata sas 格式",
-        ".sav .dta .sas7bdat 读入",
-        "sav转dta 格式转换",
-        "variable labels 变量标签",
-        "metadata-preserved conversion"
-      ],
-      "tier": "A",
-      "published": true,
-      "installed": true,
-      "install_path": "C:\\Users\\Wintone\\.workbuddy\\skills\\statdata-transfer",
-      "capabilities": [
-        "literature_search",
-        "statistical_analysis"
-      ]
-    },
-    "statsoft-cli": {
-      "name": "statsoft-cli",
-      "display_name": "Statsoft-CLI / 统计软件接入助手",
-      "version": "2.8.4",
-      "summary": "跨平台统计软件 CLI 集成，面向 AI Agent；覆盖 34+ 款软件（R/Stata/SAS/SPSS/Python/贝叶斯/ML等），双语。核心价值：激活历史代码资产，用于 AI 工作流自动化。",
-      "triggers": [
-        "SPSS",
-        "SPSS Statistics",
-        "R命令行",
-        "Stata",
-        "SAS",
-        "统计软件",
-        "连接统计软件",
-        "statsoft-cli",
-        "connect statistical software"
-      ],
-      "tier": "A",
-      "published": true,
-      "installed": true,
-      "install_path": "C:\\Users\\Wintone\\.workbuddy\\skills\\statsoft-cli",
-      "capabilities": [
-        "statistical_analysis"
       ]
     }
   },
@@ -676,9 +633,7 @@
     "statistical_analysis": [
       "ct-analysis",
       "ct-sdtm",
-      "ct-statrev",
-      "statdata-transfer",
-      "statsoft-cli"
+      "ct-statrev"
     ],
     "pipeline_intel": [
       "ct-congress",
@@ -728,8 +683,7 @@
       "ct-datacheck",
       "ct-literature",
       "ct-pipeline",
-      "meta-analysis",
-      "statdata-transfer"
+      "meta-analysis"
     ],
     "sample_size": [
       "ct-protocol",

@@ -167,7 +167,10 @@ def _unreleased_payload(tool: str) -> dict:
         "tool": tool,
         "status": "unreleased_b",
         "result": {
-            "message": reason + "。该技能**不对外发布**（未在 SkillHub 上架、GitHub 亦无公开仓库），无法通过安装获取。",
+            "message": reason + (
+                "。该技能不经公共市场分发；当前**本机未注册**，客户端尚无法直接调用。"
+                "如需其能力，请在该技能自己的运行环境中准备；"
+                "切勿把方案 / 受试者数据发往公共检索端点（F33 出域红线）。"),
             "tier": "B",
             "registered": tier_info["registered"],
             "purpose": tier_info["purpose"],
@@ -182,23 +185,27 @@ def _unreleased_payload(tool: str) -> dict:
 
 
 def _unpublished_payload(tool: str) -> dict:
-    """构造 A 档但尚未发布（如 ct-pipeline）的 unpublished_a 产物（与 handle_need_tool 同语义）。"""
+    """构造「未在 SkillHub 上架且本机未注册」的 unpublished_a 产物（与 handle_need_tool 同语义）。
+
+    2026-11-09：本机已注册的技能由 build_output 改走 handoff，不会落到这里。
+    """
     from handle_need_tool import _load_mapping, _resolve_tier  # 函数级 from-import 仅绑定本函数局部
     tier_info = _resolve_tier(_load_mapping(), tool)
     return {
         "tool": tool,
         "status": "unpublished_a",
         "result": {
-            "message": (f"{tool} 属 A 档技能（输入非涉密），但**尚未公开发布**"
-                        f"（未在 SkillHub 上架），当前无法通过安装获取。"),
+            "message": (f"{tool} 属 A 档技能（输入非涉密），**未在 SkillHub 上架**，"
+                        f"且当前**本机未注册**，客户端尚无法直接调用。"),
             "tier": "A",
             "published": False,
             "registered": tier_info["registered"],
             "purpose": tier_info["purpose"],
             "hint": "不向用户提供安装地址（避免给出装完仍不可用的空仓库 / 未上架技能）；"
                     "以自身能力 + 已装兄弟技能尽量完成分析，并标注「数据未取数」。",
-            "next_step": ("可先分别调用已上架的兄弟技能（ct-registry / ct-safety / ct-literature）"
-                          "取数，再由 ct-advisor 就地缝合；待该技能正式发布后再由它统一编排。"),
+            "next_step": (f"若该技能已在你的客户端中可用，可直接调用 @skill:{tool}；"
+                          "否则可先分别调用 ct-registry / ct-safety / ct-literature 取数，"
+                          "再由 ct-advisor 就地缝合。"),
         },
         "elapsed_sec": 0,
     }
@@ -245,7 +252,27 @@ def _fire_coze(req: RefineRequest, config_path: str) -> RefineResult:
 
 
 def _fire_prefetch(card: dict) -> dict:
-    """线程内机械执行预判的 ct 技能（代码内 subprocess，无 LLM）。"""
+    """高置信预取：默认产出客户端 handoff 卡片；显式开启 brief 时优先走速览直连。
+
+    2026-11-09 架构重评：客户端已可直接调用兄弟技能，cloud brief 降为 opt-in
+    （CT_ADVISOR_CLOUD_BRIEF=1，默认关闭），handoff 成为默认主路径——把执行权
+    交回技能本体，用户拿到的是完整交付物而不是纯文本速览。
+    共享凭据仍只在本地技能，Coze 云端不发起需凭据的外部调用；任何失败回落
+    本地执行卡（ct-base §20.19.7 红线 2）。
+    """
+    try:
+        from cloud_brief import try_cloud_brief
+        text = try_cloud_brief(card)
+        if text:
+            return {
+                "tool": card.get("need_tool"), "status": "ok", "result": text,
+                "draft_answer": card.get("draft_answer") or "",
+                "deferred_tools": [], "deferred_note": "",
+                "elapsed_sec": 0, "mode": "coze_brief",
+            }
+    except Exception as e:  # noqa: BLE001 - 预取失败不得卡死主链路
+        sys.stderr.write("[ct-advisor] brief 预取异常，回落本地执行卡: %s\n"
+                         % type(e).__name__)
     from refine_answer import _run_handle_need_tool
     return _run_handle_need_tool(card)
 
@@ -267,7 +294,8 @@ def build_output(orig_q: str, coze_result: RefineResult,
       - 预判已执行且 ok，但 Coze 要求**不同**工具 → 仍委托（Coze 工具），
         预判结果作为补充并入 draft_answer。
       - 预判 need_params / error，且存在待调工具 → 委托（补全参数或重试）。
-      - 无预判但 Coze 要求工具 → 委托。
+      - 无预判但 Coze 要求工具 → 委托（entry.py STEP 4 由代码执行，产出 handoff 卡片）。
+      - 预判 status=handoff（默认主路径）→ 代码缝合 @skill 卡片并包裹，绝不委托给 LLM。
       - Coze 未要求工具且预判无有效补充 → Coze 答案足够 → 包裹。
     """
     # ── 依赖缺失快速通道（2026-10-15 修复）：绝不静默失败 ──
@@ -303,10 +331,16 @@ def build_output(orig_q: str, coze_result: RefineResult,
     # 注意：函数级 from-import 仅绑定本函数局部，兄弟函数（_enrich_coze_params /
     # _render_skill_text 等）已在各自内部就近导入，避免可见性陷阱。
     from refine_answer import (_merge_answer, _render_skill_result, _detect_lang)
-    from handle_need_tool import _load_mapping, _resolve_tier
+    from handle_need_tool import _load_mapping, _resolve_tier, _client_callable
     from route_tool import suggest_footer
     coze_answer = coze_result.final_answer or ""
     coze_tool = coze_result.need_tool
+    # 2026-11-09 主流程修复：混合技能列表有两个来源 —— 本地预判 need_tools 与
+    # Coze 侧 RefineResult.need_tools（云端 tool_router 的多技能命中）。
+    # 任一来源单独缺失时另一路仍要能补齐，故在此合并去重后统一向下传递。
+    _coze_tools = list(getattr(coze_result, "need_tools", None) or [])
+    if _coze_tools:
+        need_tools = list(dict.fromkeys(list(need_tools or []) + _coze_tools))
     # P2 修复（2026-08-15）：对 Coze 判定工具做本地 route_tool 参数富集，
     # 避免「Coze 需不同工具」分支(2c)委托时只带 Coze 默认值、再弹一轮 need_params。
     coze_params = _enrich_coze_params(orig_q, coze_tool, coze_result.params or {})
@@ -328,7 +362,12 @@ def build_output(orig_q: str, coze_result: RefineResult,
                 # 信息足够：Coze 答案 + 预判技能结果（多源问题附提示其余工具）
                 lang = _detect_lang(orig_q)  # 2026-08-21：缝合文案/标签随提问语言
                 merged = _merge_answer(coze_answer, prefetch_out, lang=lang)
-                return _final_out(merged + _multi_tool_hint(need_tools or [], tool, lang=lang))
+                # 2026-11-09：_merge_answer 已把 deferred_tools 渲染成
+                # 「其余可直接调用的技能」小节时，不再叠加 _multi_tool_hint，
+                # 否则回滚路径（status=ok）会把同一批技能列两遍。
+                hint = "" if (prefetch_out.get("deferred_tools") or []) else \
+                    _multi_tool_hint(need_tools or [], tool, lang=lang)
+                return _final_out(merged + hint)
             # Coze 要求不同工具：预判结果并入草稿，委托 Coze 工具
             base = _merge_answer(coze_answer, prefetch_out) if coze_answer.strip() else \
                 f"## 补充信息（来源：{tool}）\n\n" + _render_skill_text(prefetch_out)
@@ -347,10 +386,21 @@ def build_output(orig_q: str, coze_result: RefineResult,
                 need_tools=need_tools,
             )
         # ---- 2026-09-10 A/B 档门控（四新状态，均非「执行失败」，不得落到 error 兜底）----
-        if status in ("unreleased_b", "local_fallback", "unpublished_a"):
-            # B 档不对外发布 / 用户拒绝安装 / A 档尚未发布 → 无可执行技能，
-            # 代码直接缝合包裹（无需 agent 介入，也无需征询同意）
+        if status in ("unreleased_b", "local_fallback", "unpublished_a",
+                      "handoff", "referral"):
+            # 本机不可调用 / 用户拒绝安装 / 客户端直调 handoff / referral-only
+            # → 一律由代码直接缝合包裹（无需 agent 介入、无需征询同意）。
+            # 🔴 handoff 绝不能落到 _render_delegate：那会要求本地 LLM 去执行技能，
+            #    违反 SKILL.md HARD GATE。卡片由代码产出、经 entry.py 单一出口输出。
             lang = _detect_lang(orig_q)
+            # 2026-11-09 兜底：执行卡/上游丢了 need_tools 时，用合并后的列表
+            # 现场补齐 deferred，保证混合提问不会只剩主技能一张卡片。
+            if status == "handoff":
+                from handle_need_tool import ensure_deferred
+                prefetch_out = ensure_deferred(
+                    prefetch_out,
+                    {"need_tool": tool, "need_tools": need_tools,
+                     "params": prefetch_params or {}})
             if coze_answer.strip():
                 return _final_out(_merge_answer(coze_answer, prefetch_out, lang=lang))
             return _final_out(_render_skill_text(prefetch_out))
@@ -378,18 +428,22 @@ def build_output(orig_q: str, coze_result: RefineResult,
 
     # ---- 无预判 ----
     if coze_tool:
-        # 2026-09-10 A/B 档门控：B 档 / 未登记 → 直接说明「不对外发布」+ 自身能力作答，
-        # 免去一次无谓的委托往返（B 档无从安装，委托也只是让 agent 再问一遍）。
-        # A 档但尚未发布（ct-pipeline）同理短路：不可安装，无需征询同意。
+        # 本机确实未注册时：B 档 / 未登记 → 说明「本机未注册」+ 自身能力作答，
+        # 免去一次无谓的委托往返。A 档未在 SkillHub 上架且本机也没有同理短路。
+        # 2026-11-09：已在本机注册的技能不再短路，改走委托 → 代码产出 handoff。
         tier_info = _resolve_tier(_load_mapping(), coze_tool)
-        if tier_info["tier"] != "A" or not tier_info["published"]:
+        # 2026-11-09：B 档 / 未上架 A 档只要已在本机注册，客户端就能直接调用，
+        # 不再短路成「不对外发布」文案，改为委托 → entry.py STEP 4 代码产出 handoff 卡片。
+        if (tier_info["tier"] != "A" or not tier_info["published"]) \
+                and not _client_callable(coze_tool):
             lang = _detect_lang(orig_q)
             payload = (_unreleased_payload(coze_tool) if tier_info["tier"] != "A"
                        else _unpublished_payload(coze_tool))
             if coze_answer.strip():
                 return _final_out(_merge_answer(coze_answer, payload, lang=lang))
             return _final_out(_render_skill_text(payload))
-        return _render_delegate(orig_q, coze_tool, coze_params, coze_answer)
+        return _render_delegate(orig_q, coze_tool, coze_params, coze_answer,
+                                need_tools=need_tools)
     if coze_answer.strip():
         return _final_out(coze_answer)
     return _final_out("⚠️ Coze 返回为空，请稍后重试。")
@@ -439,18 +493,19 @@ def _multi_tool_hint(need_tools: list, executed_tool: str, lang: str = "zh-CN") 
         if lang == "zh-CN":
             # prep_hint 自带「XX：需确认…」句式，不叠加「需先准备」前缀（避免双重冗余）
             extra = prep or (f"需确认必填参数 {req}" if req else "需补充必填参数")
-            lines.append(f"- **{t}**（{desc}）：{extra}。确认后我再调用。")
+            # 2026-11-09：客户端已可直接调用，不再说「确认后我再调用」。
+            lines.append(f"- `@skill:{t}`（{desc}）：{extra}。客户端可直接调用。")
         else:
             # 英文语境不塞中文 prep_hint，改用参数名（跨语言稳定）
             extra = f"required params: {req}" if req else "required params pending"
-            lines.append(f"- **{t}** ({desc}): {extra}. I'll call it once confirmed.")
+            lines.append(f"- `@skill:{t}` ({desc}): {extra}. Invoke directly from the client.")
     if lang == "zh-CN":
         return ("\n\n---\n\n### ⚠️ 多源提示：本问题还涉及以下数据源\n"
-                "当前已缝合「%s」的真实数据；其余源建议分别调用对应工具获取信息：\n%s"
-                % (executed_tool, "\n".join(lines)))
+                "主判技能见上方 `@skill` 卡片；其余源也可在客户端分别直接调用：\n%s"
+                % "\n".join(lines))
     return ("\n\n---\n\n### ⚠️ Multi-source note: this question also involves the following data sources\n"
-            "Real data for '%s' has been stitched above; the remaining sources are suggested to be fetched "
-            "by calling each tool separately:\n%s" % (executed_tool, "\n".join(lines)))
+            "The primary skill is in the `@skill` card above; the remaining sources can also be "
+            "invoked directly from the client:\n%s" % "\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +581,26 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     prefetch_params = pred.get("params") or {}
     # 2026-08-21：多源问题保留全部命中（need_tools），缝合主源后提示其余工具
     need_tools = pred.get("need_tools") or []
+    # 2026-11-10 P1-1：本地意图分级信号透传 query_meta，辅助云端 tool_router 兜底
+    # （命名空间隔离字段 _local_intent，Coze 未知字段忽略；纯本地增量，不触碰云端包）。
+    if isinstance(req.query_meta, dict):
+        req.query_meta["_local_intent"] = {
+            "confidence": pred.get("confidence"),
+            "ambiguity": pred.get("ambiguity"),
+            "candidates": pred.get("candidates"),
+            "need_tool": prefetch_tool,
+            "need_tools": need_tools,
+        }
+    # 2026-11-09 扩展：多技能时给每个技能分别抽参数。此前只抽主判，
+    # 混合问题的副卡片全是「需补齐」；合并后仍由各技能白名单过滤，不会串参。
+    if len(need_tools) > 1:
+        try:
+            from route_tool import extract_params_for_tools
+            prefetch_params = dict(prefetch_params)
+            for k, v in extract_params_for_tools(need_tools, orig_q).items():
+                prefetch_params.setdefault(k, v)
+        except Exception:  # noqa: BLE001 - 抽参失败不阻断主流程
+            pass
 
     # 2) 并行触发：Coze（需授权）+ 预判 ct 技能（本地执行，免授权）
     coze_result = [None]
@@ -571,6 +646,10 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
     if prefetch_tool:
         card = {
             "need_tool": prefetch_tool,
+            # 2026-11-09 主流程修复：此前预判只把主判技能塞进执行卡，
+            # need_tools 虽已算出却没传下去 → execute_card 的 deferred 为空，
+            # 混合提问的答案里只剩一张 handoff 卡片，其余技能全部丢失。
+            "need_tools": need_tools or [prefetch_tool],
             "params": prefetch_params,
             "draft_answer": "",
             "original_question": orig_q,
@@ -699,7 +778,7 @@ def run_self_test() -> int:
             ok += 1
         print(f"  {mark} [{('OK' if valid else 'BADFMT'):<6}] {desc}")
     # 2026-09-10（第十四轮，用户要求）：软建议页脚——不调用兄弟技能，
-    # 先自身作答，再在答案**末尾**建议可安装 / 调用（弱命中 / 咨询意图路径）。
+    # 先自身作答，再在答案**末尾**追加可直接调用的 @skill 建议（弱命中 / 咨询意图路径）。
     prog = build_output("样本量计算要注意什么", _mk_coze("样本量取决于效应量与把握度。")
                         , None, None, {}, suggest_tools=["ct-samplesize"])
     sug_ok = ("兄弟技能" in prog) and ("ct-samplesize" in prog) \

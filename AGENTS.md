@@ -49,6 +49,28 @@ python scripts/entry.py --q "<user question>" [--attach "<path>"]
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**2026-11-09 · client handoff (default path)**: `handle_need_tool.execute_card` now
+checks `_client_callable(tool)` **before** the tier gates. A locally registered sibling
+returns `status=handoff` — an `@skill:<slug>` card with extracted params, missing
+params, the skill's real deliverables and a Tier-B confidentiality note — which
+`refine_answer._merge_answer` renders **in code** and `entry.py` emits through the
+single exit. The agent's only callable is still `entry.py`; HARD GATE is unchanged.
+`CT_ADVISOR_HANDOFF=0` restores the legacy CLI execution card (§20.19.7 red line 2).
+`CT_ADVISOR_CLOUD_BRIEF` is now **default off**: once the client could invoke the full
+skills, the non-audit brief shortcut was downgraded to opt-in.
+`published` (SkillHub listing) is a distribution fact only — orthogonal to local
+availability and to `tier` (the confidentiality boundary).
+
+**2026-11-09 · return path (`entry.py --stitch`)**: `scripts/stitch_results.py` is a
+local-only, stdlib-only backfill for mixed handoffs. It parses sibling output files
+(md / txt / log / json / csv / tsv / xlsx) and stitches a deterministic summary
+through the same `entry._emit_plain` exit — no second entry point, no Coze, no HTTP,
+no LLM. Outputs may be Tier-B confidential, so F33 keeps everything on this machine
+(extension allowlist, size / count / excerpt caps, credential-name denylist).
+`--q` is optional in stitch mode only. Chinese mixed asks now resolve `cond` / `topic`
+inside `route_tool.extract_params_for_tools`; the single-skill lexicon (37/37) is
+untouched, and ct-safety never receives a Chinese `drug` (openFDA needs English).
+
 **Removed in v1.2.0 (dead code, coze-only leftovers)**: `adapters/backend.py` / `data_context.py` / `qa_store.py` (legacy LocalBackend + QA-log seams, never on the entry chain), `_patch14*.py`, `drug_name_resolver.py`, `keyword_breadth.py`, `landscape_scorer.py`, `source_guard.py`, `r_libs.py`, `workflows.json`, `menu.json`, `test_modeB.py`, and all `*.park-20260924*` / `_TRASH-*` / `out/` snapshot dirs (~185 MB).
 
 ---
@@ -68,6 +90,14 @@ python scripts/entry.py --q "<user question>" [--attach "<path>"]
 
 ### 4. Security Red Line
 - **No local knowledge base** — the `knowledge/` directory has been removed entirely.
+  🔴 **Knowledge base ownership (user ruling 2026-11-09)**: all domain knowledge is
+  maintained **only on the Coze endpoint** (`adapters/coze/knowledge/`) and shipped
+  with the Coze package; never mirror it back into `config/`, `docs/` or the skill
+  runtime. Three L1 methodology topics (`ref-topic-samplesize-methods` /
+  `ref-topic-signal-methods` / `ref-topic-registry-semantics`), the L1 answer
+  contract, `_CATEGORY_KNOWLEDGE` and `knowledge_index.json` are Coze-side assets.
+  Local passes only `query_meta.domain_hint`; **never** put a domain in
+  `scope_hint` (the cloud renders any non-empty value as "possibly out of scope").
 - **No local network retrieval** — `search_refs.py`, `update_reference_index.py`, and `search-sites.md` have been removed.
 - **No web search fallback** — if Coze fails, the user is told to retry; the LLM does not fabricate answers from its own knowledge.
 - **Outbound authorization** — `ct-advisor.coze.site/run` is pre-whitelisted; the agent MUST NOT edit `config.json`.

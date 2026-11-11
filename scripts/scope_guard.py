@@ -91,13 +91,24 @@ DOMAIN_RULES = [
     ("safety", re.compile(
         r"(不良事件|\bAE\b|\bSAE\b|SUSAR|安全性|毒性|不良反应|严重不良|"
         r"DLT|剂量限制|安全性评价|风险评估|风险受益|获益风险|信号检测|"
-        r"肝毒性|心脏毒性|过敏反应)", re.I)),
+        r"肝毒性|心脏毒性|过敏反应|"
+        # ── 2026-11-10 补：信号检测/药物警戒方法学与数据源（原词表缺，
+        #    导致「阿司匹林 FAERS PRR/ROR」类高频问题 domain=[]）
+        r"\bFAERS\b|\bPRR\b|\bROR\b|\bEBGM\b|\bIC\b|药物警戒|安全信号|"
+        r"自发报告|信号比|不均衡分析|信息成分|报告比值比|比例失衡|"
+        r"警戒信号|个例安全性报告|\bICSR\b|\bPBRER\b|定期安全性)", re.I)),
 
     ("registry", re.compile(
         r"(注册|申报|上市申请|上市许可|IND|NDA|BLA|ANDA|"
         r"临床试验登记|信息公示|登记平台|ClinicalTrials|clinicaltrials\.gov|"
         r"突破性疗法|优先审评|附条件批准|完全批准|加速审批|孤儿药|"
-        r"eCTD|递交|申报资料|沟通交流会议|pre-?NDA)", re.I)),
+        r"eCTD|递交|申报资料|沟通交流会议|pre-?NDA|"
+        # ── 2026-11-10 补：试验检索/在研试验查询（原词表缺，
+        #    导致「NSCLC 在研临床试验有哪些」类问题 domain=[]）
+        r"在研(临床试验|试验|研究)|"
+        r"在研.{0,10}(有哪些|清单|列表|汇总|检索|查询)|"
+        r"试验检索|试验查询|注册检索|注册查询|注册信息查询|"
+        r"ChiCTR|药物临床试验登记|临床试验信息)", re.I)),
 
     ("data", re.compile(
         r"(SDTM|ADaM|CDISC|\bCRF\b|eCRF|EDC|数据管理|数据库|数据集|"
@@ -249,6 +260,10 @@ _SELFTEST = [
     ("制作一个2+N+1模式的真实世界研究（RWS）方案框架，以益盛药业心悦胶囊RWS项目为背景",
      True, ["rws", "writing"]),
     ("申办方需要给研究者提供口袋书，还需要制作什么？按启动前、试验执行期分类列出", True, ["ops"]),
+    # ── 2026-11-10 新增：advisorlog 高频漏判样本（原词表 domain=[]）
+    ("阿司匹林肝损伤在 FAERS 里的安全信号 PRR 和 ROR 是多少？", True, ["safety"]),
+    ("基于 FAERS 的 EBGM 与 IC 值怎么做不均衡分析？", True, ["safety"]),
+    ("请查一下 NSCLC 在研临床试验有哪些", True, ["registry"]),
     ("用户上传了一份外部市场调研文档《SanDisk added questions》（闪迪U盘中国区Topline）",
      False, []),
     ("帮我看看这台笔记本电脑的性价比如何", False, []),

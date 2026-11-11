@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.38
+version: 1.3.41
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）；答案缓存与去重一律由云端承担（仅为独立问题服务，本地不缓存答案）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -39,6 +39,27 @@ dependencies:
   - {slug: ct-samplesize, tier: A}
 tier: A
 ---
+## Data Egress Guardrail (CT family standard · F33)
+
+This skill may call external endpoints (Coze services, shared third-party search
+endpoints, public APIs or LLMs). **Internal confidential data must not leave the
+local domain.** Mandatory rules:
+
+- **Never outbound**: patient-level records, unpublished protocols / CSRs / internal
+  documents, personal identifiers or sponsor-confidential content — as query terms,
+  attachments or prompt payload.
+- **Allowed minimum**: public search terms and non-content metadata only (machine
+  hash, skill version, entry point, language, request id). Results from public
+  registries (ct.gov / CDE / FAERS / OpenAlex / PubMed, etc.) are processed locally.
+- **Local first**: computation, de-identification, aggregation and reporting stay on
+  this machine; confirm the payload carries no confidential field before any cloud call.
+- **Visible disclosure**: workbench search forms must state the outbound endpoint and
+  this boundary in visible text, not only in a hover tooltip.
+- **Fail loud**: stop and tell the user if any rule cannot be guaranteed; never
+  degrade silently.
+
+Machine-checked by `ct-base/scripts/spec_lint.py` rule **F33**.
+
 
 # Clinical Trial Chief Advisor
 
@@ -91,11 +112,59 @@ tier: A
 
 **Why this rule exists:** The local LLM's "helpful" instincts (answering from its own knowledge, pre-reading files, post-formatting answers) have repeatedly violated the pipeline contract, destroyed Coze-delivered content formatting, altered numeric precision, injected unsolicited content, and bypassed the cloud analysis entirely. This rule eliminates ALL local LLM decision space.
 
+> **`--stitch` is the sole non-forwarding mode.** It consumes skill outputs that
+> already exist (no question is being answered, so no Coze call happens). It is
+> still `entry.py`, still zero-LLM, still the one permitted action — see the
+> Return path section below.
+
 ## How to use this skill
 
 Run the single entry point with the user's question. Optionally attach a file (e.g. a CSR or protocol snippet). The stdout is the final answer — deliver it verbatim.
 
 CLI invocation details, examples, and flag notes → `references/ADVANCED.md`.
+
+### Return path: `entry.py --stitch` (2026-11-09)
+
+Handoff used to be one-way: after the user ran several sibling skills there was no
+code-driven way back. `--stitch` closes that loop **without adding a second entry
+point or giving the local LLM any decision space**:
+
+```
+python scripts/entry.py --stitch '{"question":"...","results":[
+  {"tool":"ct-registry","files":["<path>/report.md"]},
+  {"tool":"ct-safety","files":["<path>/faers_report.xlsx"]}]}'
+python scripts/entry.py --stitch @spec.json     # --q may be omitted in stitch mode
+```
+
+`scripts/stitch_results.py` parses `.md/.txt/.log/.json/.csv/.tsv/.xlsx` locally
+(stdlib only) and stitches a deterministic summary through the **same**
+`_emit_plain` exit (marker / checksum / answer_file). **By default** it never
+imports the orchestrator or any HTTP client, never calls Coze, and never sends
+skill outputs anywhere — 🔴 F33: outputs may contain Tier-B confidential material,
+so the whole path stays on this machine. Reads are bounded by an extension allowlist, a 2 MB
+per-file cap, a 20-file cap, a 4 000-char excerpt cap and a credential-filename
+denylist. Missing or unparsable outputs are reported, never invented. The summary
+is explicitly marked non-audit-grade and never rewrites or infers numbers.
+
+🔴 **HARD GATE unchanged**: `--stitch` is a mode of `entry.py`, not another script
+the agent may choose. The agent still runs one command and pipes stdout verbatim;
+the handoff answer itself carries the ready-to-use `--stitch` hint, generated in
+code by `refine_answer._stitch_hint()`.
+
+**L3 methodology interpretation (opt-in, 2026-11-09)**: adding
+`"interpret": true` to the stitch spec asks for a methodology explanation of the
+results. `scripts/interpret_results.py` — a **separate** module, so
+`stitch_results.py` stays statically free of any network import — sends **only**
+a code-built methodology question plus allowlisted **sanitized numeric values**
+(max 12 finite numbers, from JSON outputs only) to the pre-authorized Coze
+endpoint. The user's original question, raw output text, file names/paths, drug /
+protocol names, trial IDs and subject data **never leave the machine** (F33).
+The outbound request additionally passes the explicit
+`_check_outbound_authorization` gate; if the endpoint is not whitelisted, no
+allowlisted numbers exist, or Coze returns an error / `need_tool` / an empty
+answer, the cloud interpretation is discarded and only the local summary is
+delivered, with the reason stated. Covered by
+`scripts/test_interpret_sanitization.py` (27 offline cases).
 
 > **There are no flags to tune the output.** `--out`, `--b64`, `--answer-file` and
 > `--no-answer-file` were removed in v1.3.21: every run writes the same bytes to stdout and the
@@ -118,8 +187,8 @@ STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
         ├─ < 5 MB   → doc_memory.build_file_payload(allow_upload=True): upload ORIGINAL file to Coze /upload_file, ship as `doc_context` (mode=file_id; base64-forward fallback on failure)
         └─ > 5 MB   → convert locally (office_to_md.py for OOXML / direct read for txt-like), upload the resulting **.md** through the SAME doc_context channel + ℹ️ notice that cloud answers from the md version
 STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
-STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): Coze async submit (/async_run, ms-level → task_id) + local ct-skill prefetch → poll /task/{id} until terminal → merge (sync /run only as fallback when the async endpoint is unavailable)
-STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM)
+STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): Coze async submit (/async_run, ms-level → task_id) + local prefetch (handoff card by default; brief only when explicitly enabled) → poll /task/{id} until terminal → merge (sync /run only as fallback when the async endpoint is unavailable)
+STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM); since 2026-11-09 this normally emits a client handoff card (@skill:<slug>) instead of executing the sibling CLI
 STEP 5  Output — entry.py writes the answer file (UTF-8), then the same bytes + `<<<CT_ANSWER_END>>>` + `checksum:` + `answer_file:` to stdout.buffer (single protocol, single producer since v1.3.21)
 ```
 
@@ -275,12 +344,97 @@ Coverage was broadened per user mandate: the three previously-uncovered but high
 
 Assistance boundaries (enforced in-engine, documented in the doc): ✅ explain clauses / give decision frameworks / checklists / templates; ⚠️ never substitute legal, regulatory, or medical-writing conclusions — route to `ct-registry` / `ct-stats` / `ct-samplesize` / submission path as noted. The three domains are **locally routed**; Coze only needs to honour `domain_hint`.
 
+**Protocol-review routing (v1.3.39 · 2026-11-05):** when the question carries protocol-review intent (`方案` + `评阅/审阅/评审/审查/批注/修订/修改意见`, or `protocol review/audit/assessment`), `scripts/route_tool.py` appends an answer-footer **soft suggestion** pointing at the local `ct-protocol` skill (structured U1–U12 review / D1–D9 risk scoring / annotated output). It is **never auto-invoked** — `ct-protocol` is Tier B and absent from `tool_mapping`'s auto-execution table; the user decides whether to switch. Since 2026-11-09 the footer uses the directly-invocable `@skill:ct-protocol` mention. Details: `docs/capability_domains.md` §3.3.
+
+**SAS→R migration routing (2026-11-11):** when the question carries SAS→R migration/porting intent (`迁 SAS 到 R` / `R 复刻 SAS` / `SAS 等价 R` / `SDTM/ADaM/TLF 的 R 版` / `SAS→R`), `scripts/route_tool.py` appends an answer-footer **soft suggestion** pointing at the local `ct-sas2r` hub skill (等价层 + 验证 SOP + 隐式业务规则恢复 + 分域编排). It is **never auto-invoked** — like `ct-protocol`, it is absent from `tool_mapping`'s auto-execution table; the user decides whether to switch. Since 2026-11-09 the footer uses the directly-invocable `@skill:ct-sas2r` mention. Details: `ct-sas2r/SKILL.md`.
+
+## Client handoff contract (2026-11-09)
+
+The client can now invoke sibling skills (`ct-safety` / `ct-registry` / `ct-literature`
+and the rest of the locally registered `ct-*` family) directly. ct-advisor was adapted
+to hand execution back to the skill itself instead of standing in for it:
+
+- `handle_need_tool.execute_card` checks `_client_callable(tool)` **before** the tier
+  gates. A locally registered skill returns `status=handoff`: a structured card with
+  `@skill:<slug>`, params already extracted from the question, missing params, the
+  skill's real deliverables and a Tier-B confidentiality note. No CLI subprocess, no
+  SAFE PREVIEW bypass, no truncation-stitched summary. This also removes the stale
+  "not publicly released / cannot be installed" wording for Tier-B and unlisted skills
+  that are in fact installed locally.
+- `refine_answer._merge_answer` renders that card into the answer body **in code**;
+  `orchestrate.build_output` wraps it through the single `entry.py` exit. The local LLM
+  still has exactly one allowed action (run `entry.py`, pipe stdout verbatim) —
+  🔴 **HARD GATE unchanged**: the model must not choose a sibling skill, must not
+  invoke one itself, and must not add or rewrite any text.
+- `route_tool.suggest_footer` and `brief_contract.json::suggest_text` now share the
+  same `@skill:<slug>` mention format; the footer covers Tier-B and unlisted skills too.
+- Availability is **orthogonal** to `published` (SkillHub listing) and to `tier`
+  (ct-base §11 `input_sensitivity`). Tier B is still a confidentiality boundary: being
+  callable never licenses sending protocols / subject data to public endpoints (F33).
+- Mixed-skill asks: every additional tool in `need_tools` gets its own
+  `@skill:<slug>` card — params split by that skill's own CLI allowlist, missing
+  params, deliverables and a Tier-B note — rendered in code by
+  `refine_answer._render_deferred_cards`. The primary card is filtered the same way,
+  so no cross-skill parameter leaks (e.g. `topic` never reaches `@skill:ct-registry`).
+  Skills **not registered locally** are marked as such instead of getting a fake
+  `@skill` card. `need_tools` is carried through the whole pure-code main flow
+  (predict prefetch card, Coze `RefineResult.need_tools`, delegate block, card-inline
+  and ship); `handle_need_tool.ensure_deferred()` backfills it if any upstream drops
+  it, so a mixed question never degrades to a single card. Covered by
+  `scripts/test_cross_skill_handoff.py` (28), `test_cross_skill_mixed_extended.py` (15)
+  and `scripts/test_mainflow_mixed.py` (11 main-flow cases).
+  **Return path**: `entry.py --stitch` (above) stitches sibling outputs locally once
+  they exist — same single entry, zero egress, zero LLM. Chinese mixed questions now
+  resolve `cond` / `topic` for ct-registry / ct-literature via
+  `route_tool.extract_params_for_tools`; the single-skill `_extract_params` and its
+  37/37 lexicon regression are untouched. ct-safety still leaves `drug` missing
+  **on purpose** — openFDA only accepts English generic names — so its secondary
+  card shows an explicit conversion hint instead of a harmful Chinese value.
+- Rollback / opt-in: `CT_ADVISOR_HANDOFF=0` → legacy execution card (red line 2 keeps
+  the local engine); `CT_ADVISOR_CLOUD_BRIEF=1` → non-audit brief shortcut, **default
+  off** since the client can now reach the full skills. See
+  `docs/cloud_brief_rollout_20261109.md` (evening re-evaluation, top of file).
+
+## Consultation vs execution: intent layering & KB ownership (2026-11-09)
+
+Sibling skills are **execution** capabilities (compute n, query registries, run
+FAERS disproportionality, search literature). Questions about **why / what a
+parameter means / how to interpret a result / on what authority** are
+**consultation** and must be answered by ct-advisor itself from the Coze
+knowledge base — not delegated to a data skill.
+
+| Layer | Intent | Owner | Delivery |
+|---|---|---|---|
+| L1 | principle, parameter semantics, method choice, interpretation, regulatory rationale | ct-advisor + **Coze KB** | methodology answer with sources + optional trailing `@skill:` suggestion |
+| L2 | compute / retrieve / export | sibling skill (client handoff) | `@skill:` card + params + deliverables |
+| L3 | "what does this PRR / n mean" after results exist | Coze KB + **sanitized numeric summary** | `entry.py --stitch` with `"interpret": true` |
+
+🔴 **Knowledge base ownership (user ruling 2026-11-09)**: all domain knowledge
+lives **only on the Coze endpoint** (`adapters/coze/knowledge/`), maintained
+there and shipped with the Coze package. **The local skill keeps ZERO knowledge
+base** — no `knowledge/` directory, no `config/kb_topics.json`, no local
+`methodology_anchors.md`. Three L1 topics (`ref-topic-samplesize-methods`,
+`ref-topic-signal-methods`, `ref-topic-registry-semantics`), the L1 answer
+contract, `_CATEGORY_KNOWLEDGE` routing and `knowledge_index.json` are all
+Coze-side assets. The local side passes **only** `query_meta.domain_hint` for
+category fallback; it must **never** put a domain into `scope_hint`, because the
+cloud renders any non-empty `scope_hint` as "may be outside this skill's core
+scope". See `docs/consult_intent_roadmap_20261109.md`.
+
+Intent classification is pure code: `config/intent_contract.json` is the single
+source of truth, with embedded copies in local `route_tool.py` and cloud
+`tool_router_node.py`, locked by the `check_route_drift.py` AST gate. Cloud
+changes require **republishing the Coze package** — the v1.60 build is
+`adapters/coze/ct-advisor_coze_v1.60_20261109.zip`; until it is deployed the
+live endpoint still runs the previous rules. Regression:
+`scripts/test_consult_intent.py` (35 offline cases).
+
 ## Requirements
 
 | Item | Requirement |
 |---|---|
 | Runtime | `python3` stdlib only |
-| Sibling skills | **Tier A · listed on SkillHub** (non-confidential input, publicly released): `ct-registry` / `ct-safety` / `ct-literature` / `ct-samplesize` — auto-routed via Coze `need_tool` (entry.py handles card-inline execution). **Tier A · NOT yet listed**: `ct-pipeline` / `ct-synthdata` → `unpublished_a`, answer from Coze draft. **Tier B** (confidential input, **not publicly released**): `ct-protocol` / `ct-csr` / `ct-analysis` / `ct-sdtm` / `ct-eligibility` etc. — never installable. |
+| Sibling skills | **Client-callable since 2026-11-09**: the client can invoke every locally registered `ct-*` skill directly. Availability is decided by `scripts/sibling_registry.json` (`skills[*].installed`) plus `<SKILLS_DIR>/<slug>/SKILL.md`, implemented in `handle_need_tool._client_callable()` — **not** by SkillHub listing. `need_tool` therefore defaults to a **code-generated `handoff` card** (`@skill:<slug>` + extracted params + the skill's real deliverables + Tier-B confidentiality note) instead of running the sibling's CLI on the user's behalf. `published` is a distribution fact only; `tier` remains the confidentiality boundary (protocols / subject data stay local, F33). `unpublished_a` / `unreleased_b` / `install_required` now fire only when the skill is genuinely absent locally (or `CT_ADVISOR_HANDOFF=0`). |
 | Refiner (Coze) | `scripts/entry.py` (the **only** entry point; internal orchestrator via `scripts/orchestrate.py`) sends payload to `ct-advisor.coze.site` — **async-first** (v1.3.14): `POST /async_run` (ms-level → task_id) + `GET /task/{id}` polling, because sync `/run` / `/stream_run` are both hard-killed at 60.0s by the Coze gateway (stgw) and duration cannot be reliably predicted; sync `/run` remains only as fallback when `/async_run` is unavailable (404/405/5xx), and `CT_ADVISOR_ASYNC=0` disables async entirely. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout (= polling deadline in async mode). |
 | External Refs | **teal** (insightsengineering) — clinical-data interactive exploration framework; **Docling** — structured PDF parsing. See "External Tool References". |
 

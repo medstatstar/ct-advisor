@@ -1,5 +1,639 @@
 # Changelog
 
+## 2026-11-11（第九轮）· 日志闭环 + EDC 误路由护栏 + 版本兼容提醒（Coze v1.68 / 本地 v1.3.40）
+
+**背景**：用户要求「日志里留下有实质性的回答和调用方法」，否则 advisorlog 的追踪评估
+价值会大幅下降；同时排查是否老版本本地技能与 Coze 后端不兼容。另授权改云端修 EDC 类
+问句误路由，并新增「技能版本过旧」提醒能力。
+
+- **① Fix B · advisor_outcome 回传落库（日志闭环）**：
+  - 本地 `scripts/entry.py` 新增 step 6a：本地产出真实答案后回调云端 `/advisor_outcome`，
+    payload 含 `query_origin` / `original_question` / `final_answer` / `called_tools` /
+    `call_method` / `skill_version`（均从 card_json 与 refiner 提取）。
+  - 新增 `adapters/advisor_outcome.py::report_outcome`（best-effort，5s 超时，失败不影响主流程）。
+  - 云端 `async_feishu_writer.py` 新增 `async_feishu_report_outcome`：按
+    `(query_origin, original_question[:60])` 检索匹配行，命中则 PUT 更新 `final_answer`
+    信封为 `{answer, outcome_reported:true, called_tools, call_method, skill_version,
+    coze_version}`；未命中/更新失败则 `batch_create` 新建权威记录。后台线程执行、5 次重试、
+    全程容错。
+  - 初始 `async_feishu_write._write` 加幂等跳过：若已存在 `outcome_reported` 且
+    `query_origin` 相同的行，直接 return，防重复行。
+  - **效果**：advisorlog 单条权威记录含真实答案与调用方法，不再只有 handoff 路由决策。
+- **② EDC 数据运营类护栏（误路由修复）**：
+  - 云端 `tool_router_node.py` 新增 `_DATA_OPS` 正则（ASCII 边界 `(?<![A-Za-z])…(?![A-Za-z])`
+    + `IGNORECASE`），命中 `EDC / 电子数据采集 / 数据核查 / SDV / CRF / 稽查 / 监查 /
+    IWRS / 中央随机 / 数据质疑` 等问句 → `_match_tool` 直接返回 None，原生回答，不委托
+    ct-registry。同时删除 ct-registry 强触发词中的裸动词 `看看|查|拉|搜|找`（保留
+    `检索|查询|查找|搜索|列出|统计|拉一下|查一下|搜一下|找一下|帮我查|帮我找|给我查`）。
+  - 本地 `scripts/route_tool.py` 同步 `_DATA_OPS` 同值正则 + `predict` 护栏。
+  - `check_route_drift.py` 契约一致 ✅；本地实测 EDC/数据核查/CRF/SDV/IWRS/稽查 →
+    `need_tool=None`；「检索一下注册试验」/「查一下临床试验」→ `ct-registry` 正常命中。
+- **③ 版本兼容提醒（新功能）**：
+  - 云端 `GraphOutput` 新增 `coze_version` 出参；`/run` 出口比对本地
+    `query_meta.skill_version` 与 `MIN_SKILL_VERSION`(1.3.30)，过旧时下发放宽 `message`
+    （§20.15 banner：提示升级技能或改用 Web 应用 ct.medstatstar.com）。
+  - 本地 `adapters/refiner.py` 解析 `coze_version` 存入 `RefineResult`；缺失且无 message 时
+    本地兜底提醒（同样引导升级 / 改用 Web 应用）。
+  - 版本比较逻辑实测：`1.3.39`/`1.3.30`/`1.4.0`/`1.68`/`2.0.0` → OK；`1.3.29` → WARN。
+- **④ coze-mirrors 彻底删除**：`~/.workbuddy/coze-mirrors/`（2026-11-02 陈旧快照备份，
+  非部署源）已整体删除，从物理上杜绝「误改镜像」复发。删除前 git bundle 保险已生成并
+  验证（`~/.workbuddy/coze-mirrors-bundle-20261111.bundle`，complete history）。
+  ⚠️ 遗留：`v-mr1/scripts/db_protect.py` 的 `DEFAULT_COZE_REPO` 仍指向已删除目录，
+  该保护脚本对 coze 模式已失效（不再有 coze-mirrors 可保护）。
+- **产物**：`ct-advisor_coze_v1.68_20261111.zip`（129 文件 / 1.13MB /
+  md5 `2c635903499b7e30eabd904e5532abe5`）。precheck 全部通过（refiner_contract=0、
+  .coze 唯一隐藏路径、legacy decoders 6/6、upload chain 3/3）。
+- **部署纪律**：需把 v1.68 包上传 Coze 平台并**重建镜像**后才生效；本地 v1.3.40 的
+  回传/解析改动随技能生效，无需部署。
+
+## 2026-11-11（版本兼容增强）· 云端返回结构对接校验（本地 v1.3.41）
+
+**背景**：用户要求「当发现技能版本较旧、或与 Coze 返回内容对接不匹配时，提醒升级或改用
+Web 应用 ct.medstatstar.com」。v1.68 已实现版本号比较与 coze_version 缺失检测，但
+**返回结构变化**（字段改名/缺失/完全未知结构）仍会静默回退草稿、不提醒——本次补齐。
+
+- **新增**：`adapters/refiner.py` 模块级 `_check_struct_mismatch(data)` + `_KNOWN_RESPONSE_KEYS`
+  契约清单。`_call_coze` 解析 coze 返回后调用，命中任一信号即判定「对接不匹配」：
+  ① `data` 非 dict；② 不含任何已知响应字段（完全未知结构）；③ 既无答案字段
+  （`final_answer`/`answer`/`cached_answer`）又无委托字段（`need_tool`/`need_tools`/
+  `deferred_tools`）——handoff 场景 `need_tool` 有值属合法，不误报。
+- **提醒**：结构不匹配且无既有 `message` 时，下发 warning banner（与版本号提醒同文案，
+  引导升级技能或改用 ct.medstatstar.com）。
+- **与 v1.68 的关系**：云端 `/run` 负责版本号过旧（`skill_version < 1.3.30`）与
+  `coze_version` 缺失；本地结构校验负责**实际返回结构**异常——两者互补，覆盖
+  「版本旧」与「对接不匹配」两类场景。
+- **验证**：`_check_struct_mismatch` 13/13 场景通过（正常答案 / 老字段 / handoff /
+  多技能 handoff / 缓存命中 / 空结构 / 未知结构 / 只有版本号 / 只有 params /
+  None / 字符串 / 列表）；`py_compile` 通过。
+- **生效**：本地 v1.3.41 随技能即时生效，无需部署。
+
+## 2026-11-10（第八轮）· 线上流式冒烟发现并修复 workflow_end 空答案（Coze v1.67）
+
+- **线上实测**（`/stream_run` + `X-Workflow-Stream-Mode: stream`，经本地代理）：流式本身
+  **已生效**——SSE 直通、200 帧、12 个到达时间桶（平台未缓冲）、`draft_answer` 176 帧逐字
+  下发、`draft_meta`×2、node 事件齐全。但 `workflow_end.output` 为空。
+- **根因**：`CtWorkflowStreamRunner._translate` 的 updates 分支用 clear+replace 跟踪最终
+  输出——末节点（tool_router）输出不含 `final_answer`，把 full_analysis/selfcheck 的答案
+  覆盖掉 → 前端 `streamRun` 拿不到 `final_answer` → 抛「stream ended without answer」
+  回落异步轮询（答案能出但流式收尾失效 + 二次提交）。
+- **修复**（v1.67）：updates 分支改为 **merge**（`final_output.update(...)` 不再 clear），
+  stream/astream 共用一处。`custom=False` 委托基类路径不动（零回归）。
+- **回归锁**：`test_wf_stream_smoke.py` 新增 `test_workflow_end_merges_node_outputs`
+  （末节点无答案字段时 workflow_end 仍带 final_answer/need_tool/run_id）；流式测试
+  12/12 PASS。注意：测试图 state schema 必须含答案字段（LangGraph 会过滤 schema 外的键）。
+- **另发现（非缺陷）**：端点 antiscrape `required_fields` 默认硬拒缺 `query_origin` 的
+  请求（200 silent drop 空体）——裸 curl 测试必须带 `query_meta.query_origin`
+  （sha256(hostname) 64hex），否则表现为「200 空响应」。
+- 产物：`ct-advisor_coze_v1.67_20261110.zip`（129 文件）。**需发布后线上收尾验证。**
+
+## 2026-11-10（第七轮）· 首字流式 ③ 彻底根治 + 阶段提示 ① / 增量草稿 ②（Coze v1.66）
+
+**背景**：advisorlog 近 30 天分析显示「重复提交」里有一类**等待型**——
+间隔 7.5–12.8s（连击型才是纯 UI 问题）。用户实测「等到 8–12s 即重发」。
+根因是上游模型前置推理（thinking）期间**一个字节都不下发**，
+`WorkflowStreamRunner` 在非 debug 模式下把全部节点事件丢弃
+（`if not run_opt.workflow_debug: continue`），只发 `workflow_start`/30s `ping`/`workflow_end`，
+于是前端在首段答案出现前完全是空白。
+
+**用户指令**：「要改就彻底根治到位。直接做 3。1 和 2 酌情做。」
+最终目标：端到端 token 级流式，让前端在数秒内看到答案首段。
+
+### 1. 后端（`adapters/coze/`，进包）
+- **`src/utils/wf_stream.py`（新增）**：`CtWorkflowStreamRunner` 把 `stream_mode` 扩为
+  `["updates","custom","debug"]`，把 LangGraph 的 `task`/`task_result` debug 帧翻译成
+  `node_start`/`node_done`，并透传 `custom` 帧。未开 `custom` 时**完全委托 `super()`**，
+  既有调用零回归。`CtRunOpt` 增加 `custom` 开关。
+- **`src/utils/draft_events.py`（新增）**：`emit_stage()` 下发 `draft_meta`（难度 /
+  尝试次数 / ETA 秒数）；`invoke_llm_with_drafts()` 逐 token 下发 `draft_answer`，
+  与 `LLMClient.invoke()` 的「stream + 累加」**逐字节等价**
+  （同 `str(content)` 累加、同 `response_metadata.update`、同 `AIMessage` 构造）。
+- **`full_analysis_node.py`**：`invoke` → `invoke_llm_with_drafts` + 入口 `emit_stage`
+  （`ETA_BY_DIFFICULTY`：simple 15 / middle 45 / complex 70）。
+- **`selfcheck_node.py`**：入口 `emit_stage`（`ETA_SELFCHECK`：middle 25 / complex 45），
+  覆盖第二段长空白（实测可再增 20–45s）。
+- **`main.py`**：读 `X-Workflow-Stream-Mode: stream` 头启用该通道，
+  不传即走原 `WorkflowStreamRunner` 路径。
+- **`config/full_analysis_cfg.json`**：新增 `"stream_drafts": true`（回滚开关）。
+- **3 个 C0 测试（11 用例）**：`test_wf_stream_smoke.py`（事件序列 / `_normalize` 三形态 /
+  `custom=False` 零泄漏 / `astream` 同构）、`test_draft_events.py`（图外不抛异常 /
+  与 `invoke` 逐字节一致 / 空答案 / ETA 表）、`test_stream_integration.py`
+  （端到端 runner + 节点 + draft 事件 / 增量拼接 == 终稿 / `custom=False` 无 custom 帧）。
+
+### 2. 前端（`workbench/`，不进 Coze 包）
+- **13×2 i18n 键**：9 个阶段名 + `progStageRun`/`progStageDone`/`draftTitle`（中英双语）。
+- **阶段提示**：`_onStreamEvent` 消费 `node_start`/`node_done`/`custom`；
+  进度行从「已 Ns」升级为「正在{阶段}…（预计约 {eta}s，已 {s}s）」，
+  完成后显示「✓ {阶段}（{s}s）」。
+- **增量草稿**：`draft_answer` 逐块追加进等待气泡（120ms 节流重渲染，避免长答案卡主线程），
+  `draft_done` 强制刷新，终稿到达时 `_flushAnswerToDom` 用 `replaceWith` 整块替换，草稿区自然移除。
+- **`window._wbStream`**：暴露 `stageLabel`/`progText`/`onEvent`/`draftHandle`/`i18n`/`allI18N`
+  供自动化测试与现场排障（主体在 IIFE 内，否则取不到）。
+- **`ct-advisor-proxy.py`**：透传 `X-Workflow-Stream-Mode`（含 CORS 白名单）。
+
+### 3. 测试
+- `workbench/tests/mock_server.py` 新增 `sse_stream` 故障注入模式
+  （`sse_frames()` 构造与真实上游同构的帧序列 + `_send_sse_stream()` 逐帧下发）。
+- `workbench/tests/test_ui.py` L3 新增 7 条流式用例（草稿出现 / 增量增长 / 阶段文案 /
+  请求头 / 终稿替换 / 按钮复位）。
+- `browser_tests.py` W2B 新增 7 条纯逻辑用例（阶段名映射 4 + i18n 完整性 + 进度兜底 + 函数存在）。
+
+### 4. 回归
+- W2 legacy 全量（L1/L2/L3/L4S/L4R/L4V）：**115/115 PASS**。
+- ctqa 六层（Anaconda 规范轮）：**PASS 66 / FAIL 0 / WARN 4 / SKIP 1**，门禁 GREEN。
+- C0 流式 3 测试（托管 Python 3.13）：**11/11 PASS**。
+
+**回滚**：① `stream_drafts: false` 恢复整段 invoke；② 不传 `X-Workflow-Stream-Mode`
+完全走原路径；③ 前端改动全在 `workbench/`（不进 Coze 包），删文件即回滚。
+
+## 2026-11-09 晚间（第六轮）· 咨询型问答能力分层 P0+P1 同批 / KB 归 Coze 端点 / L3 脱敏外发
+
+用户裁定：① P0+P1 同批做；② 产物涉密时**允许脱敏数值摘要外发**（L3 增强版）；
+③ **知识库资产必须上传到调用的 Coze 端点统一维护，不要放在本地**。
+第三点纠正了第五轮方案文档里「本地 `config/kb_topics.json` +
+`docs/methodology_anchors.md` 随技能分发」的错误落点（违反 `AGENTS.md`
+「本地零知识库」红线与 2026-09-16 双轨铁律），两文件已删除。
+
+### 1. 意图分层（本地 + 云端同批）
+- 新增 `config/intent_contract.json`（单一真相源）：`CONSULT_DEPTH` /
+  `EXEC_INTENT` / `RETRIEVAL_INTENT` 三态决策表；移除 `RETRIEVAL` 裸词「统计」。
+  本地 `route_tool.py` 与云端 `tool_router_node.py` 各持内嵌副本，
+  `check_route_drift.py` 用 AST 断言三副本逐字一致。
+- 实测 8 条技术细节问答中 4 条原被误派为执行请求，现两端均不下发 `need_tool`；
+  两条「先解释原理、再帮我算」混合问句改为「答原理 + 末尾软建议」。
+- `route_tool --self-test` 37/37 + 13/13 + 6/6 保持；`test_tool_router` 63/63 保持。
+
+### 2. 知识库归 Coze 端点（🔴 本轮核心修正）
+- **本地零 KB**：删除 `config/kb_topics.json`、`docs/methodology_anchors.md`；
+  `intent_contract.json` 与方案文档 §3.2 改为「Coze 端点统一维护」口径。
+- **Coze 生产库新增 3 个 L1 专题**：`adapters/coze/knowledge/` 下
+  `ref-topic-samplesize-methods.md` / `ref-topic-signal-methods.md` /
+  `ref-topic-registry-semantics.md`（含权威出处、边界、章节关键词）。
+- **Coze 接线**：`reference-index.md` Topic 表登记 + 新增常驻注入的
+  「L1 咨询答案契约」（身份标识 / 来源标注 / 反幻觉红线 / 混合意图 / 软建议）；
+  `src/kb/__init__.py` 的 `_CATEGORY_KNOWLEDGE` 把三文件挂到 b/c/d/f/g，
+  `_SEMANTIC_MAP` 新增 `methodology → c`；
+  `build_knowledge_index.py --merge` 重建 `knowledge_index.json`
+  （追加 518 键 / 保留 4750 键 / 5268 条）。
+- 🔴 **发现并修复 `scope_hint` 语义 bug**：云端
+  `full_analysis_node._doc_prompt_directive` 把任何非空 `scope_hint` 渲染成
+  「可能超出本技能核心覆盖范围」，`state.py` 亦注明「仅透传，不参与检索」。
+  初版方案让正常域也写 `scope_hint` 会给**每条**方法学问题加错误超范围声明。
+  改为 `entry.py` 写 `query_meta.domain_hint`，`full_analysis_node` 仅在
+  `category` 为空时用它做文件级兜底；章节级精确路由仍走原问题关键词。
+- 实测 Coze KB 加载器：中文咨询问句能命中三个新专题章节；英文 `prr`/`ror`
+  键被既有 `ref-reg-safety.md` 优先占用（索引 `setdefault` 机制），
+  旧库本就覆盖该主题且 L1 契约常驻，不构成缺口。
+
+### 3. L3 结果解读增强版（脱敏数值摘要外发）
+- 新增 `scripts/interpret_results.py`（与 `stitch_results.py` 刻意分模块，
+  后者静态仍零网络 import）；`stitch_results.build_numeric_summary()` 仅从
+  JSON 产物萃取**字段白名单内的纯有限数值**（≤12 个），
+  `interpret_question()` 由代码构造纯方法学问题。
+- `entry.py --stitch` 新增 `spec.interpret=true` 分支：显式过
+  `_check_outbound_authorization` → `_fire_coze` → 缝合本地机械汇总与云端解释，
+  答案标注出域范围。用户原问题、原始产物文本、文件名 / 路径、药名、
+  方案名、试验编号、受试者数据、`draft_answer` / `doc_context` / 历史全部不出域。
+- 端点未授权 / 无白名单数值 / 云端 `need_tool` / 空答案 / 错误 → 解释不采用，
+  只交付本地汇总并说明原因。HARD GATE 不变（仍是 `entry.py` 单一出口）。
+
+### 4. 回归与打包
+- 新增 `scripts/test_consult_intent.py`（**35/35**：咨询 10 / 执行 5 / 混合 2
+  + 契约门禁 + KB 归属 + domain 通道 + Coze KB 章节命中）、
+  `scripts/test_interpret_sanitization.py`（**27/27**：白名单 / 数值安全 /
+  F33 出站内容 / 授权与失败降级 / 静态零网络 AST / `entry.py` 接线）。
+- 全套离线：80 个 Python 文件编译、4 份 JSON 校验、
+  既有 stitch 14 / mainflow 13 / extended 15 / baseline 28 /
+  `test_cloud_brief` 53 / `test_tool_router` 63 / route_tool / cloud_brief 全绿；
+  线上 `canary --only all` **18/18**。
+- `precheck_nodes.py` C1–C12 全通过（22 条既有 C5 告警不阻断）；
+  `pack.py::OUT_NAME` 与 `_version.py::COZE_VERSION` 同步升 **v1.60**，
+  产出 `adapters/coze/ct-advisor_coze_v1.60_20261109.zip`
+  （126 文件 / 1,138,970 B / md5 `53f437e4ff2c9b8b6f1500b6aa0ad9ba`），
+  已核验三个新专题、重建索引、`reference-index.md`、改动节点与版本号均在包内。
+
+### 5. 待办与已知边界
+- 🔴 **Coze 包 v1.60 需用户手动重新发布**；发布前线上仍是旧规则
+  （本轮 canary 18/18 验证的是本地改动不破坏现有链路，不是新规则已上线）。
+- `check_route_drift.py` 整体退出码仍为 1，来自**既有** `WEAK_TRIGGERS`
+  差异（本地预取 72 词 / 云端 48 词，脚本注明「差异不必然是故障」）；
+  新增的「意图契约三副本 AST 一致性」段为 ✅ 通过。未擅自收敛该历史差异。
+- 三个新 `test_*.py` 与既有测试同受 `.gitignore:71` 忽略，属本地内部审计件；
+  `adapters/coze/` 整目录亦不随技能发布，但会随 Coze 部署包上传。
+
+---
+
+## 2026-11-09 晚间（第五轮）· 修复回程缺失与中文混合抽参
+
+用户裁定：上一轮列出的「单向 handoff 无回程」与「中文混合问句副卡参数」两个缺陷都需要修复。
+
+### 1. 回程汇总（`entry.py --stitch`）
+- 新增 `scripts/stitch_results.py`（stdlib only）：本地解析
+  `.md/.txt/.log/.json/.csv/.tsv/.xlsx` 产物（xlsx 用 zipfile + ElementTree，
+  不依赖 openpyxl），按技能分组确定性缝合，明确标注「非审计级 / 不改写、不推断、
+  不补数值」。
+- `entry.py` 新增 `--stitch` 模式（JSON spec 或 `@spec.json`，`--q` 在该模式下可省略）。
+  **仍是唯一入口、走同一 `_emit_plain` 协议**（marker / checksum / answer_file），
+  不过 vague gate / 缓存 / Coze / 委托，纯代码、零出站。HARD GATE 不变：
+  本地 LLM 依旧只跑 `entry.py` 并原样输出；handoff 答案末尾由
+  `refine_answer._stitch_hint()` 生成可直接套用的 `--stitch` 提示（中英双语）。
+- 🔴 **F33 边界**：产物可能含 B 档涉密数据，全程只在本机解析，绝不发往 Coze 或
+  任何端点；模块静态不含任何网络/编排 import。读取受扩展名白名单、单文件 2 MB、
+  总 20 文件、单产物 4000 字符、凭据名 denylist 约束；缺失/解析失败明确标注，不伪造。
+- 回归 `scripts/test_stitch_results.py`（14 项）：四技能产物解析、协议 checksum
+  可复算、零出站静态断言、凭据名/非白名单扩展名/缺失文件、`@spec.json`、
+  非法 JSON 不崩、`--q` 省略与 argparse 拒绝。
+
+### 2. 中文混合问句抽参（保住 37/37 词表回归）
+- 🔴 刻意**不改单技能 `_extract_params`**（`route_tool --self-test` 37/37 稳定区），
+  只在新增的 `extract_params_for_tools` 内加 `_extract_cjk_mixed_entities`：
+  中文/中英混合问句抽适应症（`NSCLC` / 中文「癌/瘤/症/病」后缀）、靶点
+  （`PD-1` 等拉丁实体，带数据源与统计量黑名单），给 `ct-registry.cond` 与
+  `ct-literature.topic` 兜底；英文问句完全走原逻辑，不受影响。
+- **领域安全**：`ct-safety.drug` 只认英文通用名（openFDA），中文药名**绝不**硬填
+  （会零命中）；副卡改给「请换算英文通用名（如 semaglutide）」提示，由
+  `_build_deferred` 产出 `hint` / `hint_en`、`_render_deferred_cards` 渲染。
+- 实测中文四技能问句：副卡 `cond=NSCLC`、`topic=PD-1 NSCLC`，ct-safety 带换算提示；
+  `route_tool --self-test` 37/37 + 13/13 + 6/6 全部保持。
+
+### 验证
+回程 14/14 · 主流程 13/13 · 扩展 15/15 · 基线 28/28 · route_tool 全绿 ·
+cloud_brief 全绿 · test_cloud_brief 53/53 · test_tool_router 63/63 ·
+60 个 Python 文件编译 · 2 份 JSON 语法 · 线上 `canary --only all` **18/18**。
+`SKILL.md`（HARD GATE 例外说明 + Return path 章节）、两份 README、
+`AGENTS.md` 已同步。新增两个 test_*.py 同样受 `.gitignore:71` 约束，属本地内部审计件。
+
+## 2026-11-09 晚间（第四轮）· 主流程纯代码方式的混合调用审查与扩展
+
+### 背景
+用户问「Advisor 主流程是纯代码方式，遇到混合调用是否有缺陷、是否要扩展」。
+前三轮测试都在**单元层**（直接构造执行卡调 `execute_card` / `_merge_answer`），
+恰好绕过了真实主流程的信息传递。本次沿
+`entry.py → run_orchestrate → 预判预取 / Coze 委托 → card-inline` 复核。
+
+### 实证缺陷
+用真实 `run_orchestrate`（仅 Coze 出站 fake，其余全真实）跑 4 技能混合提问：
+**修复前输出只有 `@skill:ct-samplesize` 一张卡片，其余 3 个技能全部丢失。**
+根因是信息传递链四处断裂：
+1. `run_orchestrate` 构造预取 card 时只填 `need_tool` / `params`，`need_tools`
+   虽已由 `predict` 算出却没传下去 → `execute_card` 的 deferred 为空；handoff
+   分支又不调 `_multi_tool_hint`，其余技能无处可出。
+2. `RefineResult` 没有 `need_tools` 字段，`_call_coze` 只解析 `need_tool`，
+   Coze 侧多技能命中被丢弃。
+3. `_render_delegate` 在无预判路径未传 `need_tools` → 委托块只带一个技能；
+   `refine_answer --ship` 的执行卡同样只有 `need_tool`。
+4. `build_output` 没有把 Coze 侧技能列表与本地预判合并。
+
+### 扩展（全部纯代码，HARD GATE 不变）
+1. 预取 card 带 `need_tools`。
+2. `RefineResult.need_tools` + `_call_coze` 兼容解析（`need_tools` /
+   `deferred_tools`，列表或 JSON 字符串，异常形态一律安全降级为空列表）。
+3. `build_output` 合并两侧技能列表并透传给所有 `_render_delegate`；handoff
+   分支用 `ensure_deferred` 兜底补齐。
+4. 新增 `handle_need_tool.ensure_deferred()`，由 `build_output` /
+   `--card-inline` / `--ship` 三条路径共用，旧版执行卡也不丢技能。
+5. 新增 `route_tool.extract_params_for_tools()`：多技能分别抽参并合并，
+   副卡片不再是清一色「需补齐」；`_handoff_result` / `_build_deferred`
+   各自按技能白名单过滤，保证不串参。
+6. 新增 `scripts/test_mainflow_mixed.py`（11 条主流程级用例，Coze 出站 fake）：
+   预判路径 / 英文参数抽取 / 委托块 / `card-inline` 真实 subprocess /
+   Coze 侧列表合并 / `ensure_deferred` 兜底 / HARD GATE 不变量。
+
+### 验证
+修复前 1/4 卡片 → 修复后 **4/4**；主流程级 11/11、扩展 15/15、基线 28/28、
+route_tool、cloud_brief、test_cloud_brief 53/53、test_tool_router 63/63、
+58 个 Python 文件 py_compile、JSON 全绿；线上 `canary --only all` **18/18**。
+
+### 仍存在、未擅自扩展（需拍板）
+- **单向 handoff 无回程**：用户分别调用多个技能后，advisor 不会自动汇总结果
+  （HARD GATE 禁止 LLM 决策，也没有代码侧「结果回填」入口）。若要补，需新增
+  由代码驱动的汇总入口（接收技能产物路径/文本、代码解析缝合），涉及文件读取
+  与产物解析，属独立工作项。
+- **中文混合问句副卡参数**：既有 `_extract_params` 中文分支只覆盖 ct-registry
+  的实体后缀，ct-safety / ct-literature 只做英文实体兜底，故中文混合提问的副卡
+  仍多显示「需补齐」（英文问句已能抽出 cond/drug/topic）。改词表会影响
+  `route_tool --self-test` 37/37 回归，属独立行为变更，本轮未动。
+- 本地缓存默认关闭（`CT_ADVISOR_LOCAL_CACHE=0`），不构成缺陷；若手动开启，
+  修复前缓存的「单卡片」答案可能在 TTL 内复现，建议清缓存或让常驻服务按
+  code fingerprint 自动重启。
+
+## 2026-11-09 晚间（第三轮）· 扩展混合跨技能用例 + 两处边界修复
+
+### 背景
+用户要求「再设计几个混合调用案例测试一下」。新增
+`scripts/test_cross_skill_mixed_extended.py`（离线 15 条），与上一轮 28 条基线互补。
+首轮 **13/15**，2 条 FAIL。
+
+### 新用例（E 组 10 项 + F 组 4 项）
+四技能全命中（每卡只拿自己的参数）/ 全 B 档混合（每张都要有涉密标注）/
+跨档位四混（A + B + 未上架 A + referral-only）/ 参数全空时各自列缺失且互不污染 /
+参数重叠时合法共享、越界不串 / 英文混合不夹中文 / 主判缺参时副卡不误报 /
+脏 `need_tools`（重复项、空串、None）/ 混入未注册技能 / 回滚 `status=ok` 不重复渲染 /
+真实四技能与三源提问（各再走一遍 `build_output`）。真实问句实测 `predict` 能一次命中 4 个技能。
+
+### 暴露并修复的缺陷
+1. **未注册技能被宣传成「可直接调用」**：`_build_deferred` 不查本机可得性，混合执行卡
+   夹带 `ct-does-not-exist` 时照样产出 `@skill:ct-does-not-exist` 卡片（反幻觉缺口）。
+   修复：deferred 项新增 `client_callable`（取 `_client_callable(t)`）；
+   `_render_deferred_cards` 对 False 项改输出「本机未注册」说明、不给 `@skill` 卡片；
+   全部不可调用时标题改为「其余技能（当前本机未注册）」（中英双语）。
+2. **回滚路径重复渲染**：`status=ok` 时 `_merge_answer` 已渲染 deferred 卡片，
+   `build_output` 又叠加 `_multi_tool_hint`，同一批技能出现两个小节。
+   修复：`build_output` 在 `prefetch_out.deferred_tools` 非空时不再叠加 hint。
+
+### 验证
+扩展用例 13/15 → **15/15**；基线 28/28、route_tool、cloud_brief、
+test_cloud_brief 53/53、test_tool_router 63/63、py_compile / JSON 全绿；
+线上 `canary_cloud_brief.py --only all` 复跑 **18/18**。
+两个测试脚本同样受 `.gitignore:71 scripts/test_*.py` 约束，属本地内部审计件。
+
+## 2026-11-09 晚间（续）· 混合跨技能调用缺口修复 + 跨技能回归测试
+
+### 背景
+用户要求「做几个测试案例，专门测试跨技能功能的调用，以及混合跨技能功能调用的情况」。
+新增 `scripts/test_cross_skill_handoff.py`（离线、不触网，28 条）。首轮 **20/28**：
+A 组单技能 9/9、C 组真实提问 4/4、D 组边界 7/7 全过，**B 组混合跨技能 8/8 全 FAIL**。
+
+### 暴露的缺口
+- `handle_need_tool._build_deferred` 只产出 `tool / required_params / prep_hint` 文字提示，
+  而 `refine_answer._merge_answer` 的 handoff 分支**完全没渲染 `deferred_tools`** →
+  多技能问题的答案正文只有主技能一张卡片，其余技能对用户彻底不可见。
+- `deferred_note` 与 `orchestrate._multi_tool_hint` 仍是旧姿态「确认后我再逐个调用」，
+  与「客户端直调、advisor 不代跑」矛盾。
+- 三源样例又发现：主技能卡片把全量 `params` 原样带出，混合卡里 `topic`
+  （属 `ct-literature`）被塞给 `@skill:ct-registry`，客户端调用会 argparse 报未知参数。
+
+### 改动
+1. `_build_deferred(mapping, primary, need_tools, card_params)`：每个 deferred 技能生成
+   结构化卡片数据 —— `mention` / 按**各自** CLI 白名单拆分的 `params` / `missing` /
+   `deliverables` / `tier` / `confidential`；`execute_card` 传入 card params。
+2. `_handoff_result`：主卡片 `clean` 也按主技能白名单过滤，不丢本技能参数、
+   不带别技能参数。
+3. `refine_answer._render_deferred_cards`（新增）：把 deferred 渲染成
+   「### 其余可直接调用的技能」小节，每个 `@skill:` 一行带参数 / 缺失项 / 交付物 /
+   B 档提醒；`status=ok` 与 `status=handoff` 两条路径都接上（回滚路径行为一致）。
+4. `deferred_note` / `orchestrate._multi_tool_hint` 去掉「我再调用」旧姿态，统一
+   `@skill:` 可直调形态（中英双语）。
+5. `scripts/test_cross_skill_handoff.py`（新增）：A 单技能 9 例（含 B 档 / 未上架 A 档 /
+   referral-only / 合成数据）、B 混合 4 例 × 2 条路径（8 条，含 B+A 混档）、
+   C 真实提问 4 例（predict → 执行卡 → 答案）、D 边界 7 例；断言参数白名单不越界
+   不丢失、B 档保密提醒、英文不夹中文、不委托 LLM、缺参不编造、开关可回滚。
+
+### 验证
+首轮 20/28 → 修复后 **28/28**。全套离线回归 route_tool / cloud_brief /
+test_cloud_brief 53/53 / test_tool_router 63/63 / py_compile / JSON 全绿；
+线上 `canary_cloud_brief.py --only all` 复跑 **18/18**，确认本次改动未影响端到端链路。
+三源样例实测：主卡 `@skill:ct-registry` 只带 `cond` / `drug`，副卡
+`@skill:ct-safety` 带 `drug`、`@skill:ct-literature` 带 `topic`，互不串参。
+
+## 2026-11-09 晚间 · 客户端直调适配：handoff 为默认主路径，cloud brief 降为 opt-in
+
+### 背景（用户裁定）
+「ct-advisor 现在在调用的客户端已经解决了调用 Safety、Registry 等相关技能功能的问题，
+可以直接调用了。」核查发现技能内部仍停留在 2026-09-10 的「SkillHub 上架 = 可安装 =
+可调用」模型，与现状冲突：
+
+- `scripts/sibling_registry.json`（2026-11-05 生成）实测 **22/22 installed=true**，含全部
+  B 档与 `ct-pipeline` / `ct-synthdata`；而 `tool_mapping.json::tiers.registry` 仍把它们标
+  为 `published=false` /「不可安装」——两套可得性事实源打架。
+- `handle_need_tool.execute_card` 档位门 ①② 据此对 `ct-protocol` 等返回「不对外发布…
+  无法通过安装获取」、对 `ct-pipeline` 返回「尚未公开发布…当前无法通过安装获取」，
+  属**事实性错误**，会把用户引向「办不到」。
+- `route_tool.suggest_footer` 文案「可安装 / 调用后再补充」用反引号工具名；而
+  `brief_contract.json::suggest_text` 已用 `@skill:` —— 两套导流文案漂移
+  （`canary_cloud_brief.py:178` 的注释还声称 footer 产出 `@skill:`，与代码不符）。
+- 两条自动取数路径都只给**纯文本**：cloud brief 契约自述「非审计级、不含可复算交付物、
+  不产文件」；本地执行卡以 `--run` / `--auto-confirm` 跳过 SAFE PREVIEW，结果经
+  `_sanitize_result` 截断后缝进答案。客户端能直调后，用户本可拿到 `report.xlsx` /
+  `faers_report.xlsx` / PRR+95%CI / 批注版方案，这两条「捷径」反而把人挡在完整交付物之外。
+
+### 改动
+1. **核心执行链（handoff 优先）**
+   - `scripts/handle_need_tool.py`：新增 `_client_callable()`（双判据：`SKILL.md` 落盘 ||
+     `sibling_registry.json::installed`）、`_handoff_result()`、`CT_ADVISOR_HANDOFF` 开关。
+     `execute_card` 在 brief 分流之后、**档位门之前**插入 handoff 分流：本机已注册即返回
+     `status=handoff`（`@skill:<slug>` + 已识别参数 + 缺失参数 + 交付物 + B 档保密提醒），
+     不再代跑 CLI。档位门 ①②③ 文案改为「本机未注册」语义，仅在技能确未落盘或
+     `CT_ADVISOR_HANDOFF=0` 回滚时可达。
+   - `scripts/refine_answer.py`：`_merge_answer` 新增 `handoff` 中英文渲染分支（英文路径
+     不复用中文 purpose/deliverables，避免中英混杂）；`status=ok` 的底部导流统一为
+     `@skill:<slug>`；`unreleased_b` / `unpublished_a` 标题与英文文案同步改口径。
+   - `scripts/orchestrate.py`：prefetch 决策表把 `handoff` / `referral` 并入「代码直接缝合
+     包裹」组（**绝不落到 `_render_delegate`**，否则要 LLM 去执行技能）；无预判路径的
+     B 档/未上架短路加 `not _client_callable(coze_tool)` 条件。
+2. **可得性元数据**：`tool_mapping.json` 新增顶层 `handoff` 段与 `tiers.availability` 段，
+   明确 `published`（分发）/ `tier`（保密）/ `locally_available`（可调用）三者正交；
+   `tiers.note` / `tiers.install.authority` / `description` 同步。
+3. **导流文案统一**：`route_tool.suggest_footer` 改为可直接执行的 `@skill:` 形态、
+   扩 `_TOOL_DESC` 到 B 档与未上架 A 档、英文路径优先用英文描述。
+4. **cloud brief 降级（架构层重评）**：`brief_contract.json::switch.enabled_default` 与
+   `tool_mapping.json::cloud_brief.default` 由 `true` → **`false`**；`fallback_chain` 改以
+   handoff 为主路径。`cloud_brief.py` / `test_cloud_brief.py` / `canary_cloud_brief.py`
+   的默认值断言与 canary 流程同步（canary 先验证默认 handoff，再显式 `=1` 保留原有
+   真实取数回归覆盖）；`docs/cloud_brief_rollout_20261109.md` 文首追加重评表。
+5. **文档**：`SKILL.md`（Requirements 表、Client handoff contract 新节、STEP 3/4）、
+   `README.md` / `README_zh-CN.md` 的安全预览段、`docs/capability_domains.md` §3.3、
+   `AGENTS.md` 模块图说明同步。
+6. **web 工作台（含 `workbench/publish/` 副本）**：`index.html` 的 pending 标题与 chip
+   改为 `@skill:<slug>` 形态、`openNeedToolDetail` 新增「推荐：在客户端直接调用」提示块
+   （中英 i18n 各新增 `ntHandoffTitle` / `ntHandoffNote`）、中英示例答案与任务卡片不再
+   写「请在 WorkBuddy 中运行 ct-registry」而改为可直接调用；`ct-advisor-proxy.py` 的
+   `/api/run-skill` 白名单**刻意不扩张**（不纳 coze 引擎 / 任何 B 档涉密技能），
+   明确定位为「工作台代跑 CLI 备用通道」，推荐路径交给 handoff。两份文件逐文件复制
+   同步到 `publish/`，改后与主副本逐字一致。
+
+### 不变量（红线）
+- 🔴 **HARD GATE 不变**：卡片由代码生成、经 `entry.py` 单一出口输出；本地 LLM 仍不得
+  自主选择 / 调用兄弟技能，不得追加或改写答案。`entry.py`、输出协议、完整性校验未动。
+- 🔴 **§20.19.7 红线 2 不变**：`CT_ADVISOR_HANDOFF=0` 可整条关回原执行卡，三个技能
+  `engine=local` 兜底原样保留；`test_cloud_brief.py` 继续断言。
+- 🔴 **B 档涉密边界不变**：能调用 ≠ 可把方案 / 受试者数据发往公共检索端点（F33）；
+  handoff 卡片对 `tier=B` 强制附保密提醒。`doc_context` 仍禁止进入检索信封。
+- Coze 云端包零凭据、纯代码路径不变；三个兄弟技能本体与 SAFE PREVIEW 未改。
+- 回滚成本：`CT_ADVISOR_HANDOFF=0` + 不设 `CT_ADVISOR_CLOUD_BRIEF` 即回到改造前行为。
+
+### 验证
+`cloud_brief.py --self-test` 全绿 · `test_cloud_brief.py` **53/53**（新增 2 条顺序不变量断言）
+· `route_tool.py --self-test` 全绿（工具命中 37/37、软建议 13/13、参数 6/6）·
+43 个 Python 文件 `py_compile` 通过 ·
+`handle_need_tool --card` 五场景实测（A 档 / B 档 / 未上架 A 档 / meta-analysis
+→ 全部 `status=handoff`；`CT_ADVISOR_HANDOFF=0` → 回落 `status=ok` 原执行卡）·
+`_merge_answer` 中英文 + B 档保密提醒渲染实测 · `tool_mapping.json` / `brief_contract.json`
+JSON 语法校验通过 · `index.html` 内联 script 经 `node --check` 通过（2 个块）·
+`ct-advisor-proxy.py`（主副本 + publish）`py_compile` 通过 · publish 两份文件
+`diff -q` 与主副本逐字一致 · `test_tool_router.py` 修复后 **63/63**。
+四项回归最终状态：route_tool / cloud_brief / cross_repo 53/53 / tool_router 63/63 全绿。
+
+### 附带修复：`tool_router` 回归测试的「节点模块不可用」
+
+`scripts/test_tool_router.py` 此前报 `FAILED: 0/0 (节点模块不可用)`，
+根因**不是**「本地缺 Coze 云端节点」——`adapters/coze/src/graphs/nodes/tool_router_node.py`
+一直在本机，而是节点顶部 `from graphs.state import ToolRouterInput, ToolRouterOutput`
+要求 `adapters/coze/src` 在 `sys.path`（Coze 云端工作目录即 `src/`，`graphs` 是顶层包；
+本机工作目录是技能根，该路径不在 `sys.path`）。测试脚本原本只 stub 了 langchain /
+langgraph / coze_coding_utils / pydantic，漏了**包内** `graphs.state`，加载即抛
+`ModuleNotFoundError: No module named 'graphs'`；`run()` 刻意把加载失败判为失败而非
+跳过（避免「静默不测」），于是显示 0/0。节点文件 2026-10-30 16:51 改过、测试脚本未
+同步，大概率是那次加类型注解时引入的缺口（两文件均未纳入 git 跟踪，无法用 log 确证）。
+
+按脚本既有「stub 掉云端依赖」设计，在 `_load_node_module()` 补一层轻量 `_IO` 占位
+（四个待测纯函数 `_kb_hit` / `_match_tool` / `_consultation_intent` / `_suggest_tools`
+用不到真实 Pydantic I/O 模型）；**刻意不注入 `src` 路径加载真实 `state.py`**，以免云端包
+新增 import / 改依赖时牵连与词表无关的回归。修复后 Anaconda3 与 managed Python
+（无 pydantic、走 stub 分支）均 **63/63 = 100%**。此缺陷与本次 handoff 改造无关，
+但本轮把它纳入回归清单后才被发现并修掉。
+
+### 线上 canary（20:50 执行）
+
+`canary_cloud_brief.py --check` 契约与双凭证可用；`--only all` 真实打 ct-search /
+ct-advisor 端点，**二次完整回归 18/18 全绿**：
+
+- 第 1 节三 source（registry / safety / literature）响应与本地契约的 disclaimer /
+  suggest_text / param_allowlist 逐字一致；
+- 第 2 节四条 fail-closed 护栏（`PARAM_NOT_ALLOWLISTED` ×2 / `MISSING_REQUIRED` /
+  `UNSUPPORTED_SOURCE`）全部拒绝；
+- 第 3 节 Coze 云端纯代码路径两态均返回 `need_tool` 执行卡、零 brief 缝合标记
+  （云端零凭据、不受本地改动影响）；
+- 第 4 节本次改动的新语义全部通过：默认关闭 → `execute_card` 走 `handoff`、
+  显式 `=1` → brief 真实取数 + `execute_card` 端到端缝合 + `_fire_prefetch` 并行预取、
+  无效凭证回落、`=0` 关闭、短 TTL 缓存命中。
+
+**首次完整运行为 17/18**：`advisor_safety_brief` 15.3s 返回 `status=error`。
+单次复现 0.4s `status=ok`（PRR/ROR + 三护栏齐全）、`--only search` 3/3、完整二次 18/18，
+判定为**端点侧冷启动瞬时故障**：响应 `perf.deadline_sec=15` 是端点内部软预算，
+短于客户端契约 `per_source_timeout_sec.safety=20`，冷启动撞线即快速失败并按
+`fallback_chain` 回落（不伪造数据），非契约违约、非本地改动回归。
+如需 canary 对冷启动免疫，可给 `search_canary` 的 `status=error` 加一次标注式重试
+（**未改，待拍板**；不加重试可保留对真实端点故障的敏感度）。
+
+## 2026-11-09 · brief 速览本地侧性能优化（P0，配合 ct-search 0.5.01）
+
+- 契约 `config/brief_contract.json` 新增 `endpoint.per_source_timeout_sec`
+  （safety 20 / literature 35 / registry 40s），取代统一 `timeout_sec=90`；
+  Coze 网关 60s 硬顶之下统一 90s 永远等不到，分档后立即回落本地执行卡。
+- 新增 `cache` 段与 `scripts/cloud_brief.py` 的短 TTL 结果缓存：TTL 600s、
+  key = `sha256(source + 规范化 keyword JSON)`（不含每次都变的 `query_origin`）、
+  落系统临时目录（不进技能发布物 / Coze 包）、原子覆盖不删除历史文件；
+  只缓存 `status=ok` 且 `partial_sources` 为空的完整成功信封，
+  `CT_ADVISOR_BRIEF_CACHE=0` 可关闭。
+- `cloud_brief.py --self-test` 新增 6 项断言（分档超时、TTL、缓存命中、
+  partial/error 不缓存、env 关闭），共 26/26。
+- 与端点 0.5.01 的 P1 改动（并发 / WHO 快路径 / 软预算 / cap 缩放）配套；
+  **本仓改动无需重发 Coze 包**，凭据仍在本地、Coze 云端零凭据不变。
+
+## 2026-11-09 · cloud brief：调用三技能的执行位置上移 Coze（默认关闭 · 待云端部署）
+
+> 背景：coze 端点早已承载 ct-registry / ct-safety / ct-literature 的取数层，但
+> 本技能仍按 2026-08-14 的 need_tool 执行卡落回本地 CLI，形成四次跨域与
+> 「必须本地安装三个技能」的隐含依赖。本次上移的是**执行位置**，不是产品：
+> 三个技能的交付物、SAFE PREVIEW 确认门、独立发布单元与合规边界原样保留。
+
+### 改动
+- 新增 `config/brief_contract.json`（契约单一真相源：白名单 / 三护栏文案 / 开关 /
+  回落链 / 出域边界）、`scripts/cloud_brief.py`（本地薄客户端 + `--self-test`）、
+  `scripts/test_cloud_brief.py`（跨仓一致性自检，AST 断言三份白名单与文案逐字一致，38/38 通过）。
+- `adapters/coze_token_embedded.py` 新增 `ct_search_coze` 共享公开凭据 +
+  `get_search_token()`：brief 通道不再依赖 ct-registry 已安装（仍可用
+  `CT_ADVISOR_BRIEF_TOKEN` 覆盖）。
+- `scripts/tool_mapping.json` 新增顶层 `cloud_brief` 路由/开关段；三个技能
+  `engine: local` **原样保留**作兜底（ct-base §20.19.7 红线 2）。
+- `scripts/handle_need_tool.py` 在档位门之前加 cloud brief 分流（须早于安装门控，
+  才能免除「为一句速览先装三个技能」）；任何失败回落原执行卡，绝不伪造数据。
+- 云端工作流新增 `adapters/coze/src/graphs/nodes/cloud_brief_node.py`；
+  `state.py` 加 `cloud_brief_enabled`（默认 false）与 `CloudBriefInput/Output`；
+  `graph.py` 加 `cloud_brief` 出口并直连 END，不重跑 full_analysis。
+- 新增 `docs/cloud_brief_rollout_20261109.md`：完整计划、改动清单、部署顺序、
+  验收清单、回滚、未纳入范围与待拍板项。
+
+### 边界
+- 两个开关（`CT_ADVISOR_CLOUD_BRIEF` / `cloud_brief_enabled`）**默认都关**，
+  未开时行为与改造前逐字一致；开关关闭即回滚，无需改代码。
+- 🔴 两个 Coze 云端包需手动重新发布后才生效；ct-search 凭据已内嵌随包分发，无需配环境变量；
+  **本地代码改动不会自行上线**。
+- 三条护栏：白名单锁死 8/6/6 · 速览非审计级免责 · suggest_footer 导流回三个技能。
+- `doc_context` 绝不进入检索信封；`query_origin` 由客户端生成并两层透传（§8.6）。
+- 未纳入：两套 tool_router 规则表的完整收敛（独立行为变更工作项）、跨族后端合并
+  （§20.19.5 已判「不合」）、文件交付物上云。
+
+### 部署反馈修复（2026-11-09 14:54 · Coze build_agent 拦截）
+
+用户部署 v1.59 时 build_agent 拦下四处，均为本地源码相对平台契约的回退，已全部修回：
+
+| # | 文件 | 修复 |
+|---|---|---|
+| 1 | `adapters/coze/src/graphs/nodes/_version.py` | `COZE_VERSION` 1.58 → **1.59**，追加 v1.59 changelog；与 `pack.py::OUT_NAME` 主版本对齐 |
+| 2 | `adapters/coze/src/graphs/nodes/selfcheck_node.py` | 移除 `from __future__ import annotations`；`SelfCheckInput/Output` + `RunnableConfig` + `Runtime[Context]` 提到模块顶层；删除节点函数内对 state.py 的重复导入；签名改为 `(state, config: RunnableConfig, runtime: Runtime[Context]) -> SelfCheckOutput` |
+| 3 | `adapters/coze/src/graphs/nodes/cloud_brief_node.py` | 同样移除 `__future__`、补 `RunnableConfig`/`Runtime[Context]` 顶层导入、签名补注解（Input/Output 本就顶层导入） |
+| 4 | `adapters/coze/src/graphs/state.py` | 补 `ConfigDict` 导入（`from pydantic import BaseModel, ConfigDict, Field`）——v1.59 新增两个模型用到，缺失会 NameError |
+| 5 | `adapters/coze/config/selfcheck_cfg.json` | 补回 `sp` / `up` / `tools: []` 三个 agent 节点平台校验字段；实际提示词仍由节点代码动态构造，cfg 内为占位并已注明 |
+
+**防复发**：`scripts/precheck_nodes.py` 在原 C1–C6 之外新增 C7（禁 `__future__ annotations`）、
+C8（签名三参数全注解）、C9（ConfigDict 导入）、C10（版本常量⇄包名一致）、
+C11（selfcheck_cfg 三字段）、C12（禁函数内重复导入 graphs.state），任一失败即拒绝出包。
+旧 v1.59 坏包备份到 `adapters/coze/_archive/`，未删除。
+
+### 凭据内嵌修正（2026-11-09 15:26）
+
+用户指出：ct-search 凭据应随技能内嵌，不该放 Coze 工作流环境变量。核实后确认成立——
+该凭据是 2026-08-03 授权随包公开发布的**公开共享凭据**（非私有密钥），全家族
+`ct_advisor_coze` / `ct_bugreport_coze` / `coze_unified` 均内嵌 `.py` blob 随包分发
+（ct-base §5.239/§5.243；§5.234 说明只是混淆不是加密，放进环境变量并不更安全）。
+且本地 `scripts/cloud_brief.py` 早已用内嵌 blob，唯独云端节点走环境变量，属同一凭据两套解析。
+
+- 新增 `adapters/coze/src/search_token.py`：内嵌 `ct_search_coze` blob + 同款混淆密钥 +
+  `get_search_token()`；读取优先级 CLI > `CT_SEARCH_TOKEN`（可选覆盖，便于轮换）> 内嵌。
+- `cloud_brief_node.py` 去掉 `import os` 与 `os.environ` 读取，改调 `get_search_token()`；
+  不再因「平台没配环境变量」而回落。
+- `brief_contract.json` / `docs/cloud_brief_rollout_20261109.md` / `canary_cloud_brief.py`
+  同步改为「无需配置环境变量，凭据随包分发」。
+- `test_cloud_brief.py` 新增三方一致性断言：技能根 blob、Coze 包内注入副本、
+  ct-registry `coze_unified` 的 blob / 密钥 / 解码 token 逐字一致，漂移即自检 FAIL。
+- **平台侧只需剩一项**：在工作流「开始节点」声明 `cloud_brief_enabled` 输入变量
+  （这是输入 schema，不是凭据，无法内嵌）。
+
+### 最终架构调整（2026-11-09 15:51 · 用户拍板）
+
+**Coze 云端只保留单纯的代码调用；所有调用所需共享凭据一律放在技能本地 / 工作台。**
+理由：放调用方是家族既有范式（本地持 `ct_advisor_coze` 调 advisor Coze，Coze 包内
+不持有），且从根上消除「凭据轮换必须重发 Coze 包」的风险与平台配置卡点。
+
+- 云端：`src/search_token.py`、`cloud_brief_node.py` 移入 `adapters/coze/_archive/`
+  （可逆，pack.py 排除）；`graph.py` 移除 import / 节点 / 路由出口，回退为
+  `tool_router → need_tool → END`；`state.py` 的 `cloud_brief_enabled` 与
+  `CloudBrief*` 模型标注停用但保留（向后兼容，不硬删）。包内零凭据。
+- 本地：`CT_ADVISOR_CLOUD_BRIEF` **默认启用**并支持显式 `0` 关闭；
+  `orchestrate._fire_prefetch` 优先走 `cloud_brief.py` 直连（与 Coze 调用并行），
+  失败回落本地执行卡；`tool_mapping.json` / 契约 `switch` 同步。
+- 给代码人员的提示（**不是**运行时用户提示）：`coze_token_embedded.py` 的
+  `ct_search_coze` 源码注释写明轮换四步与「无需重发 Coze 包」；契约新增
+  `credential_governance` 段；`test_cloud_brief.py` 断言 Coze 源码树零凭据、
+  停用副本已归档、本地凭据与 ct-registry 真源一致、轮换提示存在。
+- canary 的「云端开关两态」测试改为「云端纯代码 need_tool 路径」验证。
+- 平台侧**零配置**：无需 `CT_SEARCH_TOKEN`、无需开始节点声明输入变量。
+
+## 2026-11-05 · v1.3.39 方案评阅意图软路由到本地 ct-protocol（B7）
+
+### 背景
+用户反馈：对「方案评阅 / 修改意见」类问题，本技能（Coze 云端作答）**输出笼统**；而本地 `ct-protocol` 已有结构化评审框架
+（U1–U12 工作流 / D1–D9 风险评分 / 立论与逻辑一致性审查 / 批注版输出）。评估见 ct-base `references/paper_evaluations.md`
+2026-11-05 条目与工作区《clinical 技能对 ct-protocol 参考价值评估报告》。
+
+### 改动
+- **`scripts/route_tool.py`**：
+  - `_TOOL_DESC` 新增 `ct-protocol`（中英双语描述）。
+  - `WEAK_TRIGGERS` 新增 `ct-protocol`：要求「方案」与「评阅/审阅/评审/审查/审一下/批注/修订/修改意见」同现
+    （英文 `protocol review/audit/assessment`），收得较紧以避免把「方案修改后要重新伦理审查吗」这类合规题误建议。
+  - 咨询意图护栏新增**例外**：护栏命中时仍保留 `ct-protocol` 弱建议（「如何评审这个方案」正是该切结构化评审的场景）。
+  - 自测新增 3 条工具命中 + 3 条软建议断言（含护栏例外与反例），`--self-test` 全绿（37/37、13/13、6/6）。
+- **`scripts/tool_mapping.json`**：`ct-protocol` 注册表 purpose 更新为「多角色评审 / 立论与逻辑一致性 D1–D9 / 修订风险 / 批注版输出；B 档本地离线，仅作软建议不自动调用」。
+- **`docs/capability_domains.md`**：新增 §3.3「方案评阅路由（→ ct-protocol）」，含触发口径、护栏例外与反例。
+- **`SKILL.md`**：Capability Domains 段新增 Protocol-review routing 说明。
+- **`README.md` / `README_zh-CN.md`**：FAQ「方案评审有深度上限吗」补充 D1–D9 / 批注版输出，并说明 v1.3.39 起的软建议路由（仅建议不自动调用）。
+
+### 不变量
+- **仅软建议、不自动调用**：`ct-protocol` 为 B 档本地技能，不在 `tool_mapping` 自动执行表；是否切换由用户决定。
+- 本技能仍先按自身能力作答，页脚建议追加在答案之后，不改变答案本身（与 `suggest_footer` 既有姿态一致）。
+- HARD GATE 不变：本地 LLM 仍不得做域判定；路由由确定性代码产出。
+
 ## 2026-10-30 · v1.3.38 本地客户端缓存治理：关闭本地答案缓存/去重，一律由云端承担
 
 ### 背景
@@ -2521,3 +3155,114 @@ v1.14 移入 `_archive/`）。本地改动**即时生效**；云端需上传 zip
 
 - **`workbench/ct-advisor-proxy.py`（含 publish/ 副本，2026-10-19）**：429 响应体去 mechanism 区分——原 `{"reason":"denylist"/"ratelimit"/"concurrency"}` + `retry_after` 键可让攻击者打一次即区分命中机制并观测封禁到期跳变；现统一固定载体 `{"ok":false,"error":"rate_limited"}` / `{"ok":false,"error":"busy"}`，`Retry-After` 仅作 HTTP 头。500/502 及附件解析失败提示不再回显 `str(e)`（防路径/内部 URL 泄露），改通用错误体 + 服务端 stderr 日志（新增 `_srv_log`）。命中机制只写遥测与日志。
 - **测试**：`adapters/coze/tests/test_webguard_proxy.py` 新增 Part C（静态扫描 3 项 + HTTP 实测 3 项，限流用 misc 类 /api/health 造、零副作用），27→33 全绿；全量回归 antiscrape 69 + habit 33 + HTTP 集成 11 + webguard 33 均绿。
+
+## [Coze v1.61] (2026-11-10) — 云端节点同步 P0-1（混合意图拆分）
+
+- **`adapters/coze/src/graphs/nodes/tool_router_node.py::_match_tool`**：咨询意图护栏由「命中即降级为原生回答」改为「仅当无显式执行动作时降级」。
+  - 原理/机制类问句（CONSULT_DEPTH/DEF/METHOD/DOC 命中）若同时含执行动词（帮我算/检索/compute/find…）或强触发词，仍照常下发 `need_tool`；原理部分由 full_analysis / Coze KB 作答，二者经本地 `orchestrate` 合并共存。
+  - 混合意图（如「解释一下为什么用双侧检验，并帮我算样本量」）不再被整体吞噬。
+  - 仅当「咨询意图且无执行动作」（含纯方法论 + 强触发词，如「什么是样本量」）才降级为原生回答 + 软建议 —— 与本地 `scripts/route_tool.py::predict` 行为逐字对齐。
+- **`scripts/test_tool_router.py`**：扩充 3 条混合意图用例（2 条 mix→下发、1 条咨询+强词无执行动词→仍降级），云端节点测试 63/63 → **66/66**。
+- **`scripts/check_route_drift.py`**：意图契约正则三副本（JSON / 本地 / 云端）校验一致通过；WEAK_TRIGGERS 的 24 词差为既有已知差异（本地含 ct-protocol 等），非本次引入。
+- **打包**：`adapters/coze/scripts/pack.py` 出包 `ct-advisor_coze_v1.61_20261110.zip`（126 文件 / 1,139,855 B / md5 `2105240c5d7b3a5e5df0ae51080d63a1`），precheck_nodes C7–C12 全过。
+- 🔴 知识库资产仍只在 Coze 端点维护，本地技能本体零知识库；L3 脱敏外发仍只落本地 `scripts/interpret_results.py`。
+- **部署**：需用户手动将 v1.61 包发布到 Coze（端点镜像升级，同 v1.60 流程）。
+
+## [Coze v1.62] (2026-11-10) — 复杂混合调用安全提示（拆分问题 + 超时终止重问）
+- **触发信号**：一次提问命中**多个兄弟技能**（`need_tools` / 主技能 + `deferred_tools` 合计 >1）——确定性、纯代码、无 LLM。
+- **本地 `scripts/route_tool.py::predict`**：多强命中分支新增 `split_advice=True` 与 `complexity_hint`（中文提示文本，由新增 `complexity_hint_text()` 生成）。
+- **本地 `scripts/refine_answer.py::_merge_answer`**：在 ok / handoff / need_params 三类工具调用分支注入安全提示；新增 `_complexity_hint(tool_out, lang)`（从 `need_tools` 或 `主技能 + deferred_tools` 抽取技能列表，兼容 deferred 为字典列表的真实执行流）。文本复用语 `route_tool.complexity_hint_text`（单一措辞口径）。
+- **云端 `adapters/coze/.../tool_router_node.py`**：新增 `_complexity_hint(hits, lang)` + `_detect_lang`，多强命中时写入 `ToolRouterOutput.complexity_hint`（中英随提问语言）。`state.py` 的 `ToolRouterOutput` / `GraphOutput` 同步声明 `complexity_hint` 字段，使 `/run` 出参携带。本地渲染与云端字段互为冗余、互不依赖——本地主链路（`--ship`）即能独立保证提示可见。
+- **提示内容**：「本次问题涉及多个兄弟技能（ct-xxx, ct-yyy），属于复杂混合调用。建议拆分为几个独立问题分别询问，以获得更准确、可核验的结果。若调用后长时间无反馈，请主动终止当前请求，将问题拆分后重新提问。」
+- **测试**：`route_tool --self-test` 新增 SPLIT_TEST（4/4）、`test_tool_router.py` 新增 `_complexity_hint` 断言（70/70）、`test_cross_skill_handoff.py` 新增渲染层注入断言（31/31）。
+- **打包**：`scripts/pack.py` 出包 `ct-advisor_coze_v1.62_20261110.zip`（126 文件 / 1,141,466 B / md5 `b6afe919c370ddd3764d67e7bc5af1a1`），precheck_nodes C7–C12 全过。
+- 🔴 知识库资产仍只在 Coze 端点维护，本地技能本体零知识库；L3 脱敏外发仍只落本地 `scripts/interpret_results.py`。
+- **部署**：需用户手动将 v1.62 包发布到 Coze（端点镜像升级，同 v1.60/v1.61 流程）。
+
+## [本地修复] (2026-11-10) — 复杂混合调用安全提示的时机修正
+> 修正 v1.62 的注入时机缺陷：**提示原挂在 `_merge_answer` 缝合答案末尾，而该层只在
+> Coze 调用与兄弟技能执行全部完成后才运行；混合调用在扣子端卡死 / 超时回落时走的是
+> draft / 报错兜底分支，`_merge_answer` 根本不执行，提示彻底消失** —— 与提示本身
+> 「长时间无反馈请终止并拆分重问」的用途正好相悖。
+
+- **单一真相源 `scripts/route_tool.py`**：保留 `complexity_hint_text()`（末尾追加式，云端契约与 canary 断言不变），新增 `COMPLEXITY_HINT_MARK_ZH/EN`、`has_complexity_hint(text, at_start)`、`complexity_hint_prefix(tools, lang, with_separator)` —— 后者产出「答案最前」版（提示正文 + 分隔线），`with_separator=False` 产出纯正文供调用前预警。两端文本同源，不再有措辞 / 格式漂移。
+- **`scripts/entry.py`（主链路唯一出口，核心修复）**：
+  - 新增 `_complexity_hint_pair(q)`：本地 `route_tool.predict` 零联网预判，返回 `(纯正文 notice, 前置版 prefix)`；
+  - **调用之前发出**：在 5a 真实出站 / 兄弟技能调用前把 notice 写 stderr。HARD GATE 下本进程是同步子进程、stdout 结束前不可读，故 stderr 是能落地的最早通道（扣子端卡死时引导也已留痕）；
+  - **与结果一并返回**：在 7 号唯一出口用 `_with_complexity_prefix` 幂等前置到答案最前，覆盖 Coze 成功慢回 / 超时回落 / 未授权 / 委托 card-inline / 缓存短路 / 顶层未捕获异常兜底；`--card-inline` 子进程已前置时用「答案是否已以提示开头」的精确判据跳过，不重复。
+- **`scripts/refine_answer.py`（独立 CLI 全路径）**：`_complexity_hint` 拆出 `_complexity_tools()` 归一化工具列表；`_prepend_complexity` 改用前置版并幂等；新增 `_complexity_prefix_from_q` / `_with_q_prefix` / `_pre_call_complexity`（调用前 stderr 预警）。统一预警点在 payload 解析后、任何出站前；所有明文输出分支（`--card-inline`、`--ship` 成功 / 未授权 / 失败回落、forward_guards 短路、serial 成功 / 未授权 / 异常回落）均前置。结构化 JSON（`--forward`）与竞速（`--fire-only`/`--collect`）不注入正文以保持协议，但预警已在调用前发出。
+- 🔴 **提示现完全由本地预判独立保证，不再依赖云端 `complexity_hint` 字段，也不依赖 `_merge_answer` 是否执行**。v1.62 的 Coze 包仍可照常发布（云端字段供 canary / 其它消费方），但用户能否看到安全提示与端点版本无关；`pack.py` 的 `os.walk(BASE)` 只覆盖 `adapters/coze`，本次改动全在本地 `scripts/`，**无需重打 Coze 包**。
+- **架构确认**：混合调用中，云端 `tool_router_node` 只返回 `need_tool` / `need_tools` / `deferred_tools` 结构化 handoff 卡（`need_tool → END`），**不分发、不代调、不持凭据**。真正发起调用的是技能端：`entry._run_card_inline` → `refine_answer.py --card-inline` → `handle_need_tool.py` 的 `subprocess.run`（`cwd=CARDS_ROOT/<tool>`）；`tool_mapping.json` 中 `engine: "coze"` 的技能（如 ct-samplesize v5 远程 R 服务）由**该兄弟技能脚本自己**向其 Coze 引擎发请求，ct-advisor 只透传执行卡参数与 `CTSS_LOCALE`。混合命中时仅主判技能被自动执行，其余生成 `@skill:` 卡片交客户端分别调用。
+- **测试**：`test_cross_skill_handoff.py` E 段改锁「缝合层不再追加 / 出口前置 / 幂等 / 回落独立生成 / entry 预警」共 38/38；`route_tool --self-test` SPLIT 4/4、`test_tool_router.py` 70/70、`test_consult_intent.py` 35/35、`test_cross_skill_mixed_extended.py` 15/15、`test_mainflow_mixed.py` 13/13、`test_cloud_brief.py` 53/53、`test_interpret_sanitization.py` 27/27、`test_stitch_results.py` 14/14、`test_local_doc_payload.py` 32/32（需 PYTHONPATH）、`test_local_guards.py` / `test_adapter_audit.py` 全过。端到端 `--card-inline` 实跑：提示位于 stdout 最前、仅 1 次、stderr 预警已提前发出。
+- 既有环境项（非本次引入）：`orchestrate --self-test` 9/11（2 项 B/A 档 gating 受「已注册技能皆 client_callable」影响）；`test_seven_flows.py` 因本机 pydantic 导入为 `unknown location` 无法加载 Coze 节点，非逻辑失败。
+
+### 追加核查：云端 `complexity_hint` 会不会让用户看到两次提示？
+- **结论：当前链路不会重复，云端行为无需修改，v1.62 包也无需重打**。证据：
+  - `adapters/refiner.py::_parse_response` 只取 `final_answer` / `answer` / `cached_answer` / `cache_hit` / `need_tool` / `params` / `run_id` / `need_tools` / `deferred_tools` / `message`，**完全不读 `complexity_hint`**；
+  - 云端 `tool_router_node` 只把该值写进 `ToolRouterOutput` / `GraphOutput` 的结构化出参，**不拼接进 `final_answer`**；`full_analysis` 的 prompt / KB 里也没有该提示文案（全仓 Grep 仅命中 state.py / tool_router_node.py / _version.py / pack.py 的声明与注释）；
+  - 该字段目前唯一真实消费方是 `canary_cloud_brief.py` 的字段校验（不向用户展示）。
+- **但契约里留了隐患**：`state.py` 两处注释原写「供消费端（工作台/本地）在答案末尾展示」。一旦将来有消费端按此接入，就会与本地前置提示形成「最前 + 末尾」两次。已做三件事收口：
+  1. `scripts/route_tool.py` 新增 `strip_complexity_hint(text)` → 正则剥净正文里任何同款提示段（含前导/尾随 `\n\n---\n\n`，中英两版）；
+  2. `scripts/entry.py::_with_complexity_prefix` 改为**先剥净、再前置一次**（原为「已前置则跳过」），无论云端字段被渲染 / `--card-inline` 子进程已前置 / 前后两份同现 / 缓存答案带旧提示，用户全文恰好一次且必在最前；剥离不可用时退化为原幂等判据；
+  3. `adapters/refiner.py` 显式注明**刻意不解析**该字段；云端 `state.py`（两处）、`tool_router_node._complexity_hint` docstring 把过时注释改为「🔴 结构化元数据，非展示文案，消费端不得渲染」。云端改动**全是注释、schema 与运行时零变化**，故 v1.62 包按原计划发布即可，注释会在下次打包时自然带入。
+- **测试**：`test_cross_skill_handoff.py` E 段新增 4 条去重断言（云端字段被渲染进正文 / 前后两份同现 / 英文提示段 / 无提示不改动答案），合计 **42/42**；`test_tool_router.py` 70/70 等全套回归复跑通过。
+
+## [Coze v1.63] (2026-11-10) — 撤销云端提示文案，改纯布尔标记（提示文本单一真相源）
+> 用户裁定：把 v1.62 云端那段冗余文案整个删掉、只留一个布尔标记，让提示文本只有一个真相源。
+
+- **云端变更**：
+  - `adapters/coze/src/graphs/nodes/tool_router_node.py`：删除 `_complexity_hint(hits, lang)` 的中英双语提示文案，以及仅服务于它的 `_detect_lang`；改为 `_is_complex_call(hits) -> bool`（`len(hits) > 1`），两处调用点同步。字段名 `complexity_hint` 沿用（兼容 output_schema），值改为 bool。
+  - `adapters/coze/src/graphs/state.py`：`ToolRouterOutput` / `GraphOutput` 的 `complexity_hint` 由 `Optional[str/Any] = None` 改为 `bool = False`，description 标明「元数据，非展示文案」。
+  - `_version.py` `COZE_VERSION = "1.63"`、`scripts/pack.py::OUT_NAME` 同步。
+- **原因**：用户可见提示现在**只有一个真相源** —— 技能端 `scripts/route_tool.py::complexity_hint_text`，由 `entry.py` 唯一出口在调用之前（stderr 预警）与答案最前（前置 + 去重剥离）生成。云端再产出一份同义文案，任何消费端一旦渲染就会让用户重复看到两次；且 v1.62 的文案从未被本地解析（死字段，只剩 canary 自测）。
+- **兼容处理**：
+  - `adapters/refiner.py` 依然刻意不解析该字段（注释同步为「布尔标记」）；
+  - `entry._with_complexity_prefix` 的 `strip_complexity_hint` 去重保留，用于兼容仍在跑的 v1.62 旧端点 / 历史缓存答案；
+  - `scripts/canary_cloud_brief.py` 新增 `_as_bool()`：v1.61 无字段(None)→False、v1.62 文案(str)→True、v1.63 bool→原值；末例 detail 改打印 `flag=<bool> (<type>)`，去掉对字符串的 `hint[:36]` 切片（布尔值会抛 TypeError）。INFO 更新为 v1.63。
+- **测试**：`test_tool_router.py` 第 5 组改锁严格 bool（`got is expect`），新增「云端源码无提示文案」硬断言（只匹配文案实质片段，避免注释里的 ⚠️ / 描述性措辞误判）→ **71/71**；`test_cross_skill_handoff.py` 42/42；另 13/13、35/35、15/15、53/53、27/27、14/14 全过；`route_tool --self-test` SPLIT 4/4；`check_route_drift` 仅既有 WEAK_TRIGGERS 24 词差异。
+- **打包**：`ct-advisor_coze_v1.63_20261110.zip`（126 文件 / 1,141,934 B / md5 `d5d7be776e084ed670ba3183b2fbec2a`），precheck 9 节点 / 24 类 + C7–C12 全过（22 条 C5「函数体内 import」告警为既有、不阻断）；包内实测 `_is_complex_call` 存在、旧 `_complexity_hint` 已移除、两处 `complexity_hint: bool`、COZE_VERSION=1.63。
+- **部署**：🔴 **v1.62 未发布，直接跳过；请手动发布 v1.63 包**（端点镜像升级，同 v1.60/v1.61 流程）。发布后 canary `--only mixed` 末例应显示 `flag=True (bool)` 并转绿。
+
+## [Coze v1.64] (2026-11-10) — 补回 `ToolRouterInput.need_tools`（修复平台编译/预检拦截）
+> 用户报告：v1.63 包的 `ToolRouterInput` 缺 `need_tools`，而节点仍在读它。确认后修复。
+
+- **确认（比用户描述更严重）**：该缺陷**并非 v1.63 引入**。逐包比对 v1.60–v1.63 四个 zip，`ToolRouterInput` **四个版本均无** `need_tools` 字段；而 `tool_router_node` 对 `state.need_tools` 的读取自 **v1.62** 才出现（v1.60/v1.61 包内无此访问）。即：v1.62 引入读取、却漏声明字段，v1.63 原样带入。触发条件是 `state.need_tool` 非空的**重入分支**（`hints = state.need_tools or [state.need_tool]`）——节点若按 Input 模型构造入参，未声明属性会被 pydantic 静默丢弃，该分支直接 `AttributeError`；平台 build_agent 的编译/预检同样会拦下这类「读取未声明字段」。
+- **修复**：`adapters/coze/src/graphs/state.py::ToolRouterInput` 补回
+  `need_tools: List[str] = Field(default_factory=list, description="全部命中的技能（含主判）；重入时透传完整命中列表")`，
+  语义与 `GlobalState.need_tools`（line 54）、`ToolRouterOutput.need_tools`（line 327）一致。
+- **防线（避免再犯）**：`adapters/coze/scripts/precheck_nodes.py` 新增 **C13** —— 节点函数体中所有 `state.<字段>` 访问必须在该节点 Input 模型中声明，由 `pack.py` 在出包前强制执行。原 C1–C12 只覆盖「签名注解 / 类是否存在 / 返回模型 / 裸 dict 返回 / `__future__` 导入」等，拦不住「读了没声明的字段」这类偏差。**反向验证**：临时删掉该字段后 C13 立即报 `tool_router_node.py::tool_router_node: 读取了 Input 模型未声明的字段 ['need_tools']`。
+- **版本/打包**：`_version.py` `COZE_VERSION = "1.64"`（含 v1.64 轨迹条目）、`scripts/pack.py::OUT_NAME = "ct-advisor_coze_v1.64_20261110.zip"`。出包 **126 文件 / 1,143,275 B / md5 `1162a3c7622b380a26d212c850835de7`**，precheck 9 节点 / 24 类 + **C7–C13** 全过（22 条 C5 告警为既有、不阻断）；`.coze` / `uv.lock` / 6 个 legacy decoder / 3 个 upload chain 均在位，`refiner_contract` 0、`tests` 0、隐藏路径仅 `.coze`。
+- **包内实测**：`ToolRouterInput` 含 `need_tools`（带 v1.64 注释）、`COZE_VERSION="1.64"`、`_is_complex_call` 存在、旧 `_complexity_hint` 无残留、`state.need_tools` 仍在、`precheck` 含 C13 且通过语为「C7–C13」。
+- **运行时验证**：pydantic 实例化 `ToolRouterInput(need_tools=[...])` → `need_tools` 正确携带；空值默认 `[]`，重入分支 `hints` 回落 `[need_tool]`；多余键 `extra` 静默忽略不炸。本地缺 `langchain_core`/`langgraph`，无法整体加载节点模块（既有环境限制，与本次无关）。
+- **回归**：`test_tool_router.py` **71/71**、`test_cross_skill_handoff.py` **42/42**；`state.py` / `tool_router_node.py` / `precheck_nodes.py` / `pack.py` `py_compile` 全过。
+- **部署**：🔴 **v1.63 亦未发布，一并跳过；请手动发布 `ct-advisor_coze_v1.64_20261110.zip`**（端点镜像升级，同 v1.60/v1.61 流程）。canary `--only mixed` 末例在 v1.64 端点下应显示 `flag=True (bool)` 并转绿。
+
+## [Workbench] (2026-11-10) — 工作台接入多技能混合调用（界面不改版式）
+- **核查结论：此前未同步改造**。工作台 `workbench/index.html` 直连同源 `/run`（代理 `ct-advisor-proxy.py` 为**原样透传**，字段不会丢），但前端只做 `r.need_tool = r.need_tools[0]`，`need_tools` 其余项 / `deferred_tools` / `complexity_hint` 全部丢弃；`cur` 历史条目也只有单值 `need_tool`，pending 列表、详情弹窗、气泡标签均按单技能渲染，没有安全提示。
+- **数据层**：新增 `_asBoolFlag(v)` / `_normTools(primary, needTools, deferred)` / `_mixedInfo(h)` 三个纯函数。SSE 帧解析与异步/同步成功分支都改为保留完整技能列表并归一化（主判在前、去重），写入 `cur.need_tools` / `cur.deferred_tools` / `cur.complexity_hint`。
+- **端点兼容**：`_asBoolFlag` 兼容 v1.61 无字段(None)→False、v1.62 文案(str)→True、v1.63 bool→原值；且以 `need_tools.length>1` 作**本地兜底**——即便端点尚未发布 v1.63，只要上游回多个技能，工作台照样能识别复杂混合调用。
+- **渲染层（复用现有 DOM / 配色，未新增 CSS 类、未改版式）**：
+  - 气泡 meta 标签多技能时显示 `主判 (+N)`，`title` 列出全部技能；
+  - 答案正文**最前**插入安全提示卡片（橘色 warning 配色，中英文案与本地 `route_tool.complexity_hint_text` 同一措辞口径）；
+  - pending chip 显示 `@skill:主判 +N`；详情弹窗追加「本次涉及多个兄弟技能」区块，逐个给出 `@skill:<slug>` 清单；
+  - `_autoRunLocalSkill` 仍只自动执行主判技能，但缝合文本追加其余技能的 `@skill` 清单（对齐本地「主判代跑 + deferred 卡片」语义，不再静默吞掉）。
+- **i18n**：中文 / 英文字典各新增 `mixedTitle` / `mixedNote` / `safetyTitle` / `safetyText` 四键。
+- **回归**：`workbench/tests/static_check.py` 新增第 15 组 5 条静态断言（helper 齐全 / 中英键各一份 / 两条路径均归一化 / 安全提示与 @skill 清单接入 / 措辞口径），L0 **24/24 PASS、0 FAIL**（2 条既有 WARN：运算符优先级启发式、硬编码裸色）；Node `vm.Script` 校验 3 个内联脚本块语法全过；`_asBoolFlag` / `_normTools` / `_mixedInfo` 行为断言 9/9 通过。
+- **发布副本**：跑 `workbench/publish-kit/build_publish.py` 同步 `publish/`（COPIED 15 / PRUNED 1 个 stale `__pycache__`），`index.html` 与 `publish/index.html` md5 一致（`c706612298412e09f104acc631f3e009`）。ℹ️ 工作台不进 Coze 部署包（`pack.py` 只 `os.walk(adapters/coze)`），**无需重打 Coze 包**。
+- ℹ️ 差异说明：本地 CLI 链路能在**调用之前**用 `route_tool` 预判写 stderr 预警；工作台此前无本地预判链路，安全提示随答案返回后显示在最前。该差异已由下一条（分级路由判断）补齐。
+
+## [Workbench] (2026-11-10) — 分级路由判断：本地纯代码优先 + LongCat 兜底
+> 用户裁定：① A 档技能输入非涉密（`tool_mapping.json::tiers` 定义 A = 输入非涉密），不对 LLM 分发判断构成 F33 新增风险；② 家族共享后台 LLM key 可随工作台发布包携带。据此落地"分级触发"方案。
+
+- **前置修正**：此前"工作台不跑 Python 脚本"的判断有误。代理 `ct-advisor-proxy.py` 本身就是 Python，`/api/run-skill` 早已用 `subprocess.run` 跑兄弟技能 CLI，`run_clarify` 跑 `clarify_loop.py`，并动态 import `history_norm` / `session_store` / `scope_guard`。真实原因是 `route_tool.py` 及其依赖**没进发布包白名单、也没被 import**（`publish/` 是扁平 15 文件），属可消除的工程缺口而非技术限制。
+- **第一层（本地纯代码，零网络零延迟）**：
+  - 代理新增 `_route_module_dirs()` / `local_route_predict(question, lang)`，直接复用技能根 `scripts/route_tool.py`（单一真相源，含 P0-1/2/3 + P1-1/2 全部优化），返回 `need_tool / need_tools / confidence / ambiguity / split_advice / complexity_hint`。
+  - 新增 `/api/route-hint` 端点；不出站、不读密钥、不改动 `/run` 透传结构，异常一律降级为空。
+  - 前端提交时与 Coze 主调用**并行** fire-and-forget 请求，结果即时写入等待气泡（`.wb-prehint`，复用既有橘色提示配色），把"拆分 / 长时间无反馈请终止"的引导提前到提交瞬间 —— 补齐 CLI 链路才有的"调用之前发出"能力。
+- **第二层（LongCat，仅少数请求）**：
+  - `run_intent` 输出扩为 `{intent, candidates, need_tools, is_complex}`；`need_tools` 为全量技能列表（上限 4、一律过 `_SKILL_INTENT_TOOLS` 白名单防幻觉），旧端点只回 `candidates` 时自动补齐，向后兼容。
+  - 分级规则 `_needLlmFallback(d)`：高置信单工具 / 明确纯咨询 → **直接走纯代码，不调 LLM**；仅 `ambiguity=multi`、低置信、无命中但 `ambiguity=single`（疑似漏判）、本地模块不可用时才请求 LongCat。
+  - LLM 结果同样只用于提前预警；**两层都不写 `cur.need_tools`**，权威分发仍以 Coze 响应的 `need_tools` 为准（`cur.need_tools = _normTools(cur.need_tool, data.need_tools, data.deferred_tools)` 未改）。
+- **发布包**：`build_publish.py` 白名单新增 4 条 —— `scripts/route_tool.py` / `scripts/route.py` / `scripts/tool_mapping.json`（放 `<载荷>/scripts/` 使 route_tool 的 `ROOT=<载荷>`、`_load_mapping()` 正好命中，无需改技能源码）与 `config/llm_key.py`（家族共享 XOR+base64 混淆 blob，`resolve_key_path` 命中 `<载荷>/config/`）。重打后 19 文件 / 0.49 MB，主副本与 `publish/` md5 一致。
+- **验证**：代理 `py_compile` 通过；`local_route_predict` 实测多技能问句返回 `need_tools=['ct-registry','ct-literature'], ambiguity=multi, split_advice=True` + 中英提示；`run_intent` mock 实测新契约 `need_tools` 3 项 / `is_complex=True` 且白名单生效；分级规则 7/7；前端 3 个 script 块语法全过；**扁平布局模拟**（cwd=publish）实测 `ROOT=publish`、`mapping_skills=4`、`predict` 正常、共享 key `resolve_key_path` 命中且 `ak_` 前缀校验通过、发布版代理 `local_route_predict` 可用；L0 静态层新增 6 条断言 → **30/30 PASS、0 FAIL**（2 条既有 WARN）。
+- 🔴 不动 Coze 云端节点、不重打 Coze 部署包；工作台发布包按新白名单重建即可。

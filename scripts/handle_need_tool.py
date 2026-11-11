@@ -37,12 +37,18 @@ status 语义：
                     「建议安装」为默认姿态，绝不自动安装（ct-base §5 禁止静默安装 +
                     2026-09-10 用户要求：安装可能触发安全警告，改为建议 / 明确授权后再装）
     local_fallback  用户拒绝安装（或明确不取数）→ 以自身能力作答，缝合层标注「未取数」
-    unpublished_a   A 档技能（输入非涉密）但**尚未公开发布**（未在 SkillHub 上架，
-                    如 ct-pipeline）→ 当前无法安装，提示后以自身能力作答并标注「未取数」；
-                    与 local_fallback 区分开：不是用户拒绝，而是上游尚未公开，无需征询安装授权
-    unreleased_b    B 档技能（输入涉密）不对外发布，或技能未登记（按 B 档保守处理）→
-                    提示后以自身能力作答，不尝试安装、不硬错
+    unpublished_a   A 档技能（输入非涉密）未在 SkillHub 上架**且本机未注册** →
+                    提示后以自身能力作答并标注「未取数」，无需征询安装授权。
+                    2026-11-09 起：本机已注册的技能一律走 handoff，不进此门
+    unreleased_b    B 档技能（输入涉密）或技能未登记，且**本机未注册** →
+                    说明「不经公共市场分发 / 本机未注册」后以自身能力作答，
+                    不尝试安装、不硬错（2026-11-09 口径）
     referral        referral-only 技能（如 meta-analysis）→ 引导用户显式 @skill 调用
+    handoff         2026-11-09 新增（默认主路径）：技能已在本机注册、客户端可直接调用，
+                    不再由 ct-advisor 代跑 CLI；返回结构化 @skill:<slug> 卡片
+                    （含已识别参数 / 缺失参数 / 交付物说明 / B 档保密提醒），
+                    由代码缝合进答案，用户/客户端据此直接调用技能本体。
+                    CT_ADVISOR_HANDOFF=0 可整条关回原执行卡（红线 2 兜底）。
     error           技能执行失败（rc/超时/脚本缺失），回退 Coze 草稿
     need_params     执行卡参数不完整（如缺效应量），result.missing 列出缺失项，
                     由本地大模型向用户追问（不编造），补齐后重发执行卡
@@ -107,7 +113,8 @@ def _load_mapping() -> dict:
 # 权威口径 = ct-base §11（唯一分类轴 input_sensitivity）+ §13.1（保密声明）：
 #   A 档 = 输入非涉密 → 可检测安装、**建议安装**（用户自行执行或明确授权后代办），
 #                          安装完成后执行（前提：已发布）
-#   B 档 = 输入涉密   → 只提示「需调 B 档技能但不对外发布」，本地作答
+#   B 档 = 输入涉密   → 本机未注册时提示「不经公共市场分发 / 本机未注册」，本地作答
+#                        （2026-11-09：本机已注册则走 handoff，不再进档位门）
 #
 # 发布状态（tiers.registry[*].published）的权威判据 = **SkillHub 上架**，不是 GitHub
 # ——GitHub 空占位仓库同样返回 HTTP 200（ct-pipeline 事故），复核用
@@ -130,6 +137,10 @@ def _resolve_tier(mapping: dict, tool: str) -> dict:
 
     返回 {tier, published, github, purpose, registered}。
     未登记 → tier 取 tiers.default_tier（默认 B）：不尝试安装未知技能，也不硬错卡死应答。
+
+    2026-11-09：published 只描述「是否在 SkillHub 上架」这一**分发状态**，
+    不再是「能否调用」的判据——本机可得性由 _client_callable() 判定，本函数
+    仍负责 tier（涉密边界）与用途文案。
     """
     tiers = mapping.get("tiers") or {}
     entry = (tiers.get("registry") or {}).get(tool)
@@ -165,6 +176,116 @@ def _skill_installed(tool_cfg: dict) -> bool:
     if not args:
         return False
     return Path(args[-1].replace("{SKILLS_DIR}", SKILLS_DIR)).is_file()
+
+
+# ---------------------------------------------------------------------------
+# 客户端直调 handoff（2026-11-09 · 用户裁定：客户端已可直接调用兄弟技能）
+#
+# 背景：2026-09-10 的档位门以「SkillHub 上架 / 本地 CLI 脚本存在」为可得性
+# 判据，B 档与未上架 A 档一律回 unreleased_b / unpublished_a（"不对外发布、
+# 无法通过安装获取"）。2026-11-09 客户端已能直接调用本机注册的全部 ct-* 技能
+# （sibling_registry.json 实测 22/22 installed=true），上述文案变成事实性错误；
+# 且「advisor 代跑 CLI → 纯文本摘要」会把用户挡在技能本体的完整交付物之外。
+#
+# 新姿态：**handoff 优先**。已在本机注册的技能不再由 ct-advisor 代跑，改由代码
+# 产出结构化 @skill:<slug> 卡片（含已识别参数 / 缺失参数 / 交付物 / 保密提醒），
+# 用户/客户端据此直接调用技能本体，走完整 SAFE PREVIEW 与文件交付流程。
+#
+# 🔴 HARD GATE 不变：卡片由代码生成并经 entry.py 单一出口输出，本地 LLM 仍不得
+#    自主决定调用哪个技能、不得追加或改写答案（SKILL.md §HARD GATE）。
+# 🔴 红线 2 不变：CT_ADVISOR_HANDOFF=0 可整条关回原执行卡（engine=local 兜底）。
+# 🔴 B 档涉密边界不变：能调用 ≠ 可把方案 / 受试者数据送往公共检索端点。
+# 🔴 published（SkillHub 上架）降级为「分发状态」，不再是「能否调用」的判据。
+# ---------------------------------------------------------------------------
+
+HANDOFF_ENV = "CT_ADVISOR_HANDOFF"
+_HANDOFF_OFF_VALUES = {"0", "false", "no", "off"}
+SIBLING_REGISTRY_PATH = Path(__file__).resolve().parent / "sibling_registry.json"
+
+# 技能本体可产出的交付物（仅用于 handoff 卡片说明；ct-advisor 不声称能产出文件）
+_HANDOFF_DELIVERABLES = {
+    "ct-registry": "report.xlsx / report.md（试验格局 + 竞品分布）",
+    "ct-safety": "faers_report.xlsx / faers_report.md（PRR / ROR / IC / EBGM + 95%CI）",
+    "ct-literature": "lit_report.xlsx / references_apa.md（PICO 检索 + PRISMA）",
+    "ct-samplesize": "样本量与效能报告（含内联图）",
+    "ct-protocol": "结构化评阅报告（U1–U12 / D1–D9）+ 批注版方案",
+    "ct-csr": "ICH E3 / NMPA 双模板 CSR",
+    "ct-sdtm": "SDTM 数据集 + Define-XML",
+    "ct-adam": "ADaM 数据集",
+    "ct-analysis": "ARD 结构化分析结果",
+    "ct-tlf": "Tables / Listings / Figures（含 KM / forest 图）",
+    "ct-statrev": "独立统计审阅报告",
+    "ct-datacheck": "数据质控规则报告（DC.001–DC.xxx）",
+    "ct-eligibility": "入组匹配结果",
+    "ct-ecrf": "eCRF 设计规格",
+    "ct-submission": "CTD / eCTD 申报包",
+    "ct-congress": "会议摘要结构化疗效 / 安全性表",
+    "ct-pipeline": "公开情报监测编排结果",
+    "ct-synthdata": "合成 SDTM / ADaM 测试数据集",
+    "meta-analysis": "Meta 分析全套结果与图表",
+}
+
+
+def _handoff_enabled() -> bool:
+    """handoff 为默认主路径；显式 off 值可整条关闭（回落原执行卡）。"""
+    return os.environ.get(HANDOFF_ENV, "").strip().lower() not in _HANDOFF_OFF_VALUES
+
+
+def _client_callable(tool: str) -> bool:
+    """技能是否已在本机注册、客户端可直接调用（纯本地探测，不联网、不执行技能）。
+
+    双判据任一成立即可：① <SKILLS_DIR>/<tool>/SKILL.md 落盘（客户端注册表形态）；
+    ② scripts/sibling_registry.json 中 installed=true（discover_siblings 扫描结果）。
+    两者都不成立才回落到 2026-09-10 的档位门 / 安装门控。
+    """
+    if not tool:
+        return False
+    try:
+        if (Path(SKILLS_DIR) / str(tool) / "SKILL.md").is_file():
+            return True
+    except OSError:
+        pass
+    try:
+        with open(SIBLING_REGISTRY_PATH, encoding="utf-8") as _f:
+            _info = (json.load(_f).get("skills") or {}).get(tool) or {}
+        return bool(_info.get("installed"))
+    except Exception:  # noqa: BLE001 - 注册表缺失/损坏不得卡死主链路
+        return False
+
+
+def _handoff_result(tool: str, params: dict, missing: list, tier_info: dict,
+                    tool_cfg: dict, deferred: list, deferred_note: str,
+                    draft: str) -> dict:
+    """构造结构化 handoff 结果（纯代码，无 LLM，无网络）。"""
+    clean = {k: v for k, v in (params or {}).items()
+             if v not in (None, "", [], {})}
+    # 混合执行卡的 params 可能混着其它技能的参数（如 topic 属于 ct-literature）。
+    # 主卡片必须按**主技能自己的** CLI 白名单过滤，否则客户端拿去调用会
+    # argparse 报 unrecognized arguments（2026-11-09 三源竞品实测发现）。
+    allowed = set(((tool_cfg or {}).get("params") or {}).keys())
+    if allowed:
+        clean = {k: v for k, v in clean.items() if k in allowed}
+    tier = tier_info.get("tier", "B")
+    purpose = tier_info.get("purpose") or (tool_cfg or {}).get("prep_hint") or ""
+    return {
+        "tool": tool,
+        "status": "handoff",
+        "result": {
+            "mention": "@skill:%s" % tool,
+            "params": clean,
+            "missing": list(missing or []),
+            "purpose": purpose,
+            "deliverables": _HANDOFF_DELIVERABLES.get(tool, ""),
+            "tier": tier,
+            "confidential": tier != "A",
+            "locally_available": True,
+        },
+        "draft_answer": draft,
+        "deferred_tools": deferred,
+        "deferred_note": deferred_note,
+        "elapsed_sec": 0,
+        "mode": "client_handoff",
+    }
 
 
 # 用户拒绝安装的确认词（卡片 install_consent 字段，大小写不敏感）
@@ -378,15 +499,21 @@ def _read_artifacts(tool_cfg: dict, workdir: Path) -> dict:
     return arts
 
 
-def _build_deferred(mapping: dict, primary: str, need_tools) -> list:
-    """多技能命中 → 只执行主判技能，其余生成「请先准备数据」提示项。
+def _build_deferred(mapping: dict, primary: str, need_tools,
+                    card_params: dict | None = None) -> list:
+    """多技能命中 → 主判出 handoff 卡片，其余各自生成**可直接调用的 @skill 卡片数据**。
 
-    需求（2026-08-23）：一次提问可能同时命中试验格局/信号/文献/样本量，
-    全部串行执行会叠加数分钟联网耗时且参数多半不全。改为**只调最关键的一个**
-    （主判由 route_tool.predict / Coze tool_router 的优先级规则决定），
-    其余以 deferred 形式回给用户，附各自需要准备的参数。
+    需求（2026-08-23）：一次提问可能同时命中试验格局/信号/文献/样本量，全部串行执行会
+    叠加数分钟联网耗时且参数多半不全，故只把最关键的一个作为主判。
+
+    2026-11-09：客户端已可直接调用本机注册技能，deferred **不再只是「请先准备数据」
+    的文字提示**——混合跨技能问题若只在答案里给出主技能卡片，其余技能就彻底丢失了
+    （test_cross_skill_handoff.py 的 B 组 8 条曾全部 FAIL）。此处改为带 mention /
+    已识别参数 / 缺失参数 / 交付物 / 保密等级的结构化数据，由
+    refine_answer._render_deferred_cards 渲染进答案，让每个技能都能被客户端直接调用。
     """
     deferred = []
+    card_params = card_params or {}
     for t in (need_tools or []):
         if t == primary or not t:
             continue
@@ -396,12 +523,64 @@ def _build_deferred(mapping: dict, primary: str, need_tools) -> list:
             prep_hint = ref.get("mention", f"@skill:{t}") + "（" + ref.get("reason", "referral-only") + "）"
         else:
             prep_hint = cfg.get("prep_hint", "需补充该技能的必填参数后单独调用")
+        # 执行卡里的 params 是多技能混在一起的；按各技能自己的白名单拆分，
+        # 避免把 ct-registry 的 cond 塞给 ct-safety（客户端拿到会 argparse 报错）。
+        allow = set((cfg.get("params") or {}).keys())
+        params = {k: v for k, v in card_params.items() if k in allow} if allow else {}
+        required = list(cfg.get("required_params") or [])
+        missing = [k for k in required if card_params.get(k) in (None, "")]
+        tier = _resolve_tier(mapping, t)
+        tier_id = tier.get("tier", "B")
         deferred.append({
             "tool": t,
-            "required_params": cfg.get("required_params", []),
+            "mention": "@skill:%s" % t,
+            "required_params": required,
+            "params": params,
+            "missing": missing,
             "prep_hint": prep_hint,
+            "deliverables": _HANDOFF_DELIVERABLES.get(t, ""),
+            "tier": tier_id,
+            "confidential": tier_id != "A",
+            # 混合执行卡可能夹带本机根本没有的技能（Coze / 上游误报）。渲染层据此
+            # 不输出 @skill 卡片，避免把「可调」宣传成事实（2026-11-09 扩展用例）。
+            "client_callable": _client_callable(t),
+            # ct-safety 的 drug 只认英文通用名（openFDA）。中文问句抽不出英文时
+            # 不硬填中文（会零命中），改为给一条可执行的换算提示。
+            "hint": ("openFDA 需英文通用名（如 semaglutide）；中文药名请换算后再填 drug"
+                     if t == "ct-safety" and "drug" in missing else ""),
+            "hint_en": ("openFDA needs an English generic name (e.g. semaglutide); "
+                        "translate a Chinese drug name before filling drug"
+                        if t == "ct-safety" and "drug" in missing else ""),
         })
     return deferred
+
+
+def ensure_deferred(tool_out: dict, card: dict) -> dict:
+    """主流程兜底：handoff 结果缺 deferred 时，用执行卡里的多技能列表现场补齐。
+
+    2026-11-09 主流程审查：混合调用的 `need_tools` 可能在传递中丢失
+    （旧版委托块 / 上游只回 need_tool / 预判 card 漏字段）。此时
+    `execute_card` 产出的 handoff 只有一个主卡片，用户看不到其余技能。
+    本函数由**代码**在缝合前补齐 deferred，覆盖 build_output 预取路径与
+    refine_answer 的 card-inline / ship 路径；纯本地、无 LLM、无网络。
+
+    已有 deferred 时原样返回（不覆盖上游更完整的信息）。
+    """
+    if not isinstance(tool_out, dict) or tool_out.get("status") != "handoff":
+        return tool_out
+    if tool_out.get("deferred_tools"):
+        return tool_out
+    tools = [t for t in (card.get("need_tools") or []) if t and t != card.get("need_tool")]
+    if not tools:
+        return tool_out
+    try:
+        deferred = _build_deferred(_load_mapping(), card.get("need_tool"),
+                                   card.get("need_tools"), card.get("params") or {})
+    except Exception:  # noqa: BLE001 - 兜底失败不得影响主答案
+        return tool_out
+    out = dict(tool_out)
+    out["deferred_tools"] = deferred
+    return out
 
 
 def _build_cmd(tool_cfg: dict, params: dict) -> list:
@@ -552,17 +731,65 @@ def execute_card(card: dict) -> dict:
     mapping = _load_mapping()
     tool_cfg = mapping["skills"].get(tool)
     tier_info = _resolve_tier(mapping, tool)
-    # 多命中场景：其余技能延后，附「请先准备数据」提示（需求 2026-08-23）
-    deferred = _build_deferred(mapping, tool, card.get("need_tools"))
+    # 多命中场景：其余技能各自生成可直调的 @skill 卡片数据（2026-11-09）
+    deferred = _build_deferred(mapping, tool, card.get("need_tools"), params)
     deferred_note = ""
     if deferred:
-        items = "；".join(f"{d['tool']}（{d['prep_hint']}）" for d in deferred)
+        items = "；".join(f"{d['mention']}（{d['prep_hint']}）" for d in deferred)
         deferred_note = (
-            f"本轮只执行最关键的 {tool}。还识别到 {len(deferred)} 个可选数据源需要你先准备信息：{items}。"
-            "确认参数后我再逐个调用。"
+            f"本轮主判为 {tool}；另识别到 {len(deferred)} 个相关技能，"
+            f"客户端可按答案中的 @skill 卡片分别直接调用：{items}。"
         )
 
-    # ---- 档位门 ①（2026-09-10）：B 档 / 未登记 → 提示「不对外发布」，不尝试安装、不硬错 ----
+    # ---- cloud brief 分流（2026-11-09，默认关闭；任何失败一律回落原执行卡）----
+    # 上移的是「执行位置」而非能力面：只对 config/brief_contract.json 登记的三个
+    # A 档速览接口生效。参数白名单（护栏 1）、免责标注（护栏 2）、导流页脚（护栏 3）
+    # 与回落链全部由该契约单一真相源管理；本地 engine=local 执行卡原样保留
+    # （ct-base §20.19.7 红线 2：合并不取消本地引擎）。
+    # 🔴 本块必须排在档位门 ①② 与「技能是否安装」判定之前：brief 通道的目的正是
+    #    让用户不必为了一句速览问答而先安装三个技能。开关关闭时本块零副作用。
+    import sys  # noqa: F401 - 保证下方 stderr 信号在直接调用本函数时可用
+    # 本模块既被 subprocess 直接运行、也被 refine_answer.py import；后者场景下
+    # sys.path 未必含 scripts/，显式补齐，避免 import 失败被误当成「回落」静默降级。
+    _scripts_dir = str(Path(__file__).resolve().parent)
+    if _scripts_dir not in sys.path:
+        sys.path.insert(0, _scripts_dir)
+    try:
+        from cloud_brief import try_cloud_brief
+        _brief_text = try_cloud_brief(card)
+    except Exception as _e:  # noqa: BLE001 - 任何异常都不得卡死主链路
+        _brief_text = None
+        sys.stderr.write(
+            f"[ct-advisor] cloud-brief 分流异常，回落本地执行卡: "
+            f"{type(_e).__name__}: {_e}\n"
+        )
+    if _brief_text:
+        sys.stderr.write("[ct-advisor] cloud-brief hit（Coze ct-search 速览通道）\n")
+        return {
+            "tool": tool,
+            "status": "ok",
+            # 字符串形态：缝合层 _render_skill_result 原样透出，不改写、不 JSON 化
+            "result": _brief_text,
+            "draft_answer": draft,
+            "deferred_tools": deferred,
+            "deferred_note": deferred_note,
+            "elapsed_sec": 0,
+            "mode": "coze_brief",
+        }
+
+    # ---- 客户端直调 handoff 分流（2026-11-09，默认开启）----
+    # 🔴 必须排在档位门 ①② 之前：B 档 / 未上架 A 档只要已在本机注册，客户端就能
+    #    直接调用，不该再被「不对外发布 / 尚未上架 / 无法通过安装获取」拦下。
+    #    brief 分流仍排在前面：用户显式开 CT_ADVISOR_CLOUD_BRIEF=1 时以速览优先。
+    #    CT_ADVISOR_HANDOFF=0 → 整条跳过，回到原执行卡（含档位门），可无成本回滚。
+    if _handoff_enabled() and _client_callable(tool):
+        _hp, _hmissing = _infer_missing_params(tool_cfg or {}, params, question)
+        sys.stderr.write("[ct-advisor] client-handoff hit（%s 已在本机注册）\n" % tool)
+        return _handoff_result(tool, _hp, _hmissing, tier_info, tool_cfg,
+                               deferred, deferred_note, draft)
+
+    # ---- 档位门 ①（2026-09-10 / 2026-11-09 口径）：本机未注册的 B 档 / 未登记技能
+    #      → 提示「本机未注册 / 不经公共市场分发」，不尝试安装、不硬错 ----
     # 需求：B 类技能「直接提示需要调用 B 类技能，但该技能不对外发布，然后用自己能力范围内的
     # 功能完成相应的分析任务」。故此处返回结构化 unreleased_b，由缝合层把 Coze 草稿原样透出
     # 并附说明；不进入 subprocess，也就不存在 FileNotFoundError / 未映射两种硬错。
@@ -577,7 +804,10 @@ def execute_card(card: dict) -> dict:
             "tool": tool,
             "status": "unreleased_b",
             "result": {
-                "message": reason + "。该技能**不对外发布**（未在 SkillHub 上架、GitHub 亦无公开仓库），无法通过安装获取。",
+                "message": reason + (
+                    "。该技能不经公共市场分发；当前**本机未注册**，客户端尚无法直接调用。"
+                    "如需其能力，请在该技能自己的运行环境中准备；"
+                    "切勿把方案 / 受试者数据发往公共检索端点（F33 出域红线）。"),
                 "tier": "B",
                 "registered": tier_info["registered"],
                 "purpose": tier_info["purpose"],
@@ -603,8 +833,8 @@ def execute_card(card: dict) -> dict:
             "tool": tool,
             "status": "unpublished_a",
             "result": {
-                "message": (f"{tool} 属 A 档技能（输入非涉密），但**尚未公开发布**"
-                            f"（未在 SkillHub 上架），当前无法通过安装获取。"),
+                "message": (f"{tool} 属 A 档技能（输入非涉密），**未在 SkillHub 上架**，"
+                            f"且当前**本机未注册**，客户端尚无法直接调用。"),
                 "tier": "A",
                 "published": False,
                 "registered": tier_info["registered"],
@@ -613,8 +843,9 @@ def execute_card(card: dict) -> dict:
                         "将该技能承担的用途纳入「需本地具备该能力」的说明，"
                         "以自身能力（Coze 草稿 + 本地知识库 + 已装兄弟技能）尽量完成分析，"
                         "并明确标注「数据未取数 / 深度分析未实际执行」。",
-                "next_step": ("可先分别调用已上架的兄弟技能（ct-registry / ct-safety / ct-literature）"
-                              "取数，再由 ct-advisor 就地缝合；待该技能正式发布后再由它统一编排。"),
+                "next_step": (f"若该技能已在你的客户端中可用，可直接调用 @skill:{tool}；"
+                              "否则可先分别调用 ct-registry / ct-safety / ct-literature 取数，"
+                              "再由 ct-advisor 就地缝合。"),
             },
             "draft_answer": draft,
             "deferred_tools": deferred,
@@ -687,8 +918,10 @@ def execute_card(card: dict) -> dict:
             "status": "install_required",
             "result": {
                 "message": (
-                    f"{tool} 尚未安装（A 档技能，已在 SkillHub 上架）。"
-                    "**建议安装**：你可自行执行安装命令，或明确授权后由 ct-advisor 代为安装。"
+                    f"{tool} 的本地 CLI 尚未落盘（A 档技能，已在 SkillHub 上架）。"
+                    "若客户端已能直接调用该技能，可跳过安装，直接用 "
+                    f"@skill:{tool}；否则**建议安装**：你可自行执行安装命令，"
+                    "或明确授权后由 ct-advisor 代为安装。"
                     if not authorized else
                     f"{tool} 尚未安装；用户已明确授权安装，可执行安装命令。"
                 ),

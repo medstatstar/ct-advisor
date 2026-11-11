@@ -84,6 +84,26 @@
 - ⚠️ 不替代医学写作与监管申报；正式文档须由具备资质的医学/统计/法规作者署名并 QC。涉及估计目标与敏感性分析设计的，建议转 `ct-stats`；涉及 ICH M11/eCTD 申报结构的，转注册路径。
 - 🔗 与 `scope_guard` 的 `stats` 域（SAP/估计目标）、`design` 域（方案）、`registry` 域（登记）衔接。
 
+### 3.3 方案评阅路由（→ `ct-protocol`，2026-11-05 新增）
+
+**动因**：用户反馈本技能对「方案评阅 / 修改意见」类问题**输出笼统**；而 `ct-protocol` 有结构化评审框架（U1–U12 工作流 / D1–D9 风险评分 / 立论与逻辑一致性审查 / 批注版输出）。
+
+| 项 | 口径 |
+|---|---|
+| 触发 | `route_tool.py` 弱触发词：`方案` 与 `评阅/审阅/评审/审查/审一下/批注/修订/修改意见` 同现（英文 `protocol review/audit/assessment`） |
+| 动作 | **仅软建议**——答案末尾追加一行「可直接调用 `@skill:ct-protocol` 做结构化评审」，**不自动调用**（ct-protocol 为 B 档本地技能，不在 `tool_mapping` 自动执行表）。2026-11-09 起它与全部 B 档技能一样已在本机注册、客户端可直接调用，故建议改用 `@skill:` 形态，用户可直接走完整评阅流程并拿到批注版交付物 |
+| 护栏例外 | 「如何评审这个方案」这类**咨询护栏**命中时仍保留该建议（题是对路的，不应被护栏清空） |
+| 反例 | 「方案修改后需要重新伦理审查吗」是合规题，**不**建议 ct-protocol（正则要求审阅动词紧邻「方案」） |
+| 决定权 | 是否切换由用户决定；本技能仍先按自身能力作答 |
+
+**2026-11-09 客户端直调适配**：`published=false` / `tier=B` 不再等于「不可调用」。
+`handle_need_tool._client_callable()` 以 `sibling_registry.json::installed` 与
+`<SKILLS_DIR>/<slug>/SKILL.md` 为本机可得性判据；命中即返回 `status=handoff`
+（`@skill:<slug>` + 已识别参数 + 交付物 + B 档保密提醒），不再回
+`unreleased_b` 的「不对外发布 / 无法通过安装获取」。卡片由代码产出、经
+`entry.py` 单一出口输出，HARD GATE 与 F33 涉密边界不变。
+详见 `SKILL.md` 的 Client handoff contract 一节。
+
 ---
 
 ## 4. 给 Coze 引擎的偏置提示

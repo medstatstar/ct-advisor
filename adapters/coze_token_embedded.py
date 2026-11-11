@@ -80,6 +80,38 @@ EMBEDDED_SECRETS = {
         "D4IJHcyRXV3MwpVMz9BFggkXDEYPlQCAz8HTgRTDmEadml2EHY4M0F4MC8iJDIGSxQ3XyIPWgE"
         "2EhwcHG53KGkuFhB0GDBOHiRcFQ=="
     ),
+    # ct-search 统一检索端点（ct-registry/coze）的共享公开凭据，2026-11-09 迁入。
+    # 与 ct-registry/adapters/endpoint_token.py::EMBEDDED_SECRETS["coze_unified"]
+    # 同源同值，但用本文件自己的 OBFUSCATION_KEY 重新编码，避免引入第二套解码逻辑。
+    # 用途：ct-advisor 的 brief 速览通道（scripts/cloud_brief.py）直连 ct-search，
+    # 使本地不再依赖 ct-registry 技能已安装。仍是公开共享凭据，非个人密钥。
+    #
+    # ── 🔴 给代码维护者：凭据轮换（非运行时用户提示）──────────────────
+    # 本 blob 是 ct-search 共享公开凭据，**只**保存在本地技能 / 工作台；
+    # Coze 云端包内不含任何凭据、不读取凭据、不发起需凭据的外部调用
+    # （2026-11-09 用户拍板：调用点全部收敛到调用方）。
+    # 轮换：① 真源 ct-registry/adapters/endpoint_token.py::coze_unified；
+    #   ② 用 store_token() 重新生成 blob 后同步本文件的 ct_search_coze；
+    #   ③ 跑 ct-advisor/scripts/test_cloud_brief.py 校验三方一致；
+    #   ④ 更新本地技能 / 工作台发布物即可 —— **无需重新打包或重新发布
+    #      Coze 云端包**。应急覆盖：本地 env CT_ADVISOR_BRIEF_TOKEN。
+    # 完整 SOP 另见 ct-advisor/config/brief_contract.json 的
+    # credential_governance 段。这是 XOR+base64 混淆（非加密）的公开凭据。
+    "ct_search_coze": (
+        "Bg1nCQYxChogG2cwOgAsHCELL14_XFlDPnorVT1ALBwsAxBaPGk1AjYxZwcvImwCf2lUE2ALUhx0"
+        "Cw8OJSc6RmInBE88Hz4bK2keWmBKLgBMBg1nEQdFJBogG2cMCzI3WgwYCVs6A2tEBWpXCRYeEQg6"
+        "BD0aO0QUBiM9ewQrDF0UeEF5MFgJUjZ_JSlFC0A5JHkNCAMoHgs7PGk4Y2ABHEkvCRBaAw4eWCpc"
+        "I1QqA0oWZAI0Uk41eBt8IHAaLjBkUyocDkAhGE5WICkSRA41IB0_W0JLKkMFUjl5NFY5LSpbPm4p"
+        "FR4yZAYtD2cMUmpfCWMPNkJhGF0eCjQEB3RRVkw_floIBERPAk8ALksAJE1FOyJPGSkoJFgHKBZV"
+        "SDxbFncyXh59DmBTLCBKUysiOEMiNkYZIC4gVyI2Ix0_WFpaBwooCT1HDg0XPkYGEB41GiAjFAcG"
+        "Pn8ZaR91DmBQNQ5OUF1GC0EbHk8PVgo_aQBRKEcvAmBnD04vGS0eLCA_Wjw7FR8tKysdZAFSSGBG"
+        "UhtsE2MALQRDUgM5ORQ8E04KBFcKQAExK0k1dmZ6I1ILFT19MCIdDkM2E2M2FgArSSERX3cRAGdE"
+        "AlNXE1kVUzxAGAcXCkM2DQAtQV8yVGAvVnQCAn0tMC1jIBAnAyIYM34zVz4KGR4MB3ckW3RXMAwu"
+        "KzxaWREOLhIgAGsaV0sfYgsUVW83QnpsJn5UEEBVAyAbOCNXGWcuHTY2fycwC2wfW31FK341BicV"
+        "TFZFWEAaAmMaHCpWZgozKBonZUNcVFIoDzFEED0dOSsHIRsyAwhXVTkaUHcSAmhKMm8OMjFpEw40"
+        "OwJfNFcyBUopSisUF1k1A3gDXG1SWgEcGxRANkUiBBo5XxIfWR4rVHsbAEkEXGkaGwJ-Gw4gJwYY"
+        "I2cADRYASSVbV10uQGZcFHAmVzxZJyohGkM1H1s3NygsFFsGAEMmRnhpUAA7CjhHLAgAKkI3BQ=="
+    ),
     # "another_public_key": "<obfuscated blob>",
 }
 
@@ -180,3 +212,14 @@ def get_bugreport_token(cli_token: str = None, token_path: str = None,
     """
     return get_secret("ct_bugreport_coze", cli_token, token_env,
                       token_path or DEFAULT_TOKEN_PATH)
+
+
+def get_search_token(cli_token: str = None) -> str:
+    """ct-search 统一检索端点（ct-registry/coze）的共享公开凭据。
+
+    由 ``scripts/cloud_brief.py`` 调用，用于 ct-advisor 的 brief 速览通道。
+    读取优先级：CLI > env ``CT_ADVISOR_BRIEF_TOKEN`` > 内嵌 blob。
+    契约：解析不到一律返回空串（调用方据此回落本地 need_tool 执行卡），绝不抛异常。
+    """
+    return get_secret("ct_search_coze", cli_token, "CT_ADVISOR_BRIEF_TOKEN",
+                      DEFAULT_TOKEN_PATH)
