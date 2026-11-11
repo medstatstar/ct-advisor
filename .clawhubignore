@@ -152,3 +152,6 @@ config/serve.log
 # ── ct-update 周检自动补齐（2026-11-03） ──
 browser_tests.py
 ctqa.config.json
+
+# ── 内部可行性评估稿（§21.9 竞品名称红线，2026-11-11 发布前补）──
+docs/zhihu_scraping_feasibility_*.md

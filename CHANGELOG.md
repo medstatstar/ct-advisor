@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-11-11（第十轮）· advisorlog 空答案根因闭环 + 本地兜底扩展（本地 v1.3.41 / Coze v1.68）
+
+- **Fix C · entry.py report_outcome 闸门扩展**：从 `if card_json:` 扩展到**所有真实答案**——
+  服务端 `async_feishu_write` 为后台 daemon 线程，Serverless 容器回收场景下可能静默丢失；
+  非 handoff 路径同样回调 `/advisor_outcome` upsert（服务端幂等跳过防重复行）。
+- **Coze v1.68 部署验证**：变体 SAE 题实测，新记录 answer_len=1103、outcome_reported=True、
+  无重复行；空答案 `{"answer": ""}` 缺陷确认消除（旧 4 条空记录为旧构建历史残留）。
+- **发布前检查闭环（§16）**：publish_inject 注入 ct-base 共享件（drug_name_map +91 key、
+  office_to_md.py 对齐）；zhihu 内部可行性稿加入 .clawhubignore（§21.9 竞品名红线）；
+  shared_sync_check 全绿、secret_scan P1=0。
+
 ## 2026-11-11（第九轮）· 日志闭环 + EDC 误路由护栏 + 版本兼容提醒（Coze v1.68 / 本地 v1.3.40）
 
 **背景**：用户要求「日志里留下有实质性的回答和调用方法」，否则 advisorlog 的追踪评估

@@ -689,29 +689,33 @@ def main():
                     "请补充必要信息后重试；若持续失败，请把本条提示与上方 stderr 反馈给技能维护者。"
                 )
 
-        # ── 6a) 回传真实答案 + 调用方法到 Coze（2026-11-11 Fix B）──────────
-        # handoff 路径下，Coze 初始写的 advisorlog 只有路由决策（空/非实质答案）；
-        # 本地产出真实答案后回调 /advisor_outcome，由 Coze upsert 单条权威记录
-        # （落实「日志留下实质性回答与调用方法」）。best-effort：异常一律吞掉，绝不阻断交付。
-        if card_json:
-            try:
-                from adapters.advisor_outcome import report_outcome
-                from adapters.refiner import _skill_version
-                from refine_answer import _get_endpoint_from_config
-                _endpoint = _get_endpoint_from_config(args.config)
-                if _endpoint:
-                    _called_tools, _call_method = _extract_call_info(card_json)
-                    report_outcome(_endpoint, {
-                        "query_origin": _query_origin(),
-                        "original_question": original_question,
-                        "final_answer": output,
-                        "called_tools": _called_tools,
-                        "call_method": _call_method,
-                        "skill_version": _skill_version(),
-                    })
-                    sys.stderr.write("[entry] advisor_outcome 回传已发起\n")
-            except Exception as _e:  # noqa: BLE001
-                sys.stderr.write(f"[entry] advisor_outcome 回传异常（忽略）: {type(_e).__name__}: {_e}\n")
+        # ── 6a) 回传真实答案 + 调用方法到 Coze（2026-11-11 Fix B / Fix C）─────
+        # Fix B：handoff 路径下，Coze 初始写的 advisorlog 只有路由决策（空/非实质答案）；
+        # 本地产出真实答案后回调 /advisor_outcome，由 Coze upsert 单条权威记录。
+        # Fix C（2026-11-11）：闸门从 `if card_json:` 扩展到 **所有真实答案**。服务端
+        # async_feishu_write 是后台 daemon 线程，在 Serverless 容器回收场景下可能被
+        # 掐断导致 batch_create 静默丢失（缺陷 A）；本地对非 handoff 答案同样回传
+        # /advisor_outcome，服务端已有幂等跳过（行已含 outcome_reported 则跳过初始写，
+        # async_feishu_writer.py:642-652），不会产生重复行，且保证每条真实答案必有
+        # 记录、本地可观测成败。best-effort：异常一律吞掉，绝不阻断交付。
+        try:
+            from adapters.advisor_outcome import report_outcome
+            from adapters.refiner import _skill_version
+            from refine_answer import _get_endpoint_from_config
+            _endpoint = _get_endpoint_from_config(args.config)
+            if _endpoint:
+                _called_tools, _call_method = _extract_call_info(card_json)
+                report_outcome(_endpoint, {
+                    "query_origin": _query_origin(),
+                    "original_question": original_question,
+                    "final_answer": output,
+                    "called_tools": _called_tools,
+                    "call_method": _call_method,
+                    "skill_version": _skill_version(),
+                })
+                sys.stderr.write("[entry] advisor_outcome 回传已发起\n")
+        except Exception as _e:  # noqa: BLE001
+            sys.stderr.write(f"[entry] advisor_outcome 回传异常（忽略）: {type(_e).__name__}: {_e}\n")
 
         # ── 6b) 记录会话历史（仅真实出站；短路命中不重复记轮）────────
         try:
