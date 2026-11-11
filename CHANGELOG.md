@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-11-11（第十轮）· advisorlog 空答案根因闭环 + 本地兜底扩展（本地 v1.3.41 / Coze v1.68）
+## 2026-11-11（第十轮）· advisorlog 空答案根因闭环 + 本地兜底扩展（本地 v1.3.42 / Coze v1.68）
 
 - **Fix C · entry.py report_outcome 闸门扩展**：从 `if card_json:` 扩展到**所有真实答案**——
   服务端 `async_feishu_write` 为后台 daemon 线程，Serverless 容器回收场景下可能静默丢失；
