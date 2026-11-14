@@ -252,27 +252,16 @@ def _fire_coze(req: RefineRequest, config_path: str) -> RefineResult:
 
 
 def _fire_prefetch(card: dict) -> dict:
-    """高置信预取：默认产出客户端 handoff 卡片；显式开启 brief 时优先走速览直连。
+    """高置信预取：交给 handle_need_tool.execute_card 单点执行（brief 优先 → handoff）。
 
-    2026-11-09 架构重评：客户端已可直接调用兄弟技能，cloud brief 降为 opt-in
-    （CT_ADVISOR_CLOUD_BRIEF=1，默认关闭），handoff 成为默认主路径——把执行权
-    交回技能本体，用户拿到的是完整交付物而不是纯文本速览。
-    共享凭据仍只在本地技能，Coze 云端不发起需凭据的外部调用；任何失败回落
-    本地执行卡（ct-base §20.19.7 红线 2）。
+    2026-11-11 Fix E（消除重复派发）：此前本函数先在此进程调用一次
+    `cloud_brief.try_cloud_brief(card)`，若返回 None 再 `_run_handle_need_tool(card)`
+    → 子进程 execute_card 内又调用一次 `try_cloud_brief`。同一 brief 因此被派发两次：
+    第一次真实检索（慢、有结果），第二次命中限流/热路径（快、空），飞书 searchlog
+    落两行（实测 advisor_literature_brief / advisor_safety_brief 紧双写即源于此）。
+    现改为直接走 `_run_handle_need_tool`——execute_card 内已是「brief 优先、失败回落
+    handoff」，单次派发即可覆盖原语义，彻底消除重复网络调用。
     """
-    try:
-        from cloud_brief import try_cloud_brief
-        text = try_cloud_brief(card)
-        if text:
-            return {
-                "tool": card.get("need_tool"), "status": "ok", "result": text,
-                "draft_answer": card.get("draft_answer") or "",
-                "deferred_tools": [], "deferred_note": "",
-                "elapsed_sec": 0, "mode": "coze_brief",
-            }
-    except Exception as e:  # noqa: BLE001 - 预取失败不得卡死主链路
-        sys.stderr.write("[ct-advisor] brief 预取异常，回落本地执行卡: %s\n"
-                         % type(e).__name__)
     from refine_answer import _run_handle_need_tool
     return _run_handle_need_tool(card)
 

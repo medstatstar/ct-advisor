@@ -4,7 +4,7 @@
       <feDropShadow dx="0" dy="2.5" stdDeviation="2.5" flood-color="#1C6DD0" flood-opacity="0.30"/>
     </filter>
   </defs>
-  <rect x="-52" y="-52" width="104" height="104" rx="20" fill="#EEEDFE" stroke="#C9DCEE" stroke-width="0.5" transform="translate(52,52)" filter="url(#logoShadow)"/>
+  <rect x="-52" y="-52" width="104" height="104" rx="20" fill="#EAF2FB" stroke="#C9DCEE" stroke-width="0.5" transform="translate(52,52)" filter="url(#logoShadow)"/>
   <g transform="translate(7,13)">
     <text font-family="Arial Black,Helvetica Neue,Arial,sans-serif" font-size="16" font-weight="900" font-style="italic" fill="#1C6DD0" stroke="#1C6DD0" stroke-width="0.25" paint-order="stroke" stroke-linejoin="round">Clinical</text>
     <text y="12" font-family="Arial Black,Helvetica Neue,Arial,sans-serif" font-size="16" font-weight="900" font-style="italic" fill="#1C6DD0" stroke="#1C6DD0" stroke-width="0.25" paint-order="stroke" stroke-linejoin="round">Trial</text>

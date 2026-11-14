@@ -1,5 +1,111 @@
 # Changelog
 
+## 2026-11-14 · 用户气泡头像改白色空心环 V3（v1.3.46）
+
+**用户反馈**：「B 档用这个黑点很难看也不清晰」——A/B 对比示意图里 V1/V2 标着「反色·纯白实心」，B 档却渲染成近黑点。
+
+**根因**：`tokens.css` 的 `:root[data-brand="ct-tier-b"]` 把 `--wb-on-brand` 覆盖为深墨 `#1F2430`（橙底白字不达标，该令牌专供文字承载面）。示意图 V1/V2 写 `background:var(--wb-on-brand)`，A 档为白、B 档为深墨，于是图与标注不符；也说明上一轮「统一改用 `var(--wb-on-brand)`」的落地建议在 B 档会退化成黑点，**已撤回**。B 档气泡为亮橙→深棕渐变，深墨点落在暗部实测约 **1.6:1**，糊成一团。
+
+**改动（V3 白色空心 2px）**：
+- `index.html` 内联 `<style>` 的 `:root` 定义技能私有令牌 `--wb-ava-user:#ffffff`（恒白，B 档 / 暗色档均不覆盖）；🔴 品牌底上的非文字图形**不复用**文字令牌 `--wb-on-brand`。
+- `index.html` `bubble()` 的 `ava` 由颜色值改为完整样式片段 `background:transparent;border:2px solid var(--wb-ava-user)`；模板 `style="background:${ava}"` → `style="${ava}"`。既有 `box-sizing:border-box` 保证 16×16 尺寸不变。
+- `workbench/publish/` 的 `index.html` / `tokens.css` / `workbench.config.json` 同步，源与镜像 md5 一致。
+
+**实测**（环 vs 紧邻气泡底，Playwright 像素采样）：A 档 V0 1.33 → V3 **5.37:1**；B 档 V0 2.10 → V3 **3.43:1**（达 3:1 非文字图形门槛，渐变暗部约 9.7:1）。截图 `_design_audit/ava_compare_{A,B}_fixed.png`、数据 `ava_compare_fixed.json`、脚本 `ava_b_fix.py`。
+
+**为什么不写入共享 `tokens.css`**：该文件是 ct-base 单一真源下发件（`wb_shared_manifest.json` → `runtime_assets`），只改叶子会被 `shared_sync_check` 判「与真源不一致」，且下次 `inject_workbench_shared.py` 注入时被覆盖丢失。头像环是 ct-advisor 私有元素，令牌留在叶子私有 `<style>`（§32.4 的 `THEME-TOKEN-UNDEFINED` 明确认可「tokens.css 及页面内联 `<style>`」两种定义位置）；`tokens.css` 保持与真源逐字节一致，共享件零漂移。
+
+**上移建议（本轮未实施）**：若将来全家族统一采用该形态，再回写 ct-base `tokens.css` + §32 登记，并用 `inject_workbench_shared.py --all` 全家族下发；本轮不动 ct-base（其 CHANGELOG / 规范 23:01 刚由外部更新，避免重复与冲突）。
+
+## 2026-11-14 · 用户气泡 meta chip 改 on-brand 白（v1.3.45）
+
+**用户反馈**：「运行ID: sample3」在气泡里完全看不清。
+
+**根因**：历史回放 `_renderHistory` 把 `h.meta` 一并传给 `bubble("user", …)`，于是 runId / cached / docId 这些 meta chip 也渲染进了**用户气泡**。而 chip 基类 `.msg .who .tag` 用 `color:var(--wb-brand-ink)`（`#195fb8`）落在用户气泡的品牌渐变（`#2563eb → #1657AB`）上，实测 **1.20:1**，肉眼等于隐形。`.msg.user` 早已把 `.nm/.tm/.body` 覆写为 `--wb-on-brand`，唯独漏了 `.tag`。
+
+**改动**：新增 `.msg.user .who .tag{color:var(--wb-on-brand); border-color:color-mix(in srgb, var(--wb-on-brand) 55%, transparent); background:color-mix(in srgb, var(--wb-on-brand) 14%, transparent)}`。白字对该渐变两端 5.25:1（左端）/ 7.12:1（右端）。描边与底同步改白系——`--wb-line` 描边在蓝底上同样不可见。
+
+**上移**：ct-base §19.2「浅层替代速查」新增第 ⑤ 条（品牌底上的 meta chip 文字/描边/底全走 `--wb-on-brand`，禁沿用浅底 chip 配方），并登记实测 1.20:1 事故值。
+
+## 2026-11-14 · 顶栏控件改 ghost 形态（v1.3.44，随 ct-base v1.4.49）
+
+**用户反馈**：右上角按钮都是深色底子。
+
+**根因**：不是本技能私货——顶栏控件按 ct-base §19.2 实底配方（4% `--wb-on-topbar` + 96% `--wb-pill-base`），在 A 档深蓝顶栏上混出 `#19202C`，与顶栏左端 `#1657AB` 仅 2.28:1，是一块近黑凹陷块。**裁定：仅 A 档启用 ghost，B 档维持实底。**
+
+**改动**：`.langbtn` / `.iconbtn` / `.pill` 默认态改 `background:transparent` + `border:1px solid var(--wb-topbar-hairline)`，hover 落 10% 实底；白字直接落在品牌渐变上（7.04→5.01:1）。`#wb-cthome` 与同簇钮同形态（同用 `.iconbtn`），不单独留实底。**「后端就绪」态（`.pill.ok`）同步 ghost 化**（用户二次要求）：原 55% 绿实底在深蓝顶栏上是又一块色块，改为透明底 + hairline + 白字 + 静态白点（connecting 是脉冲点，动/静区分）；描边不掺绿——顶栏右端掺绿后仅 2.1~2.6:1，纯 hairline 为 3.26:1。`warn` / `err` 保留语义实底（异常需抓眼）。`workbench/tokens.css` 同步 ct-base 真源（`--wb-topbar-hairline` + A/AB 档 ghost 规则，含 ok 态）。
+
+**验证**：`wb_theme_check --root .` P1=0 / WARN=0（含新增 `THEME-TOPBAR-SOLID` 判据）。
+
+## 2026-11-14 · 结构闸门装机整改（C1 版本一圈 / 无版本升级动作）
+
+`workbench.config.json.version` 与页面版本展示滞后于 `SKILL.md` 的 1.3.43，按 §18.1「版本一圈」前向对齐至 1.3.43（不新增版本发布）；`AGENTS.md` 标题锚点同步。随 ct-base 收进 §18.3 共享机检后 `python scripts/wb_ui_check.py` P1=0。
+
+## 2026-11-13 · 顶栏渐变方向随 ct-base 统一为「左深右浅」（工作台 v1.3.30）
+
+**用户反馈**：B 档顶栏由深到浅、A 档却由浅到深，家族方向不一致。
+
+**处理**：随 `ct-base` §4.6-7 修订，A 档顶栏由 `#1C6DD0→#1657AB` 改为 `#1657AB→#1C6DD0`（左 deep、右 seed），与 B 档浅渐变同向。本技能无硬编码——顶栏取 `var(--wb-topbar-bg)`，仅同步 `workbench/tokens.css` 与 `publish/tokens.css`（与 ct-base 真源逐字节一致）。端点白字对比 7.03 / 5.06 均 ≥4.5。`ct-tier-ab` 橙端同步由 `#9C4E02` 提亮至 `#B25E0A`（与 hub tier-AB 节点同源，白字 4.67）。
+
+## 2026-11-13 · A 档配色回归天蓝（工作台 v1.3.30，配色随 ct-base 真源）
+
+**用户反馈**：切 A 档后页面偏紫、不如原先天蓝好看。
+
+**处理**：随 `ct-base` A 档二次定案，`ct-tier-a` 由靛紫 `#3A5BC7` 改回天蓝 `#1C6DD0`（deep `#1657AB`、顶栏 `#1C6DD0→#1657AB`）。本技能未改任何自有代码，仅同步 `workbench/tokens.css` 与 `publish/tokens.css`（与 ct-base 真源逐字节一致）。四要素仍为 `ct-tier-a`：`workbench.config.json` / `<html data-brand>` / `wbApplyTheme()` 兜底 / 内嵌 `#wb-config`。
+
+## 2026-11-13 · 工作台细节反哺 ct-base 统一规范（工作台 v1.3.30）
+
+**用户反馈**：确认把本轮 UI 整改中「跨技能可复用」的部分上升为 ct-base 统一规范，并一并修正评审发现的跨档缺陷。
+**根因**：
+- 上轮落地的状态 pill 配方用 `color-mix(语义色 55%, var(--wb-ink))` 固定深底，只在 A 档成立；B 档顶栏为浅渐变且 `--wb-on-topbar` 是墨字 `#1F2430`，四态对比度实测 1.98 / 2.17 / 1.58 / 1.33 全 FAIL；AB 档缺 `--wb-brand-deep` 令 connecting 底色退化为透明（假 PASS）。
+- 共享列表组件只提供右上角 `.wb-list-cardacts{right:10px}`，没有右下角动作的标准槽位，逼叶子写死避让值（v1.3.28 的 `right:54px` 错位即由此而来）。
+**改动**：
+- `ct-base/workbench/tokens.css`：新增 `--wb-pill-base`（`:root` 深墨 / `ct-tier-b` 覆盖 `#F4F5F7` / `ct-tier-ab` 显式深墨）、`--wb-cardact-right`、`--wb-cardact-gutter`；`ct-tier-ab` 补 `--wb-brand-deep` / `--wb-brand-tint`。
+- `ct-base/workbench/wb-list.css`：`.wb-list-cardacts` 改用 `--wb-cardact-right`，新增 `.wb-list-cardacts-bottom`，`.wb-list-cardbody` 增 `padding-right:var(--wb-cardact-gutter)`。
+- `ct-base/workbench/workbench.config.schema.json`：`theme` description 同步组件级令牌下发契约（§14）。
+- `ct-base/references/workbench_ui.md`：回写 10 处 —— §2 / §4.2 补档位预设登记与归属修正；§4.2 新增「内联 data-URI 图形色 / 内容渲染专用色」受控豁免；§4.6 新增 7) 白字渐变末端规则；§5.5 长提示双层化；§11 卡片动作统一右列锚点；§18.2 窄屏 44×44 实现范式；§19.2 状态 pill 跨档配方 + 三档四态对比度断言；§21.2 新增第 9 条禁用态可发现性；§14 资产变更登记。
+- `ct-advisor/workbench/index.html`：pill 四态混合基改 `--wb-pill-base`；历史重问钮改走共享 `.wb-list-cardacts-bottom`，避让改 `--wb-cardact-gutter:44px`，删除叶子侧 `right:10px` / `padding-right:44px` 硬编码。共享 `tokens.css` / `wb-list.css` 与 ct-base 逐字节同步。
+**验证**：A / B / AB 三档 × ok / warn / err / connecting 四态共 12 项对比度全部 ≥4.5（A 7.82/7.16/9.79/11.22，B 7.32/7.97/5.89/5.59，AB 同 A），底色 alpha 均为 255 无透明退化；1440/768/375 三档 × 3 张历史卡片两钮 `right` 差恒为 0、正文 gutter 44px；L0 36 PASS / 0 FAIL，ctqa W0+W1 GREEN，内联 JS 语法 2/2，八档视口无横向溢出、console errors 0；`publish/` 由 `build_publish.py` 重建。
+> 版本线消歧：本条「工作台 v1.3.30」仅指 `workbench.config.json` / 页脚版本，与 2026-10-29「技能包 v1.3.30（Coze v1.48）」为不同版本线；云端 `skill_version` 由本地代理固定发 `webguard`，不读 `WB_VERSION`。
+
+## 2026-11-13 · 按 ct-base 规范修订清单完成 UI 整改（工作台 v1.3.29）
+
+**用户反馈**：按与 `ct-base/references/workbench_ui.md` 逐条对照后的无冲突修订清单落地。
+**P0（规范硬缺陷）**：
+- `nav.side` 补 `position:sticky; top:0`（§5.6.2 / §18.4 滚动断言）；桌面 1400/900 与窄屏各档实测侧栏保持吸顶。
+- ≤768px 顶栏三钮补 `min-width:44px`（§18.2-8 触摸目标 ≥44px）；≤480px 同步把 `.top-actions` gap 由 8px 收到 6px，320px 仍不溢出；桌面保持 §5.2 的 34px 控件基线。
+- 反馈钮补 `data-i18n-title="bugBtnTitle"` + 中英键，`applyLang()` 新增 `[data-i18n-title]` 通用遍历（§5.2）。复核：原 `applyLang()` 本就更新 title/aria，清单里「切语言不更新」属误判，本次只做规范形式对齐。
+- 技能控制台 locked 项去掉 `pointer-events:none`、改 `cursor:not-allowed` 并注入中英解锁说明（§21.2-3 标签自解释）；`switchView()` 既有 `SKILLS_LOCKED` 守卫保证点击不误切。
+**P1（视觉与信息密度）**：
+- `.card h2` 由 `--wb-fs-base`(15px) 归位 `--wb-fs-sm`(14px) + `letter-spacing:.7px`（§4.5 / §18.2-6 按语义归档）。
+- 状态 pill 四态裸 rgba 改 `color-mix` + `--wb-ok/-warn/-err/-brand-deep/-ink`（§4.1 / §4.6），保留 §19.2 三态色相；实测白字对比度 ok 7.82 / warn 7.16 / err 9.79 / connecting 11.22，均超 WCAG AA 4.5:1。
+- composer 新增 `.hintrow`：长格式说明收成短文案 + `title`（中英键 `attachFileHintShort`），Output 下拉从操作条移入该行，toolbar 回归 §5.5 三段 `[开关] … [字数·快捷键] [发送]`；375px composer 高 444 → 403px。
+- `.msg.bot` 顶边复核已是 3px `var(--wb-brand)`，即 §5.6.3-3 accent 等价实现，仅登记注释、未改样式。
+**验证**：八档视口 1400/900/768/700/500/480/375/320 全部 `scrollWidth == 视口宽`；窄屏三钮 44×44；中英切换后 title / aria-label / hint / 下拉选项 / locked 提示全量更新；locked 点击不误切、历史重问回填正常、Output 可选；console errors 0；L0 36 PASS / 0 FAIL；ctqa W0+W1 GREEN 19 PASS；`publish/` 由 `build_publish.py` 重建。
+**未改**：ct-base 共享资产 `wb-list.css` / `wb-list.js` 与规范文件；§5.2 与 §18.2-8 关于「窄屏纯图标钮」「ok 态 title」的两处规范内部张力仍待裁定。
+
+## 2026-11-13 · 历史记录「重问」钮右对齐（工作台 v1.3.28）
+
+**用户反馈**：历史记录里「重问」按钮和上面的「删除」按钮错位，希望都靠最右同列。
+**根因**：重问钮在 `WBList` 卡片渲染模板里用内联 `position:absolute;bottom:10px;right:54px` 定位——当初为避开右上角删除钮留了 44px，但删除钮在 `top:10px`、重问钮在 `bottom:10px`，二者垂直不重叠，这段留白是多余的；删除钮由共享组件 `.wb-list-cardacts{right:10px}` 定位，故两钮右边缘相差 44px（实测 1348 vs 1392）。
+**改动**（只动 ct-advisor 自有模板，不改 ct-base 共享资产 `wb-list.css` / `wb-list.js`）：
+- `index.html` 新增 `.hist-reask{position:absolute;bottom:10px;right:10px}`，按钮去掉内联 style、改用 `class="wb-list-act hist-reask"`，右边缘与删除钮同为 `right:10px`。
+- `.hist-a` 补 `padding-right:44px`（34px 钮宽 + 10px 间隙），防止答案文字/「点击查看全文」被右移后的按钮压住；折叠态与展开态同效。
+- 版本锚点同步 `1.3.27 → 1.3.28`（`workbench.config.json` / `WB_VERSION_DEFAULT`；内嵌 `EMBEDDED_CFG` 复用常量，无需改）；`publish/` 由 `build_publish.py` 重建。
+**验证**：Playwright 实测三张卡片中两钮 `getBoundingClientRect().right` 完全相等、文字不被遮挡；L0 回归 + ctqa W0/W1 通过；三档视口无横向溢出。
+
+## 2026-11-13 · 工作台 A 档配色适配（ct-base `workbench_ui.md` §4.6；工作台 v1.3.27）
+
+**用户反馈**：按 ct-base 工作台新规范，改造 ct-advisor 工作台界面的配色等设定。
+**根因**：页面仍选 `clinical-indigo`（蓝玻璃 `#1C6DD0`）旧品牌预设、本地 `tokens.css` 为旧副本（无档位预设）；
+`data-brand` 硬编码且 config 未驱动主题；CSS/JS 残留 20+ 处旧蓝裸色，与 A 档（已发布方法学线）色板不一致。
+**改动**：
+- `workbench/tokens.css` 逐字节同步 `ct-base/workbench/tokens.css`（含 `ct-tier-a/b/ab` 预设、O2 顶栏、G2f 按钮）。
+- `workbench.config.json` `theme.brand` → `ct-tier-a`；`index.html` 静态 `data-brand` 兜底 + 新增 `wbApplyTheme()`（config 驱动注入 brand/mode/override），对齐模板 §4.6。
+- 旧蓝 `rgba(28,109,208,*)` / `rgba(91,155,213,*)` / `#1C6DD0` / `#14509B` / `#123F73` 全部令牌化（`color-mix` + `--wb-brand/-2/-deep/-decor`）；白字统一 `--wb-on-topbar` / `--wb-on-brand`，顶栏补 `color:var(--wb-on-topbar)`；状态色走 `--wb-ok/warn/err`；主按钮 / 用户气泡 / 技能图标渐变末端改 `--wb-brand-deep`（白字 ≥4.5）。技能自有 logo SVG 保留自带配色（§5.2），代码块暗底按「内容渲染专用、非品牌配色」登记豁免。
+- `publish/` 快照由 `publish-kit/build_publish.py` 重生成（未手改快照）。
+**验证**：工作台 L0 回归 36 PASS / 0 FAIL；ctqa W0+W1 GREEN（19 PASS / 0 FAIL）；Playwright 实测 computed：`data-brand=ct-tier-a`、`--wb-brand=#3A5BC7`、顶栏 `linear-gradient(90deg,#3A5BC7,#3C5599)`、发送钮 A 档 ramp + 白字、console errors 0。
+
 ## 2026-11-11（第十轮）· advisorlog 空答案根因闭环 + 本地兜底扩展（本地 v1.3.42 / Coze v1.68）
 
 - **Fix C · entry.py report_outcome 闸门扩展**：从 `if card_json:` 扩展到**所有真实答案**——

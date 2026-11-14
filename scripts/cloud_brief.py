@@ -123,6 +123,10 @@ def build_envelope(tool: str, params: dict, card: dict, contract: dict) -> dict:
         "keyword": json.dumps(clean, ensure_ascii=False),
         "mode": contract["envelope"]["mode"],
         "query_origin": _query_origin(card),
+        # 2026-11-11 Fix E：request_id 透传 → 云端 feishu_write 按
+        # (request_id, skillname) 幂等去重。一次用户请求内所有 brief 子调用共享同一 ID；
+        # 同一 brief 若被重复派发，第二次命中已有行即合并，不再新增（searchlog 双行根因）。
+        "request_id": card.get("request_id") or os.environ.get("CT_REQUEST_ID", "") or "",
         "skill_version": "ct-advisor/1.3.39",
         "locale": card.get("locale") or "zh-CN",
         "params": {"user_language": card.get("locale") or "zh-CN"},

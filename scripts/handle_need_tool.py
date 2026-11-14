@@ -27,6 +27,11 @@
 
 status 语义：
     ok             技能执行成功，result 为结构化结果
+    confirm_needed 翻译确认门（P1-4，2026-11-11）：委派检索的结果含 keyword_localization
+                   且 ct-base translation_gate 分档为 confirm/ask_term → 主动阻断，
+                   confirm_card 为渲染好的统一确认卡（§5.4），交给用户选词/给对照词后
+                   带显式词重跑。此前该门只在 SKILL.md 文字层面「被动等待 LLM 注意」，
+                   现为机械判定，与 KW-GATE / PREVIEW 守卫同层。
     install_required  A 档技能（已上架）未安装 → 结构化上报**安装建议**
                     （github / install_hint / install_command / missing）。默认
                     `install_mode="suggest"`：**只建议、不执行** —— 把用途与命令交给用户，
@@ -428,6 +433,47 @@ def _resolve_call_locale(card: dict, question: str) -> str:
     return det or "zh"
 
 
+def _translation_gate_check(result):
+    """翻译确认门机械分档（P1-4，2026-11-11）。
+
+    result（dict / JSON 字符串）含 keyword_localization 数组时，经
+    ct-base/scripts/translation_gate（家族单一真源，sys.path 引入，禁止复制实现）
+    分档。返回 None（无记录 / 门不可用 / 放行）或 (card, action)，
+    action ∈ {"confirm", "ask_term"}（阻断级）。
+    """
+    recs = None
+    if isinstance(result, dict):
+        recs = result.get("keyword_localization")
+    elif isinstance(result, str):
+        try:
+            _j = json.loads(result)
+            if isinstance(_j, dict):
+                recs = _j.get("keyword_localization")
+        except Exception:
+            recs = None
+    if not isinstance(recs, list) or not recs:
+        return None
+    try:
+        import importlib as _il
+        _here = os.path.dirname(os.path.abspath(__file__))
+        for _d in (os.path.join(_here, "..", "ct-base", "scripts"),
+                   os.path.join(_here, "..", "..", "ct-base", "scripts")):
+            if os.path.isfile(os.path.join(_d, "translation_gate.py")):
+                if _d not in sys.path:
+                    sys.path.insert(0, _d)
+                _tg = _il.import_module("translation_gate")
+                break
+        else:
+            return None
+        action = _tg.decide(recs)
+        if action not in ("confirm", "ask_term"):
+            return None
+        card = _tg.render_card(recs, source="advisor-delegated")
+    except Exception:
+        return None  # 门自身故障不阻断主流程（fail-open，与 KW-GATE 保守策略互补）
+    return card, action
+
+
 def _sanitize_result(result):
     """剥离内联图/组件噪声块并限长（仅对文本兜底结果生效）。
 
@@ -728,6 +774,12 @@ def execute_card(card: dict) -> dict:
     call_env["CTSS_LOCALE"] = call_locale
     if card.get("query_origin"):
         call_env["CT_QUERY_ORIGIN"] = str(card["query_origin"])
+    # 2026-11-11 Fix E：request_id 透传到本地兄弟技能子进程。子技能（ct-registry /
+    # ct-literature 等）读取 CT_REQUEST_ID 作为自身 request_id 的优先来源，使
+    # 「一次用户请求内所有端点调用共享同一 ID」，云端 feishu_write 按
+    # (request_id, skillname) 幂等去重，根除跨进程/跨子调用的 searchlog 双行。
+    if card.get("request_id"):
+        call_env["CT_REQUEST_ID"] = str(card["request_id"])
     mapping = _load_mapping()
     tool_cfg = mapping["skills"].get(tool)
     tier_info = _resolve_tier(mapping, tool)
@@ -1044,6 +1096,25 @@ def execute_card(card: dict) -> dict:
             }
         result = _sanitize_result(_extract_json(proc.stdout or ""))
         artifacts = _read_artifacts(tool_cfg, workdir)
+        # 翻译确认门（P1-4，2026-11-11）：机械分档，不再依赖 LLM 自觉看 SKILL.md。
+        # result（dict 或 JSON 字符串）含 keyword_localization 且分档阻断 →
+        # status=confirm_needed + confirm_card（ct-base §5.4 统一格式）。
+        _gate = _translation_gate_check(result)
+        if _gate is not None:
+            card, action = _gate
+            return {
+                "tool": tool,
+                "status": "confirm_needed",
+                "gate_action": action,
+                "confirm_card": card,
+                "result": result,
+                "artifacts": artifacts,
+                "workdir": str(workdir),
+                "draft_answer": draft,
+                "deferred_tools": deferred,
+                "deferred_note": deferred_note,
+                "elapsed_sec": elapsed,
+            }
         # 假成功守卫（2026-08-23 / F5 2026-09-03）：仅本地引擎技能会因缺 --run/--yes
         # 停在 PREVIEW 安全门（把 "would run …" 当数据交给缝合层，ct-literature 实测）；
         # coze 引擎（如 ct-samplesize v5）无此闸门、请求信封直接发送，不因 [PREVIEW] 误判假成功。

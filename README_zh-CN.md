@@ -364,7 +364,7 @@ CLI 助手、运行要求、架构树与扫描器误报说明已迁移至 **[ref
 
 ---
 
-**版本**：v1.3.0 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
+**版本**：v1.3.46 | **许可证**：MIT | **作者**：medstatstar, phoe-zip
 
 如有功能改进建议、Bug 报告或其他反馈，欢迎直接联系作者：<medstatstar@gmail.com>（张文彤 / Wintone Zhang）。
 

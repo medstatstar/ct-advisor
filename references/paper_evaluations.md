@@ -20,7 +20,7 @@
   - **B3**：`ct-protocol/scripts/annotate_docx.py`（纯标准库 zipfile+OOXML 批注注入；`<w:commentRangeStart/End>` 作 `<w:p>` 直接子元素；批注携带 `[P0 D5] 问题 建议 (finding_id)`；已实测注入 2 条、跳过 1 条、XML 有效）
   - **B4**：`references/steps/02_review_gap.md`（输入类型自动识别 full_protocol/section/regulatory_response + 立论审查维度表 + priority 输出）、`references/steps/03_review_persona.md`（新增 Rationale Reviewer 第 4 persona）
   - **B5**：`ct-protocol/references/statistical_method_checklist.md`（分析人群/主要分析方法/样本量依据/敏感性/多重性/E9(R1) 联动 + U5 十项清单 + D 维度映射）
-  - **B6**：`ct-protocol/references/report_template.md` 新增 §9 评阅类报告专属章节（9.1 优先级视图 / 9.2 监管风险说明 / 9.3 维度视图）
+  - **B6**：`ct-protocol/references/report_template.local.md` 评阅类报告专属章节 §9（9.1 优先级视图 / 9.2 监管风险说明 / 9.3 维度视图；2026-11-13 从 `report_template.md` 抽离为 sidecar，主文件回归 ct-base 通用真源）
   - **B7**：ct-advisor 方案评阅路由——`ct-advisor` v1.3.39 落地：`route_tool.py` 弱触发词 + `_TOOL_DESC` + 咨询护栏例外，方案评阅意图在答案末尾软建议 `ct-protocol`（仅建议不自动调用；自测 37/37、13/13 全绿）
   - **验证（已完成）**：py_compile 全过；`tests/test_iit_mode.py` 13/13（含 `test_weights_sum_100`）、`tests/test_reflib.py` 通过；D9 端到端（无立论扣 10 / 有立论不扣）+ `diff_risk.py` 跨版本报告含 D9 无回归；`annotate_docx.py` 注入 2 跳过 1；`route_tool.py --self-test` 37/37 + 13/13 + 6/6
 - **不照搬**：clinical 的「知识参考」形态（无脚本/无评分/无模板，不直接合并，插件化引用）；肿瘤知识作为通用内容（仅一个领域，须放 `disease_area/` 按需加载）；ct-advisor 的 Coze 云端评阅模式（用户已反馈「输出笼统」，方案评阅走 ct-protocol 结构化框架）；clinical 会话中的「介绍技能」用法（查询非评阅，不构成参考）

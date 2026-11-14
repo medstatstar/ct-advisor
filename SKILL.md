@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.42
+version: 1.3.46
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问。覆盖范围已扩大至合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究——仅当明确非医药/生命科学语境时才给建设性转介建议。本地侧在确定性二值闸门（是否 vague）与附件解码之外，新增会话上下文注入（多轮承接）；答案缓存与去重一律由云端承担（仅为独立问题服务，本地不缓存答案）；不保留知识库，不进行本地网络检索。外部参考：teal 临床数据交互探索框架。"
@@ -469,6 +469,28 @@ Runs automatically inside `entry.py` → `scripts/orchestrate.py` before each ou
 - **Docling** (`pip install docling`) — structured parsing of regulatory documents (protocol/IB/CSR PDFs → hierarchical Markdown/JSON); attachment-parsing enhancement layer.
 - **Pinnacle 21 Validation Rules** (Certara, public API `standards.pinnacle21.certara.net/validation-rules/<STD>`, header `X-Requested-With: XMLHttpRequest`) — industry-standard CDISC validation rule set; snapshots archived in `ct-base/references/pinnacle21_validation_rules/` (SDTM 566 / SEND 581 / ADaM 456 / Define-XML 167). Authoritative benchmark for data-standard compliance Q&A; mirrored to Coze KB topic `ref-topic-p21-data-rules`.
 - **ICH M12 DDI Thresholds** (Step 4/5 official PDFs archived alongside `ct-base/references/m12_thresholds.md`) — CYP 50× / intestinal 10×, TDI 1.25, induction R-ratio, transporter Table 1, AUCR 0.80–1.25, GMR 90% CI 80–125%. Authoritative benchmark for DDI interaction Q&A; mirrored to Coze KB topic `ref-topic-m12-ddi`.
+
+## Retrieval Keyword Translation Gate (ct-base bilingual_retrieval §5 · 2026-11-11)
+
+When the Advisor delegates retrieval to ct-registry / ct-literature: if the delegated skill
+has already passed the **translation confirmation gate** (multi-candidate / untranslated
+keyword blocking confirmation), do not confirm a second time. Standards and templates:
+`ct-base/references/bilingual_retrieval.md` §5 + `ct-base/scripts/translation_gate.py`.
+
+Two mandatory paths (P1-4 / P2-5, reinforced 2026-11-11):
+
+1. **Delegation path (mechanical)**: `handle_need_tool.py` inspects the `keyword_localization`
+   array in the delegation-result JSON and tiers it mechanically — blocking level
+   (confirm/ask_term) returns `status=confirm_needed` + `confirm_card` (§5.4 unified card).
+   On that status the advisor **must** present the confirmation card first, obtain the chosen
+   term / reference term / waiver, then re-run; skipping the gate and stitching an answer is forbidden.
+2. **Self-assembled keyword path (instruction-enforced)**: when the advisor assembles retrieval
+   terms itself without delegation — for Chinese sources (CDE/ChiCTR) or foreign sources — it
+   must first look up the authoritative translation in `ct-base/references/term_map.json`
+   (or `kw_lexicon.json`); when the map offers multiple candidates (e.g. bisoprolol →
+   比索洛尔 / 富马酸比索洛尔) sending them space-joined is **forbidden** (AND semantics
+   guarantee zero hits) — show the translation confirmation card and let the user choose first;
+   for terms with no mapping, ask the user for a reference term or an explicit waiver before searching.
 
 ## Bug Report (§20.3 · ct-base)
 

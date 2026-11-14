@@ -34,6 +34,7 @@ import sys
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 # UTF-8 强制（三流统一）+ stdout 恒 LF（2026-10-15：控制台回传链路会把 \n
@@ -491,6 +492,12 @@ def main():
         sys.stderr.write("[entry] 未检测到 requests，使用 stdlib urllib 传输（功能不受影响）\n")
 
     original_question = args.q
+    # 2026-11-11 Fix D：为单次请求生成稳定唯一 request_id，端到端透传至 Coze 落库，
+    # 作为 advisorlog 去重的**确定性主键**（取代原先模糊的 (query_origin, 问题[:60]) 查找）。
+    # 本地出站 payload 与回传 /advisor_outcome 均携带同一 request_id，云端两路写（初始路由行 +
+    # 回传权威行）据此 upsert 到同一行，彻底消除「后台线程竞态 → 回传找不到初始行 → 新建重复行」。
+    # 纯增量字段：旧云端未消费时静默忽略，无回归；云端按本 id 落库后即为去重真理源。
+    _request_id = uuid.uuid4().hex
     # 2026-11-10：复杂混合调用提示在此（任何出站 / 技能调用之前）用本地零联网
     # 预判算好；预警实际写出放在 5a 真实出站前，前置到答案放在唯一出口 7。
     _EARLY_NOTICE, _EARLY_HINT = _complexity_hint_pair(original_question or "")
@@ -585,6 +592,13 @@ def main():
     except Exception:  # noqa: BLE001
         _history_key = "h?"
 
+    # 2026-11-11 Fix E（关键）：request_id 必须同时写进 query_meta。
+    # 云端 async_feishu_write 的去重主键从 `query_meta.get("request_id")` 读取
+    # （async_feishu_writer.py:688），此前 local 只发了顶层 request_id，云端读不到 →
+    # 初始路由行 request_id 恒空 → /advisor_outcome 按 request_id 精确匹配必然落空 →
+    # 退回模糊匹配 → 竞态建新行 → advisorlog 双行（11-11 18:12 实测仍复现）。
+    query_meta["request_id"] = _request_id
+
     payload = json.dumps({
         "query_meta": query_meta,
         "original_question": original_question,
@@ -595,6 +609,8 @@ def main():
         "conversation_history": conversation_history,
         # 2026-11-11：补 query_origin 透传（修复 advisorlog 脏值；合规 sha256:<64hex>）
         "query_origin": _query_origin(),
+        # 2026-11-11 Fix D：request_id 透传（advisorlog 去重确定性主键）
+        "request_id": _request_id,
     }, ensure_ascii=False)
 
     # ── 4) vague → 澄清循环 ─────────────────────────────────────────────────
@@ -669,8 +685,15 @@ def main():
             # 本地兜底确保 handle_need_tool → 子技能透传 origin 一致、飞书归因不断链）
             try:
                 _card_obj = json.loads(card_json)
-                if isinstance(_card_obj, dict) and not _card_obj.get("query_origin"):
-                    _card_obj["query_origin"] = _query_origin()
+                if isinstance(_card_obj, dict):
+                    if not _card_obj.get("query_origin"):
+                        _card_obj["query_origin"] = _query_origin()
+                    # 2026-11-11 Fix E：request_id 注入委托卡——card-inline 子进程
+                    # （refine_answer→handle_need_tool→cloud_brief/兄弟技能）据此透传
+                    # 同一 request_id，云端按 (request_id, skillname) 幂等去重，
+                    # 根除「一次用户请求被派发两次」造成的 searchlog 双行。
+                    if not _card_obj.get("request_id"):
+                        _card_obj["request_id"] = _request_id
                     card_json = json.dumps(_card_obj, ensure_ascii=False)
             except Exception:  # noqa: BLE001 - 解析失败则维持原卡，不阻断
                 pass
@@ -707,6 +730,7 @@ def main():
                 _called_tools, _call_method = _extract_call_info(card_json)
                 report_outcome(_endpoint, {
                     "query_origin": _query_origin(),
+                    "request_id": _request_id,
                     "original_question": original_question,
                     "final_answer": output,
                     "called_tools": _called_tools,

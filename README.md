@@ -328,7 +328,7 @@ CLI helpers, runtime requirements, the architecture tree, and scanner false-posi
 
 ---
 
-**Version**: v1.3.0 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v1.3.46 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at <medstatstar@gmail.com> (Wintone Zhang).
 
