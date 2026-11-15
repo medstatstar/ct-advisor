@@ -9,6 +9,12 @@ __pycache__/
 # assets/: keep only the canonical SVG icon; drop build scripts / notes / PNG exports / variant SVGs
 assets/*
 !assets/icon.svg
+# 工作台截图（README 顶部展示，需随包发布）
+!assets/screenshots/
+!assets/screenshots/en/
+!assets/screenshots/zh/
+!assets/screenshots/en/01-home.jpg
+!assets/screenshots/zh/01-home.jpg
 
 # Dev / working logs (not part of the skill's runtime or knowledge)
 auto_loop_rounds.md

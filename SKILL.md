@@ -29,8 +29,8 @@ metadata:
 permissions:
   scope: "user-space-only"
   network: "controlled-coze-opt-in"
-  network_note: "All questions are forwarded to Coze (single call, internal `scripts/orchestrate.py`). Local side performs NO knowledge base lookup, NO local network retrieval, NO web search. Attachments under 5 MB are uploaded as original bytes to Coze `/upload_file` and shipped as the top-level `doc_context` field (Coze decodes natively); attachments over 5 MB are converted to Markdown locally via `scripts/office_to_md.py` (stdlib-only) and the resulting .md is uploaded through the SAME doc_context channel. The Coze-side knowledge base is the single source of truth."
-  filesystem: "Read-only to own files; no confidential data leaves locally — Coze payloads sanitized, query_origin is a stable per-machine sha256 hash (non-PII)."
+  network_note: "All questions forwarded to Coze (single call, internal scripts/orchestrate.py); local side does no KB lookup / web search. Attachments (<5 MB original bytes; >5 MB converted to Markdown locally) uploaded as doc_context; Coze KB is the single source of truth."
+  filesystem: "Read-only to own files; no confidential data leaves — Coze payloads sanitized, query_origin is a stable per-machine sha256 hash (non-PII)."
 adapted_from: "https://github.com/A-xin946/clinical-trial-advisor"
 dependencies:
   - {slug: ct-registry,   tier: A}
@@ -64,12 +64,7 @@ Machine-checked by `ct-base/scripts/spec_lint.py` rule **F33**.
 >
 > Since **v1.3.21** the stdout is **plain text followed by a trailing integrity line** and one ASCII pointer to the answer file — no decoding, no transcription, no second command:
 >
-> ```
-> {the answer text, as many lines as it needs}
-> <<<CT_ANSWER_END>>>
-> checksum: {sha256[:16]}
-> answer_file: C:/Users/<user>/.workbuddy/skills/ct-advisor/_answers/{checksum}.md
-> ```
+> ``` {the answer text, as many lines as it needs} <<<CT_ANSWER_END>>> checksum: {sha256[:16]} answer_file: C:/Users/<user>/.workbuddy/skills/ct-advisor/_answers/{checksum}.md ```
 >
 > **One entry point, one output shape, one protocol, one place where the protocol is produced.** Since v1.3.21 there is **no base64 anywhere in the pipeline** — not between code modules, not on the wire, not in the browser. The reason is historical: v1.3.9 introduced base64 to survive cp936 console mojibake, but that forced the LLM to hand-copy a ~2.6k-char random string into a second command (2026-10-16 incident: `5Lzd` typed for `5L+d`, a "checksum failure" that was pure transcription damage, then three real Coze calls for one question). The wrapper that fixed it left two parallel protocols, a 4× payload inflation, and — once the browser started taking the API directly — a decoder in *each* client. v1.3.21 removes the need instead of managing it: **encoding is no longer a decision made at the exit**. `entry.py` writes UTF-8 bytes straight to `stdout.buffer` (constant, no code-page inspection, no flags), the marker/checksum pair is produced in exactly one function, and the same bytes are also on disk. `scripts/ask.py` survives only as a zero-logic forwarding shim for stale callers.
 
@@ -212,8 +207,6 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 7. Signals are emitted from failure paths only (`adapters/errsignal.py::emit_err_signal`). If an `[ERR]` line appears on a run that returned a valid answer, treat it as a skill defect and report it.
 
 **Note on `[DEP-MISS]`:** before 2026-10-15 a missing `requests` library surfaced as `[DEP-MISS]` + an install prompt. The transport now uses stdlib `urllib`, so this failure class no longer exists; the handler remains as dormant defensive code.
-
-**2026-10-26 · ct-base §22.24 dual-track governance framework**: as the ct-series single entry point routing to ct-samplesize/ct-registry/ct-safety/ct-literature/ct-protocol, any classification judgement involving AI-as-intervention (prospective evaluation + SPIRIT-AI/CONSORT-AI) vs AI-for-trial-operations (workflow accuracy + TRIPOD-AI/ICH E6(R3)) follows the §22.24 dual-track governance framework (EClinicalMedicine 2026-10).
 
 ---
 
