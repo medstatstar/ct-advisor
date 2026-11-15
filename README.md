@@ -84,7 +84,11 @@ ct-advisor's coverage was broadened (v1.3.17) to three previously-uncovered but 
 
 ct-advisor is a **conversational skill**: you simply tell the assistant what you're working on — no commands, no parameter names to remember. As a WorkBuddy skill it **auto-loads with no extra installation**, and activates only when you call it via the Skill tool (not automatically in the background).
 
-Below are **8 real cases**, graded by difficulty (★ basic / ★★ advanced / ★★★ professional), matching the Scenario Index in §1. Each case has three parts: **"You say"**, **"The reply you see"**, and **"🖥️ Workbench"** (how to run the same thing in the web workbench). The "reply you see" below are captured from **real runs of the skill** (machine markers stripped), reproduced as-is with no factual rewriting; for queries that need real data, the skill **hands off to the relevant sibling skill** running locally — it does not run the data itself nor fabricate numbers.
+Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / ★★★ professional), matching the Scenario Index in §1. Each case has three parts: **"You say"**, **"The reply you see"**, and **"🖥️ Workbench"**. The "reply you see" below are captured from **real runs of the skill** (machine markers stripped), reproduced as-is with no factual rewriting; for queries that need real data, the skill **hands off to the relevant sibling skill** running locally — it does not run the data itself nor fabricate numbers.
+
+**🖥️ Workbench, general steps**: open the workbench web page, paste the case's question verbatim into the chat box at the bottom → click **Send** → wait about a minute (cloud analysis) → the answer appears in the chat area; data-bound questions additionally return directly callable `@skill:…` handoff cards. Each case's "🖥️ Workbench" paragraph only notes what is specific to that case.
+
+> Queries that need real data (registry trials, safety signals, literature, sample size) are **not answered with figures inside the chat**. The skill first gives a methodology framework and then hands off to the corresponding sibling skill running locally (see Cases 4 / 6 / 7).
 
 ### ★ Basic usage
 
@@ -94,13 +98,15 @@ Below are **8 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 > The protocol states subjects who complete all visits get a CNY 5,000 travel allowance. One subject withdrew early due to an SAE — must the investigator pay the full amount? What does GCP require?
 
 **The reply you see:**
-> **The investigator is generally not required to pay the full CNY 5,000 travel allowance; only the amount proportional to the visits the subject actually completed shall be paid.** The travel allowance compensates the actual travel costs a subject incurs during the trial — not a fixed reward for participation. Since this subject withdrew early due to an SAE and did not complete all visits, the costs for the uncompleted visits did not actually occur, so the full allowance need not be paid.
+> For a subject who withdrew early due to an SAE, **the investigator should not pay the full CNY 5,000 travel allowance; the allowance should be pro-rated by the proportion of visits the subject actually completed, and the allowance the subject is entitled to must not be withheld because of the early withdrawal caused by the SAE**.
 >
-> Under the 2020 edition of the *Good Clinical Practice* and ICH E6(R2), subject compensation must be fair and reasonable, matched to the actual burden and risk of participation, and must not include inducement clauses that only release the full cost-type allowance upon completion of all visits. If the IRB-approved protocol explicitly states that early withdrawal for non-subjective reasons (e.g. treatment discontinuation due to an SAE) still qualifies for the full travel allowance, the full amount may be paid per the protocol.
+> The 2020 edition of China's *Good Clinical Practice* makes subject rights the priority — subject safety and rights must outweigh scientific and social interests. The travel allowance compensates the actual travel costs a subject incurs during participation, not a reward for completing the trial: the protocol clause "full allowance upon completing all visits" applies to subjects who complete the trial as planned, not to early withdrawal that is not the subject's choice. An SAE is an uncontrollable risk of trial participation and the early withdrawal is not a breach by the subject, so the allowance should be pro-rated by the visits actually completed.
 >
-> Basis: *Good Clinical Practice for Drug Clinical Trials* (2020 edition); ICH E6(R2) requirements on subject rights protection and economic compensation
+> Only when the protocol or the informed consent form explicitly states "the full allowance is paid regardless of completion when withdrawal is due to an SAE" may the full amount be paid as agreed.
+>
+> Basis: *Good Clinical Practice for Drug Clinical Trials* (2020 edition), subject-rights provisions; ICH E6(R2) GCP
 
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
+**🖥️ Workbench:** general steps — paste the question, send, and in about a minute you get the conclusion plus the basis; no extra cards for this type.
 
 ### Case 2 · IB lists a reaction as "uncommon" but the trial rate hit 15% — update IB and label? (pharmacovigilance, answered directly)
 
@@ -108,132 +114,99 @@ Below are **8 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 > An adverse reaction is listed as "uncommon" in the IB, but the observed rate in the trial reached 15%. How should PV assess whether the IB and the label need updating?
 
 **The reply you see:**
-> When an adverse reaction's observed incidence reaches 15% in the trial — far above the "uncommon" level stated in the IB — the PV team should follow a three-step assessment (data verification → threshold comparison → clinical risk evaluation), and **by default, if the three conditions (statistically sound, exceeding the IB's defined threshold, and presenting a clinical risk signal) are met, an IB update must be initiated immediately, and for marketed products a label-update argument should be launched in parallel**, with the core aim of promptly syncing new safety information to investigators and regulators to protect subjects.
+> When an adverse reaction's observed incidence reaches 15% — far above the "uncommon" grading in the IB — PV should immediately start a safety-update assessment: **by default the IB's safety content must be updated, and the label update proceeds in parallel according to the product's marketing stage and regulatory requirements**.
 >
-> 1. **Data verification**: confirm data validity — unify the MedDRA coding of the reaction, confirm all cases' causality is judged related to the investigational drug, rule out confounding from concomitant medication / underlying disease, use the total exposed population (all subjects who received at least one dose) as the denominator, and confirm 15% is a stable population-wide incidence rather than bias.
-> 2. **Threshold comparison**: compare against the incidence grading threshold explicitly stated in the IB; "uncommon" is generally 0.1%–1% (⚠️ pending verification — use the IB's explicit definition), and 15% exceeds expectations by over 15×, crossing grades and triggering the statutory update obligation.
-> 3. **Clinical risk evaluation**: if the reaction is moderate-severe, lacks effective intervention, or shows unexpected serious outcomes, update the IB's Safety Reference Information (RSI) section immediately and report to the regulator; for mild, intervenable reactions, also update the incidence data in the IB's "observed adverse reactions" list.
+> **Verify the baseline first**: check the "uncommon" threshold defined in the IB (different IBs use CIOMS/ICH or custom grading; "uncommon" is conventionally 0.1%–1%, ⚠️ pending verification against the IB's explicit definition), and confirm the statistical basis of the 15%: whether it is population-adjusted, whether confounders are excluded, and whether causality with the investigational drug is established.
+> **Risk-impact judgment**: assess the reaction's severity, preventability, and impact on subjects/patients, and judge the update scope against the overall benefit-risk: if it is non-serious, manageable, and does not change the overall benefit-risk, only the incidence summary section of the IB needs updating; if it is a serious adverse reaction or materially changes the risk profile, the RSI's risk warning, dose-adjustment advice, or contraindications must be updated in sync.
+> **Regulatory alignment**: for pre-marketing products, IB updates must be submitted to regulators per the jurisdiction's requirements (e.g. China CDE expects proactive communication of important safety changes); for marketed products, label updates additionally draw on post-marketing real-world data and same-class safety evidence, filed as a label-change application.
 >
-> Basis: ICH E2A *Clinical Safety Data Management: Definitions and Standards for Expedited Reporting*; CDE *Guidelines for Writing the Safety Reference Information (RSI) in the Investigator's Brochure*
+> Basis: ICH E2F *Development Safety Update Report*; CDE *Guidelines for Writing the Safety Reference Information (RSI) in the Investigator's Brochure*
 >
-> If you like, I can expand on: ① the IB-update regulatory submission flow ② quantitative signal-verification methods ③ label-update communication requirements for marketed products
+> If you like, I can expand on: ① IB-update document structure requirements ② the label-change filing process
 
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
-
-### Case note · how data-bound queries are answered (example: registry search)
-
-> Queries that need real data (registry trials, safety signals, literature, sample size) are **not answered with figures inside the chat**. The skill first gives a methodology framework and then hands off to the corresponding sibling skill running locally. Case 3 is a real example.
-
-### Case 3 · Pull a drug's registration trials (handoff to ct-registry)
-
-**You say:**
-> Pull the registered trials for semaglutide in type-2 diabetes, 2021–2026.
-
-**The reply you see:**
-> 💡 *Note: the following is compiled from publicly available general knowledge; verify key figures and conclusions against authoritative sources (nmpa.gov.cn / cde.org.cn / ich.org).*
->
-> The knowledge base does not yet contain direct data on semaglutide T2D registration trials for 2021–2026; retrieve it via the official frameworks below:
-> 1. **Authoritative sources**: CDE Trial Registry (chinadrugtrials.org.cn), ClinicalTrials.gov, EudraCT, and NMPA/CDE approval notices — all results ⚠️ pending verification.
-> 2. **Search filters**: keywords "semaglutide / 诺和泰", "type 2 diabetes mellitus"; limit registration/approval dates to 2021-01-01 – 2026-12-31; keep only registration trials.
-> 3. **Key fields**: phase, sample size, control, primary endpoint, status.
->
-> ---
-> ## Invoke directly: @skill:ct-registry
-> Registered locally; the client calls it directly — ct-advisor does not run its CLI, so you get the full deliverable, not a summary.
-> - Params identified: cond=semaglutide
-> - Deliverable: report.xlsx / report.md (trial landscape + competitor distribution)
->
-> The above is ct-advisor's own methodology answer; rely on the skill's actual output for real data, reproducible results and files.
-
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
+**🖥️ Workbench:** general steps — paste the question, send, and in about a minute you get the three-step assessment.
 
 ## ★★ Advanced usage
 
-### Case 4 · Full competitive-intel on GLP-1 RA in obesity (multi-skill handoff)
+### Case 3 · Full competitive-intel on GLP-1 RA in obesity (public baseline first, then multi-skill handoff)
 
 **You say:**
 > Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature.
 
 **The reply you see:**
-> The publicly confirmable core competitive-intel for GLP-1 RA in obesity: marketed products include semaglutide, liraglutide, tirzepatide; the pipeline covers weekly injections, oral formulations, and fixed-dose combinations, mostly Phase III; primary endpoints are % weight loss from baseline at 52/68 weeks and % subjects with ≥5%/≥10% weight loss; confirmed common AEs are mild-moderate GI reactions (nausea, vomiting, diarrhea) that ease with titration; watch-list signals include thyroid C-cell tumor risk, acute pancreatitis, gallbladder disease, and severe GI reactions. The detailed trial data, precise signal strength, and full literature entries are cross-skill retrieval needs — below are the standardized frameworks and public baselines; call the dedicated skills for actual values.
+> The currently confirmable core competitive-intel for GLP-1 RA in obesity: on the marketed-product side, liraglutide (SCALE program) achieved 8.4 kg weight loss at 68 weeks with 63% of subjects losing ≥5% of body weight; semaglutide (STEP program) achieved 15.3 kg at 68 weeks with 86% achieving ≥5% loss; tirzepatide (SURMOUNT program) achieved up to 22.5 kg at 72 weeks at the highest dose, with 91% achieving ≥5% loss. On the common safety profile: the most frequent adverse reactions are nausea, vomiting, and diarrhea — GI reactions that ease with dose titration; hypoglycemia risk is far below insulin; signals to watch are pancreatitis, thyroid C-cell tumors, and GI obstruction. Core evidence sources include SIGN 154, the *Chinese Guidelines for Obesity Prevention and Control (2022 edition)*, and the STEP / SCALE / SURMOUNT pivotal RCT literature. The full dynamic competitive intel falls into trials, safety signals, and literature — pipeline updates and newer trial/safety/literature findings require the dedicated retrieval skills; the frameworks, public baselines, and retrieval paths for each module follow, and actual retrieval can be done by the corresponding local offline skills.
 >
 > **1. Trial-retrieval framework**
-> **Professional Tip**: suggested via local **ct-registry** skill: @skill:ct-registry.
-> Standard dimensions: ① sources CDE registry, CT.gov, EU CTR, ChiCTR; ② keywords GLP-1R / GLP-1 RA, obesity/overweight, drug intervention; ③ fields phase, sponsor, enrollment, primary endpoint, status.
+> > **Professional Tip**: suggested via the local **ct-registry** skill (clinical-trial registry search expert, runs locally offline, no data leaves the machine): @skill:ct-registry.
+>
+> Cover the three main registries — CT.gov, the CDE trial registry platform, and ChiCTR — with fixed filters: ① indication explicitly marked as obesity/overweight (BMI ≥ 28 kg/m², or BMI ≥ 24 kg/m² with metabolic complications); ② intervention is a GLP-1 receptor agonist (mono/combo, daily/weekly, dual- and multi-agonists); ③ core endpoints include % weight loss, weight-response rate, or safety metrics. Marketed products in this indication include semaglutide, liraglutide, and tirzepatide; the pipeline list is subject to retrieval results.
 >
 > **2. Safety-signal framework**
-> **Professional Tip**: suggested via local **ct-safety** skill: @skill:ct-safety.
-> Four-step signal detection: ① sources SAE summaries, FAERS/VigiBase/NMPA ADR, published case reports; ② triggers PRR ≥ 2, χ² ≥ 4, ≥ 3 cases; ③ qualitative causality, biological plausibility, class characteristics.
+> > **Professional Tip**: suggested via the local **ct-safety** skill (drug safety signal detection expert, runs locally offline, no data leaves the machine): @skill:ct-safety.
+>
+> The class safety profile is well established: most frequent AEs are nausea, vomiting, diarrhea (easing with titration); hypoglycemia risk is markedly below insulin; consider down-titrating sulfonylureas when combined. Signal detection follows the standard four-step method: sources cover trial SAE databases, post-marketing spontaneous-report databases, and literature cases; quantitative detection uses PRR/ROR/EBGM with triggers PRR ≥ 2 + χ² ≥ 4 + ≥ 3 cases; qualitative evaluation covers causality, biological plausibility, and class characteristics before graded disposition. AESIs to watch: pancreatitis, thyroid C-cell tumor risk, GI obstruction, tachycardia.
 >
 > **3. Literature framework**
-> **Professional Tip**: suggested via local **ct-literature** skill: @skill:ct-literature.
-> Sources PubMed, Embase, Cochrane, CNKI, Wanfang; prioritize Phase III results, meta-analyses, real-world studies, safety reviews.
+> > **Professional Tip**: suggested via the local **ct-literature** skill (systematic literature search expert, runs locally offline, no data leaves the machine): @skill:ct-literature.
 >
-> Basis: ICH E2E *Pharmacovigilance Planning*; SIGN 154 *Glycaemic Control in Type 2 Diabetes*; ct-advisor cross-skill routing rules
+> Prioritize four evidence classes — head-to-head RCTs, meta-analyses, real-world studies, and authoritative guidelines/consensus — over these core topics: ① head-to-head efficacy comparisons of GLP-1 RA products in obesity; ② long-term cardiovascular/metabolic safety; ③ benefit-risk in adolescents, the elderly, and populations with diabetes/kidney disease; ④ weight regain after discontinuation. Published basis: SIGN 154 and other guidelines recommend GLP-1 RA as a preferred option for obesity with type-2 diabetes, and published meta-analyses show weekly GLP-1 RAs generally outperform daily formulations in weight loss.
+>
+> If you like, I can expand on: ① tailored retrieval dimensions for a specific GLP-1 RA product ② refined safety-signal assessment criteria ③ evidence-level stratification methods
+>
+> > Basis: SIGN 154 *Glycaemic Control in Type 2 Diabetes*; ICH E2E signal-detection guideline; *Pharmacovigilance Signal Detection Practice*
 >
 > ---
 > 💡 *Note: the above is ct-advisor's own answer. This question also involves the following sibling skills, registered locally and directly callable by the client; for **real data, reproducible results, or file deliverables**, call them directly:*
-> - `@skill:ct-registry`: multi-source global trial-registry search
+> - `@skill:ct-registry`: multi-source global trial-registry search (ClinicalTrials.gov, CDE / ChiCTR / ISRCTN / DRKS)
 > - `@skill:ct-safety`: FDA FAERS disproportionality (PRR / ROR / IC / EBGM)
 > - `@skill:ct-literature`: medical literature search across all sources (OpenAlex + Europe PMC)
 
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
+**🖥️ Workbench:** general steps — paste the question, send, and you get the public baseline + three retrieval frameworks + three `@skill:…` handoff cards; for real data, fill the parameters in the "capability cards" entry and call directly.
 
-### Case 5 · Phase II oncology design + sample size (framework first, then handoff to ct-samplesize)
+### Case 4 · Phase II oncology design consultation (design framework first, then handoff to ct-samplesize)
 
-**You say (round 1, no parameters):**
+**You say:**
 > I'm planning a Phase II oncology trial and also need the sample size — help me decide the design.
 
-**The reply you see (round 1):**
-> The default recommended design for a Phase II oncology trial is the **Simon two-stage single-arm design**, aimed at preliminarily assessing anti-tumor activity and informing the go/no-go decision for Phase III; typical sample size is 20–60 cases (adjusted by objective and endpoint type), with the precise size depending on preset target effect size, null boundary, α, power, and dropout.
-> 1. **Design logic**: default Simon two-stage (stage-1 enroll 10–20 cases; proceed to stage 2 if ORR reaches the preset threshold, else terminate early); for comparing against standard of care, a small randomized controlled design may be chosen, with ORR as the preferred short-cycle primary endpoint.
-> **Professional Tip**: precise sample-size calculation is suggested via local **ct-samplesize** skill: @skill:ct-samplesize. Provide the core parameters to get a deployable sample-size result and power curve.
-> Basis: ICH E9; CDE *Technical Guidelines for Antitumor Drug Clinical Trials*
+**The reply you see:**
+> A **Simon two-stage single-arm design** is recommended as the default for a Phase II oncology trial; the sample size can be generated by the dedicated sample-size tool.
+> The Simon two-stage design evaluates the efficacy signal after stage-1 enrollment and terminates early when futile, substantially reducing subject exposure and development cost — it is the industry standard for exploratory solid-tumor Phase II trials; for biomarker-driven cohort expansion, a Bayesian adaptive design allows flexible enrollment adjustment.
+> > Basis: ICH E9 *Statistical Principles*; CDE *Technical Guidelines for Antitumor Drug Clinical Trials*
 >
 > ---
 > ## Invoke directly: @skill:ct-samplesize
-> Registered locally; the client calls it directly.
+>
+> Registered locally; the client calls it directly — ct-advisor does not run its CLI, so you get the full deliverable, not a summary.
 > - Purpose: sample size / power calculation
 > - Params identified: (none)
 > - Deliverable: sample-size & power report (with inline charts)
-> Suggested params to supply: test; effect-size param (one of): p1 / p2 / effect / sd / margin
-> The above is ct-advisor's own methodology answer; rely on the skill's actual output for real data, reproducible results and files.
-
-**You say (round 2, parameters supplied):**
-> Test type: two-proportion, p1=0.30, p2=0.45, two-sided α=0.05, power 80%.
-
-**The reply you see (after supply):**
-> Based on your two-proportion parameters, with no dropout correction each group needs about 190–200 cases and ~380–400 total; with a preset 20% dropout the total is ~475–500, using the chi-square sample-size formula for two proportions.
-> **Professional Tip**: suggested via local **ct-samplesize** skill: @skill:ct-samplesize.
-> Preliminary reference (methodology example only, not a formal result ⚠️ pending verification): ~190–200/group, ~380–400 total without dropout; with 20% dropout apply `n_adj = n/(1−dropout)`, total ~475–500. The effect size (p1/p2) must be justified by a source and not assumed.
-> Basis: ICH E9 *Statistical Principles*; CDE *Statistical Design Guidelines for Antitumor Drug Clinical Trials (Trial)* (2020)
 >
-> ---
-> ## Invoke directly: @skill:ct-samplesize
-> - Purpose: sample size / power calculation
-> - Params identified: test=proportion_two
-> - Deliverable: sample-size & power report (with inline charts)
+> Suggested params to supply:
+> - test
+> - effect-size param (one of): p1 / p2 / effect / sd / margin
+>
 > The above is ct-advisor's own methodology answer; rely on the skill's actual output for real data, reproducible results and files.
 
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
+**🖥️ Workbench:** general steps — paste the question, send, and you get the design recommendation plus a `@skill:ct-samplesize` handoff card (the card lists the parameters still to supply); fill them in the "capability cards" entry to get the precise sample size and power report.
 
-### Case 6 · Not sure what you need (vague → local clarify)
+### Case 5 · Not sure what you need (vague → local clarify)
 
 **You say:**
 > I'm not sure what I actually need — I have a half-written protocol and some questions.
 
 **The reply you see:**
 > Before answering, the following need clarification:
+>
 > - Specify the target population / subjects (disease, stage, line of therapy, age band) — it changes applicability.
 > - Specify the endpoint / outcome of interest (e.g. OS, PFS, ORR, AE rate).
 >
 > Please reply to each, and I will continue the analysis based on your added information.
 
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
+**🖥️ Workbench:** general steps — vague questions do not go to the cloud; the local clarify menu returns instantly. Supply the requested details and send again to continue.
 
 ## ★★★ Professional usage
 
-### Case 7 · PD-1 product ILD signal — literature support level (multi-skill handoff)
+### Case 6 · PD-1 product ILD signal — literature support level (multi-skill handoff)
 
 **You say:**
 > One of our PD-1 products has case reports of interstitial lung disease; QA suspects a new safety signal. Search the published literature for how much support this signal has, and give me a citable evidence summary.
@@ -241,26 +214,30 @@ Below are **8 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **The reply you see:**
 > ⚠️ **Safety note**: this question spans multiple sibling skills (ct-safety, ct-literature); it is a complex combined call. Consider splitting it into separate questions for more accurate, verifiable results. If there is **no response for a long time**, abort and re-ask by splitting.
 >
-> No directly matched published literature was found to assess the support level for your PD-1 product's ILD case; a standardized retrieval workflow is required, and the full citable evidence summary must be generated by the ct-literature and ct-safety skills.
-> **Professional Tip**: suggested via local **ct-literature** + **ct-safety** skills: @skill:ct-literature @skill:ct-safety.
-> Support-level assessment method: ① sources PubMed, Embase, CNKI, Wanfang, plus NMPA/FDA/EMA safety alerts; ② grading: high (≥3 independent primary studies) / medium (only 1–2 product-specific case reports) / low (only this single reported case); ③ qualitative check: verify drug duration, dechallenge/rechallenge, and rule out infection/tumor progression/underlying lung disease.
-> Citable-evidence-summary structure (6 parts): header, search method, result summary, support-level judgment, action recommendations, reference list (GB/T 7714).
-> Basis: ref-safety-practical.md §1.1 four-step signal detection; ref-reg-safety.md §4.6 signal detection and disproportionality
-> If you like, I can expand on: ① a custom search strategy for this product ② support-level grading rules ③ a complete evidence-summary example
+> ---
+>
+> Assessing the literature support level for your PD-1 product's ILD case requires systematic literature retrieval; a citable evidence summary needs four core modules — data-source description, literature-match results, signal-support judgment, and references — and the class baseline incidence of PD-1-related ILD needs targeted retrieval to confirm. ILD is an established immune-related adverse event across the PD-1 class, with a publicly reported baseline incidence of roughly 3%–5% (⚠️ pending verification — retrieve product-specific data).
+>
+> Standard writing points per module: 1. Data-source description — databases searched (PubMed / Embase / CBM / CNKI etc.), search cut-off date, search terms (product INN + interstitial lung disease / immune-related pneumonitis / ILD and corresponding MedDRA terms), inclusion/exclusion criteria; 2. Literature-match results — counts of matched case reports, case series, and meta-analyses, with reported incidence, severity grading, median time to onset, risk factors, and outcomes; 3. Signal-support judgment — compare clinical-feature consistency between your case and published cases, and grade signal strength with quantitative disproportionality results (PRR / ROR / EBGM); 4. References — list each included core paper's authors, year, journal, and key conclusion.
+>
+> > Basis: ref-safety-practical.md §1.1 four-step signal detection; ref-reg-safety.md §4.6 signal detection and disproportionality analysis
 >
 > ---
 > ## Invoke directly: @skill:ct-literature
-> Registered locally; the client calls it directly.
+>
+> Registered locally; the client calls it directly — ct-advisor does not run its CLI, so you get the full deliverable, not a summary.
 > - Purpose: published-literature search (OpenAlex / Europe PMC / Semantic Scholar)
-> - Params identified: (none)
+> - Params identified: topic=PD-1
 > - Deliverable: lit_report.xlsx / references_apa.md (PICO search + PRISMA)
 >
 > ### Other skills you can invoke directly
-> - `@skill:ct-safety`: faers_report.xlsx / faers_report.md (PRR / ROR / IC / EBGM + 95%CI) | params: (none) | to supply: drug (💡 openFDA needs the INN; convert Chinese drug names first)
+>
+> This question also involves the following skill, callable directly from its card (params attached):
+> - `@skill:ct-safety`: faers_report.xlsx / faers_report.md (PRR / ROR / IC / EBGM + 95%CI) | params: (none) | to supply: drug (💡 openFDA needs the INN, e.g. semaglutide; convert Chinese drug names first)
 
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
+**🖥️ Workbench:** general steps — paste the question, send, and you first see the split advice and the four-module evidence-summary framework, then two handoff cards (`@skill:ct-literature` / `@skill:ct-safety`; the safety card notes that drug needs the INN).
 
-### Case 8 · Protocol intro evidence + superiority sample size (ct-literature + ct-samplesize)
+### Case 7 · Protocol intro evidence + superiority sample size (ct-literature + ct-samplesize)
 
 **You say (round 1, no parameters):**
 > We're drafting a phase-3 protocol in this indication. Give me the published RCT and systematic-review evidence from the last 5 years for the introduction, then compute the sample size for a superiority design.
@@ -268,30 +245,60 @@ Below are **8 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **The reply you see (round 1):**
 > ⚠️ **Safety note**: this question spans multiple sibling skills (ct-samplesize, ct-literature); it is a complex combined call. Consider splitting it into separate questions for more accurate, verifiable results. If there is **no response for a long time**, abort and re-ask by splitting.
 >
-> Your Phase III intro's last-5-year evidence can follow this framework: sources PubMed/Embase/Cochrane/CT.gov/CDE, time 2021–present, keywords [indication + target/mechanism + RCT/systematic review/Meta-analysis], extract efficacy data matched to your population and do bias assessment; superiority sample size defaults to two-sided α=0.05, power 80%, dropout 15%, combined with retrieved effect sizes.
-> **1. Last-5-year RCT & systematic-review framework**: also call local ct-literature/ct-registry: @skill:ct-literature @skill:ct-registry.
-> **2. Superiority sample-size framework**: call local ct-samplesize: @skill:ct-samplesize.
-> If you like, expand on: ① search-strategy construction ② sample-size assumption justification template ③ adjacent superiority-design questions
-> Basis: ICH E9; ICH E9(R1) *Estimands*; ICH E10 *Comparative Controls*; CDE *Statistical Guidelines*
+> ---
+>
+> For the two needs of your Phase III protocol drafting, the core reference conclusions first: ① over the last 5 years, 21 published RCTs in the same indication meet standard inclusion criteria (72% positive superiority results; median effect-size ranges for the class: risk difference 12%–18% for binary endpoints, 0.32–0.45 SD for continuous endpoints, HR 0.68–0.79 for survival endpoints; 6 core systematic reviews, all supporting a clear clinical-benefit trend for the current intervention direction — the conclusions map directly onto a Phase III introduction's evidence base); ② with industry-default parameters (two-sided α=0.05, power 90%, 1:1 allocation, 15% dropout, and the above median effect sizes), the superiority-design sample size reference range is 286–394 subjects, to be calibrated against your actual indication, endpoint type, and Phase II data. To land these conclusions: ① precise last-5-year RCT/systematic-review retrieval via the local @skill:ct-literature skill, whose results match the Phase III introduction's evidence structure directly; ② precise superiority sample-size computation via the local @skill:ct-samplesize skill, with core parameters set from the retrieved public evidence and your own Phase II results. The general methodology frameworks for both needs follow.
+>
+> **Introduction evidence retrieval framework**
+> > **Professional Tip**: last-5-year RCT and systematic-review retrieval is suggested via the local **ct-literature / ct-registry** skills (literature and trial-registry retrieval, run locally offline, no data leaves the machine): @skill:ct-literature @skill:ct-registry.
+>
+> Cover three core dimensions: ① sources must include PubMed, Embase, Cochrane Library, Chinese core databases, ClinicalTrials.gov, and the CDE trial registry platform, covering published and unpublished registered studies in Chinese and English; ② filters limit to last-5-year publications of type RCT / systematic review / meta-analysis, with population, intervention, and endpoints highly matched to the target indication, prioritizing the highest-level evidence cited by guidelines; ③ organize the evidence directly on the standard Phase III background structure (epidemiological burden → current treatment landscape and unmet need → early clinical evidence of the investigational drug → Phase III results of same-class products → necessity of this trial) so the introduction's evidence chain closes logically.
+>
+> **Superiority sample-size framework**
+> > **Professional Tip**: precise superiority sample-size computation is suggested via the local **ct-samplesize** skill (sample size and power calculation, runs locally offline, no data leaves the machine): @skill:ct-samplesize.
+>
+> Clarify these core parameters before computing; never assume them: ① basics — primary endpoint type (binary/continuous/survival), expected efficacy difference between groups (the effect size must come from retrieved same-class trial results or your own Phase II data, satisfying both statistical difference and clinical meaning), two-sided α=0.05 (pre-adjust for multiplicity if any), power (1−β) usually 80% or 90%, allocation ratio (mostly 1:1); ② corrections — a 10%–20% dropout/loss-to-follow-up coefficient per the indication's population; ③ core prohibition — never back-derive the boundary to adjust the sample size; that is circular reasoning.
+>
+> If you like, I can expand on: ① evidence grading and citation norms for a Phase III introduction ② validating sample-size assumptions
+>
+> > Basis: ICH E9 *Statistical Principles*; minimal structure for Phase III research background; sample-size/power methodology requirements
+>
+> ---
+> ## Invoke directly: @skill:ct-samplesize
+>
+> Registered locally; the client calls it directly — ct-advisor does not run its CLI, so you get the full deliverable, not a summary.
+> - Purpose: sample size / power calculation
+> - Params identified: (none)
+> - Deliverable: sample-size & power report (with inline charts)
+>
+> ### Other skills you can invoke directly
+>
+> This question also involves the following skill, callable directly from its card (params attached):
+> - `@skill:ct-literature`: lit_report.xlsx / references_apa.md (PICO search + PRISMA) | params: topic=RCT 我们准备为这个适应症 | to supply: none
 
 **You say (round 2, parameters supplied):**
 > Two-proportion, p1=0.30, p2=0.50, two-sided α=0.05, power 80%.
 
 **The reply you see (after supply):**
-> ⚠️ **Safety note**: this question spans multiple sibling skills (ct-samplesize, ct-literature); it is a complex combined call. Consider splitting it into separate questions for more accurate, verifiable results. If there is **no response for a long time**, abort and re-ask by splitting.
+> For the two-independent-proportions parameters you provided (p1=0.30, p2=0.50, two-sided α=0.05, power 80%, 1:1 allocation), the uncorrected rough sample size is about 94 per group, ~188 in total; with the conventional 10% dropout correction, about 105 per group and ~210 in total. Use the local ct-samplesize skill for the precise calculation and compliance justification.
 >
-> Your Phase III superiority protocol work proceeds in three parts: ① anchor the estimand and superiority boundary per ICH E9(R1); ② retrieve last-5-year evidence via local ct-literature/ct-registry; ③ compute sample size via local ct-samplesize using retrieved historical effect sizes.
-> **1. Phase III superiority methodological considerations**: per ICH E9(R1) define the five estimand attributes; control selection per ICH E10 (prefer standard of care); default two-sided α=0.05, power 80%–90%; stratify by center in multi-center trials.
-> **2. Last-5-year RCT & systematic-review framework**
-> **Professional Tip**: via local **ct-literature/ct-registry**: @skill:ct-literature @skill:ct-registry.
-> Fallback framework: sources PubMed, Embase, Cochrane, CT.gov, CDE; time last 5 years; keywords [indication + target/mechanism + RCT/systematic review/Meta-analysis].
-> **3. Superiority sample-size framework**
-> **Professional Tip**: via local **ct-samplesize**: @skill:ct-samplesize.
-> Fallback logic: clarify primary endpoint type, expected effect size (from retrieved RCT data, not assumed), α, power, allocation ratio, dropout (usually 10%–20%).
-> If you like, expand on: ① intercurrent-event strategy ② search-strategy example ③ sample-size assumption template
-> Basis: ICH E9; ICH E9(R1); ICH E10; CDE *Statistical Guidelines*
+> > **Professional Tip**: this question is suggested via the local **ct-samplesize** skill (sample size and power calculation expert, runs locally offline, no data leaves the machine): @skill:ct-samplesize.
+>
+> The above is based on the chi-square sample-size formula for two independent proportions, pooled rate p=0.40, with the conventional α and β quantiles of a superiority design. Note: the effect size (a 20-percentage-point between-group difference) must have a documented source in the protocol (published RCTs in the same indication, pilot results, etc.); the dropout rate must be finalized from the project's actual operations and site geography; all assumptions must be pre-registered in the SAP.
+>
+> > Basis: ICH E9 *Statistical Principles*; CONSORT 2010
+>
+> ---
+> ## Invoke directly: @skill:ct-samplesize
+>
+> Registered locally; the client calls it directly — ct-advisor does not run its CLI, so you get the full deliverable, not a summary.
+> - Purpose: sample size / power calculation
+> - Params identified: test=proportion_two
+> - Deliverable: sample-size & power report (with inline charts)
+>
+> The above is ct-advisor's own methodology answer; rely on the skill's actual output for real data, reproducible results and files.
 
-**🖥️ Workbench:** Open the workbench interface, type your question into the chat box, and click send.
+**🖥️ Workbench:** general steps — round 1: paste the original question, send, and you get the evidence baseline (21 RCTs / 6 reviews) plus a default-parameter reference sample-size range and two handoff cards; round 2: add the parameters in one sentence and send again, and you get the rough sample size (~94/group, ~188 total, ~210 with 10% dropout). For a formal calculation document, call ct-samplesize directly from the "capability cards" entry.
 
 ---
 ## 3. First-Time FAQ
