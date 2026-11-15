@@ -1,6 +1,6 @@
 {
   "version": "2026-09-29",
-  "generated_at": "2026-11-14T11:38:27.950885",
+  "generated_at": "2026-11-15T12:11:37.109115",
   "source_dir": "C:\\Users\\WintoneFileSrv\\.workbuddy\\skills",
   "skills": {
     "ct-adam": {
@@ -354,8 +354,8 @@
     "ct-safety": {
       "name": "ct-safety",
       "display_name": "Clinical Trial Safety Signal / 临床试验安全信号专家",
-      "version": "0.10.7",
-      "summary": "基于 FDA FAERS 筛查药物-事件安全信号，计算 disproportionality（PRR / ROR / IC / EBGM，含 95% CI）与安全信号评分（0–100，T1–T4）。数据源：FDA FAERS（openFDA drug/event.json）、FDA 标签（drug/label.json）、中国 NMPA 药物警戒通报（cdr-adr.org.cn）、DailyMed 说明书、RxClass MED-RT、openFDA 召回执法、香港 ADR 警报。仅公开数据，零保密输入。",
+      "version": "0.10.12",
+      "summary": "基于 FDA FAERS 筛查药物-事件安全信号，计算 disproportionality（PRR / ROR / IC / EBGM，含 95% CI）与安全信号评分（0–100，T1–T4）。数据源：FDA FAERS、FDA 标签、中国 NMPA 药物警戒通报、DailyMed 说明书、RxClass MED-RT、openFDA 召回执法、香港 ADR 警报。",
       "triggers": [
         "FAERS safety signal",
         "安全性信号分析",
