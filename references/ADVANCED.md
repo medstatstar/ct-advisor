@@ -197,6 +197,10 @@ Short-circuit return shape: cache/dedup hit on `/async_run` returns `{"task_id":
 > `SKILL.md` **without editing a single line**; they remain authoritative. The entry file
 > keeps the HIGHEST PRIORITY action, F33 guardrail, HARD GATE integrity table, Quality Gate,
 > Outbound Authorization Gate and Bug Report, and links back here.
+> Pulled back into SKILL.md on 2026-11-15 (removed here to keep a single source):
+> canonical `entry.py` pipeline, session/context/cache/routing, requirements,
+> attachment handling, external tool references, and the Error Self-Heal Protocol
+> (the LLM-intervention boundary, pulled back 2026-11-15).
 
 ### Return path: `entry.py --stitch` (2026-11-09)
 
@@ -254,21 +258,6 @@ delivered, with the reason stated. Covered by
 >
 > `scripts/ask.py` still exists but is **not** the entry point: it is a zero-logic forwarder
 > that inherits `entry.py`'s stdout/stderr/exit code for stale callers.
-
-### What entry.py does internally (all code, zero LLM) — the canonical pipeline
-
-```
-STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
-        ├─ < 5 MB   → doc_memory.build_file_payload(allow_upload=True): upload ORIGINAL file to Coze /upload_file, ship as `doc_context` (mode=file_id; base64-forward fallback on failure)
-        └─ > 5 MB   → convert locally (office_to_md.py for OOXML / direct read for txt-like), upload the resulting **.md** through the SAME doc_context channel + ℹ️ notice that cloud answers from the md version
-STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
-STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): Coze async submit (/async_run, ms-level → task_id) + local prefetch (handoff card by default; brief only when explicitly enabled) → poll /task/{id} until terminal → merge (sync /run only as fallback when the async endpoint is unavailable)
-STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM); since 2026-11-09 this normally emits a client handoff card (@skill:<slug>) instead of executing the sibling CLI
-STEP 5  Output — entry.py writes the answer file (UTF-8), then the same bytes + `<<<CT_ANSWER_END>>>` + `checksum:` + `answer_file:` to stdout.buffer (single protocol, single producer since v1.3.21)
-```
-
-> **LLM-forbidden zone**: every STEP above is executed by code. The local LLM
-> never picks the channel, never judges difficulty, never decides forwarding.
 
 ### Output format
 
@@ -388,10 +377,6 @@ This skill has implemented four performance optimizations; see `PERF_SOP.md` for
 
 A manual shutdown endpoint remains available for rescue scenarios — see `references/ADVANCED.md`. End users never need it.
 
-## Session, Context, Cache & Routing
-
-Local modules enrich the Coze payload: multi-turn `conversation_history`, 30-min cross-session answer cache, 10-min near-duplicate dedup, and a controlled-vocabulary domain router (`scope_guard`). All four capabilities are wired into both `entry.py` and the workbench proxy. Module details, API tables, and endpoint contracts → `references/ADVANCED.md`.
-
 ## Capability Domains — Expanded Coverage (2026-10-22)
 
 Coverage was broadened per user mandate: the three previously-uncovered but high-frequency real-user blocks — **regulatory response / trial operations / deliverable drafting** — are now first-class in-scope core domains (mapped to `scope_guard` labels `compliance` / `ops` / `writing`). They are **never** empty-refused; only clearly non-medical / non-life-science questions get a constructive referral. Full sub-topic catalog + authoritative anchors (ICH / NMPA / CDE / TransCelerate / DIA / CASRAI / EQUATOR, searched 2026-10-22) live in **`docs/capability_domains.md`**. Summary:
@@ -489,37 +474,6 @@ changes require **republishing the Coze package** — the v1.60 build is
 live endpoint still runs the previous rules. Regression:
 `scripts/test_consult_intent.py` (35 offline cases).
 
-## Requirements
-
-| Item | Requirement |
-|---|---|
-| Runtime | `python3` stdlib only |
-| Sibling skills | **Client-callable since 2026-11-09**: the client can invoke every locally registered `ct-*` skill directly. Availability is decided by `scripts/sibling_registry.json` (`skills[*].installed`) plus `<SKILLS_DIR>/<slug>/SKILL.md`, implemented in `handle_need_tool._client_callable()` — **not** by SkillHub listing. `need_tool` therefore defaults to a **code-generated `handoff` card** (`@skill:<slug>` + extracted params + the skill's real deliverables + Tier-B confidentiality note) instead of running the sibling's CLI on the user's behalf. `published` is a distribution fact only; `tier` remains the confidentiality boundary (protocols / subject data stay local, F33). `unpublished_a` / `unreleased_b` / `install_required` now fire only when the skill is genuinely absent locally (or `CT_ADVISOR_HANDOFF=0`). |
-| Refiner (Coze) | `scripts/entry.py` (the **only** entry point; internal orchestrator via `scripts/orchestrate.py`) sends payload to `ct-advisor.coze.site` — **async-first** (v1.3.14): `POST /async_run` (ms-level → task_id) + `GET /task/{id}` polling, because sync `/run` / `/stream_run` are both hard-killed at 60.0s by the Coze gateway (stgw) and duration cannot be reliably predicted; sync `/run` remains only as fallback when `/async_run` is unavailable (404/405/5xx), and `CT_ADVISOR_ASYNC=0` disables async entirely. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout (= polling deadline in async mode). |
-| External Refs | **teal** (insightsengineering) — clinical-data interactive exploration framework; **Docling** — structured PDF parsing. See "External Tool References". |
-
-## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
-
-**Single gate = 5 MB, decided FIRST inside `entry.py` (v1.1.0 workflow correction, 2026-09-25). BOTH paths deliver a FILE to Coze through the same `doc_context` channel.**
-
-| Size | Behavior | Channel |
-|---|---|---|
-| `< 5 MB` | **Upload the original file directly** — never converted locally | `doc_memory.build_file_payload(allow_upload=True)` → Coze `/upload_file` → `doc_context` (`mode=file_id`); on upload failure auto-degrades to the base64 forward channel (`mode=file`) |
-| `> 5 MB` | Convert to Markdown locally, then **upload the resulting `.md` as the attachment** — same `doc_context` channel — plus an ℹ️ notice that the cloud answers from the md version | `scripts/office_to_md.py` (stdlib-only; OOXML) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported formats get an explicit user prompt |
-
-Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.xls/.ppt` included), so fidelity is higher than any local conversion — this is why the <5 MB path uploads instead of converting.
-
-**Governance pointer**: layered conversion strategy, user prompts and confidentiality boundary are consolidated in **ct-base §6.7**; the shared converter lives in `ct-base/scripts/office_to_md.py` (vendored copy).
-
-**Deliverable boundary — the revised document is never returned (v1.24).** This skill's deliverable is **text only**: it does not generate, export, or hand back a modified document file. When the user asks for the revised file back, state plainly on the **first line** that **this feature is not available — only written suggestions are provided**, then give the suggestions as text the user can copy.
-
-## External Tool References (v1.3.4 · external authoritative assets)
-
-- **teal** (insightsengineering, `install.packages('teal')`) — clinical-data interactive exploration framework for building Shiny review apps; reference model for the data-review integration mode.
-- **Docling** (`pip install docling`) — structured parsing of regulatory documents (protocol/IB/CSR PDFs → hierarchical Markdown/JSON); attachment-parsing enhancement layer.
-- **Pinnacle 21 Validation Rules** (Certara, public API `standards.pinnacle21.certara.net/validation-rules/<STD>`, header `X-Requested-With: XMLHttpRequest`) — industry-standard CDISC validation rule set; snapshots archived in `ct-base/references/pinnacle21_validation_rules/` (SDTM 566 / SEND 581 / ADaM 456 / Define-XML 167). Authoritative benchmark for data-standard compliance Q&A; mirrored to Coze KB topic `ref-topic-p21-data-rules`.
-- **ICH M12 DDI Thresholds** (Step 4/5 official PDFs archived alongside `ct-base/references/m12_thresholds.md`) — CYP 50× / intestinal 10×, TDI 1.25, induction R-ratio, transporter Table 1, AUCR 0.80–1.25, GMR 90% CI 80–125%. Authoritative benchmark for DDI interaction Q&A; mirrored to Coze KB topic `ref-topic-m12-ddi`.
-
 ## Retrieval Keyword Translation Gate (ct-base bilingual_retrieval §5 · 2026-11-11)
 
 When the Advisor delegates retrieval to ct-registry / ct-literature: if the delegated skill
@@ -541,43 +495,3 @@ Two mandatory paths (P1-4 / P2-5, reinforced 2026-11-11):
    比索洛尔 / 富马酸比索洛尔) sending them space-joined is **forbidden** (AND semantics
    guarantee zero hits) — show the translation confirmation card and let the user choose first;
    for terms with no mapping, ask the user for a reference term or an explicit waiver before searching.
-
-## Error Self-Heal Protocol (stderr machine signals · 2026-10-15)
-
-**Scope — failure paths ONLY.** On a successful run (`scripts/entry.py` exits 0 and prints the answer, and **no `[ct-advisor][ERR]` line on stderr**), the agent delivers the answer and stops. **The agent MUST NOT enter self-healing when no error was reported** — no proactive health checks, no proactive dependency installs, no proactive config/env edits, no speculative retries. The `[ct-advisor][ERR]` signal is the **only** trigger.
-
-> **Where signals live (2026-10-16)**: the resident service (`scripts/serve.py`) is spawned with `stderr=DEVNULL`, so anything written inside the service process — including an `[ct-advisor][ERR]` emitted on the service path — is redirected by the service itself to **`config/serve.log`** (auto-truncated at 1 MB). If `entry.py` prints no `<<<CT_ANSWER_END>>>` marker (empty or destroyed stdout) while stderr carries no `[ERR]` line, read the tail of `config/serve.log` before concluding anything.
-
-**Signal format (single line, stderr):**
-
-```
-[ct-advisor][ERR] code=<CODE> auto_fixable=<true|false> retry_safe=<true|false> requires_network=<true|false> [detail="…"] [fix_cmd="…"]
-```
-
-**Code → agent action:**
-
-| code | auto_fixable | retry_safe | requires_network | Agent action |
-|---|---|---|---|---|
-| `CONN_FAIL_PROXY` | false | true | true | Deliver the answer-block text verbatim (it carries numbered recovery steps). Offer **one** retry only after the user confirms the proxy/network is fixed. Never edit env or config yourself. |
-| `CONN_FAIL_DIRECT` | false | true | true | Same as above. |
-| `TIMEOUT` | false | **false** | true | Deliver verbatim. **Never auto-retry** — Coze likely already received the request; a blind retry duplicates it. |
-| `AUTH_401` | false | false | false | Deliver verbatim; explain the token must be renewed by the skill maintainer. Do not edit any skill file. |
-| `COZE_HTTP_ERROR` | false | false | true | Deliver verbatim; a user-initiated retry after 1–2 minutes is acceptable. |
-| `ORCH_FAIL` | false | false | false | Deliver verbatim; ask the user to report the `detail` field to the skill maintainer. |
-
-**Hard rules (violating any of these is a defect):**
-
-1. **No signal → no action.** Absence of `[ct-advisor][ERR]` means success; the agent must not probe, install, edit, or retry anything.
-2. `fix_cmd` may be executed **only** when `auto_fixable=true` (after the 2026-10-15 stdlib-urllib transport change, **no code currently qualifies** — the dependency-missing class was eliminated) **and** the user has explicitly confirmed. Execute it **verbatim**; never improvise commands; never edit skill files or `config.json` (same red line as the Outbound Authorization Gate).
-3. At most **one** retry per user turn, only after a successful fix, and only when `retry_safe=true`.
-4. `requires_network=true` means the fix itself needs working outbound access — resolve network-class errors first.
-5. Self-healing covers **transport repair only**. It never licenses local answer generation — the coze-only red line stands.
-6. If stderr carries an `[ERR]` line but stdout has no answer block, treat the turn as failed: relay the signal's meaning plus any human-readable guidance. **Never fabricate an answer.**
-7. Signals are emitted from failure paths only (`adapters/errsignal.py::emit_err_signal`). If an `[ERR]` line appears on a run that returned a valid answer, treat it as a skill defect and report it.
-
-**Note on `[DEP-MISS]`:** before 2026-10-15 a missing `requests` library surfaced as `[DEP-MISS]` + an install prompt. The transport now uses stdlib `urllib`, so this failure class no longer exists; the handler remains as dormant defensive code.
-
-**2026-10-26 · ct-base §22.24 dual-track governance framework**: as the ct-series single entry point routing to ct-samplesize/ct-registry/ct-safety/ct-literature/ct-protocol, any classification judgement involving AI-as-intervention (prospective evaluation + SPIRIT-AI/CONSORT-AI) vs AI-for-trial-operations (workflow accuracy + TRIPOD-AI/ICH E6(R3)) follows the §22.24 dual-track governance framework (EClinicalMedicine 2026-10).
-
----
-
