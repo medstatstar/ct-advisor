@@ -154,6 +154,9 @@ config/serve.log
 browser_tests.py
 ctqa.config.json
 
+# ── 内部可行性评估稿（§21.9 竞品名称红线，2026-11-11 发布前补）──
+docs/zhihu_scraping_feasibility_*.md
+
 # ── 运行态会话缓存（2026-11-04 修正 git add -A 误纳入）──
 # session_store.json.tmp 是本地答案缓存，不入版本库。
 *.tmp
