@@ -92,15 +92,7 @@ Machine-checked by `ct-base/scripts/spec_lint.py` rule **F33**.
 
 ### 🔴 When the local LLM may act at all
 
-Normal path: `scripts/entry.py` runs, the answer is delivered verbatim, and the
-local LLM analyzes nothing. It may intervene **only** when code-level parsing
-actually fails — a missing `<<<CT_ANSWER_END>>>` marker, a checksum mismatch, a
-garbled stdout body, or an `[ct-advisor][ERR]` signal on stderr. Parse-shape failures
-follow the Integrity check table above; `[ERR]` alone triggers self-healing below.
-Even then the action is mechanical only: re-capture the **same** command, read the
-printed `answer_file:` path, or relay the machine signal. **Never** decode, repair,
-reconstruct, summarise or author answer content, and never fall back to the host
-model's own knowledge. Parse-failure byte-level rules: `ADVANCED.md` §9.
+Normal path: `scripts/entry.py` runs, the answer is delivered verbatim, and the local LLM analyzes nothing. It may intervene **only** when code-level parsing actually fails — a missing `<<<CT_ANSWER_END>>>` marker, a checksum mismatch, a garbled stdout body, or an `[ct-advisor][ERR]` signal on stderr. Parse-shape failures follow the Integrity check table above; `[ERR]` alone triggers self-healing below. Even then the action is mechanical only: re-capture the **same** command, read the printed `answer_file:` path, or relay the machine signal. **Never** decode, repair, reconstruct, summarise or author answer content, and never fall back to the host model's own knowledge. Parse-failure byte-level rules: `ADVANCED.md` §9.
 
 > **`--stitch` is the sole non-forwarding mode.** It consumes skill outputs that already exist (no question is being answered, so no Coze call happens). It is still `entry.py`, still zero-LLM, still the one permitted action — see the Return path section below.
 
@@ -124,11 +116,9 @@ STEP 5  Output — entry.py writes the answer file (UTF-8), then the same bytes 
 
 > **LLM-forbidden zone**: every STEP above is executed by code. The local LLM never picks the channel, never judges difficulty, never decides forwarding.
 
-
 ## Session, Context, Cache & Routing
 
 Local modules enrich the Coze payload: multi-turn `conversation_history`, 30-min cross-session answer cache, 10-min near-duplicate dedup, and a controlled-vocabulary domain router (`scope_guard`). All four capabilities are wired into both `entry.py` and the workbench proxy. Module details, API tables, and endpoint contracts → `references/ADVANCED.md`.
-
 
 ## Requirements
 
@@ -138,7 +128,6 @@ Local modules enrich the Coze payload: multi-turn `conversation_history`, 30-min
 | Sibling skills | **Client-callable since 2026-11-09**: the client can invoke every locally registered `ct-*` skill directly. Availability is decided by `scripts/sibling_registry.json` (`skills[*].installed`) plus `<SKILLS_DIR>/<slug>/SKILL.md`, implemented in `handle_need_tool._client_callable()` — **not** by SkillHub listing. `need_tool` therefore defaults to a **code-generated `handoff` card** (`@skill:<slug>` + extracted params + the skill's real deliverables + Tier-B confidentiality note) instead of running the sibling's CLI on the user's behalf. `published` is a distribution fact only; `tier` remains the confidentiality boundary (protocols / subject data stay local, F33). `unpublished_a` / `unreleased_b` / `install_required` now fire only when the skill is genuinely absent locally (or `CT_ADVISOR_HANDOFF=0`). |
 | Refiner (Coze) | `scripts/entry.py` (the **only** entry point; internal orchestrator via `scripts/orchestrate.py`) sends payload to `ct-advisor.coze.site` — **async-first** (v1.3.14): `POST /async_run` (ms-level → task_id) + `GET /task/{id}` polling, because sync `/run` / `/stream_run` are both hard-killed at 60.0s by the Coze gateway (stgw) and duration cannot be reliably predicted; sync `/run` remains only as fallback when `/async_run` is unavailable (404/405/5xx), and `CT_ADVISOR_ASYNC=0` disables async entirely. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout (= polling deadline in async mode). |
 | External Refs | **teal** (insightsengineering) — clinical-data interactive exploration framework; **Docling** — structured PDF parsing. See "External Tool References". |
-
 
 ## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
 
@@ -154,7 +143,6 @@ Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.x
 **Governance pointer**: layered conversion strategy, user prompts and confidentiality boundary are consolidated in **ct-base §6.7**; the shared converter lives in `ct-base/scripts/office_to_md.py` (vendored copy).
 
 **Deliverable boundary — the revised document is never returned (v1.24).** This skill's deliverable is **text only**: it does not generate, export, or hand back a modified document file. When the user asks for the revised file back, state plainly on the **first line** that **this feature is not available — only written suggestions are provided**, then give the suggestions as text the user can copy.
-
 
 ### 🔴 Integrity check (HARD GATE · simplified in v1.3.19, final in v1.3.21)
 
@@ -189,7 +177,6 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 - **Docling** (`pip install docling`) — structured parsing of regulatory documents (protocol/IB/CSR PDFs → hierarchical Markdown/JSON); attachment-parsing enhancement layer.
 - **Pinnacle 21 Validation Rules** (Certara, public API `standards.pinnacle21.certara.net/validation-rules/<STD>`, header `X-Requested-With: XMLHttpRequest`) — industry-standard CDISC validation rule set; snapshots archived in `ct-base/references/pinnacle21_validation_rules/` (SDTM 566 / SEND 581 / ADaM 456 / Define-XML 167). Authoritative benchmark for data-standard compliance Q&A; mirrored to Coze KB topic `ref-topic-p21-data-rules`.
 - **ICH M12 DDI Thresholds** (Step 4/5 official PDFs archived alongside `ct-base/references/m12_thresholds.md`) — CYP 50× / intestinal 10×, TDI 1.25, induction R-ratio, transporter Table 1, AUCR 0.80–1.25, GMR 90% CI 80–125%. Authoritative benchmark for DDI interaction Q&A; mirrored to Coze KB topic `ref-topic-m12-ddi`.
-
 
 ## Error Self-Heal Protocol (stderr machine signals · 2026-10-15)
 
@@ -232,18 +219,13 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 
 ## Extended reference
 
-The sections below remain in [`references/ADVANCED.md`](references/ADVANCED.md) (moved
-2026-11-15); they are authoritative and `ct-base/BASE.md §N.M` anchors are unchanged.
-Pulled back into this file during the 2026-11-15 compaction: the canonical `entry.py`
-pipeline, session/context/cache/routing, requirements, attachment handling, external tool references and the Error Self-Heal Protocol.
+The sections below remain in [`references/ADVANCED.md`](references/ADVANCED.md) (moved 2026-11-15); they are authoritative and `ct-base/BASE.md §N.M` anchors are unchanged. Pulled back into this file during the 2026-11-15 compaction: the canonical `entry.py` pipeline, session/context/cache/routing, requirements, attachment handling, external tool references and the Error Self-Heal Protocol.
 
 - Return path (`entry.py --stitch`) and the full output-format contract
 - Integrity-check verification code and the extended HARD GATE field table
 - Performance / deployment notes; capability domains; client handoff contract
 - Consultation vs execution; retrieval keyword translation gate
 
-The HIGHEST PRIORITY action, the Data Egress Guardrail (F33), the HARD GATE integrity
-table, Quality Gate / Stop Rules, Outbound Authorization Gate and Bug Report stay in this file.
+The HIGHEST PRIORITY action, the Data Egress Guardrail (F33), the HARD GATE integrity table, Quality Gate / Stop Rules, Outbound Authorization Gate and Bug Report stay in this file.
 
-Agents: read `HIGHEST PRIORITY` and the HARD GATE list before any action;
-the operational sections above are reference material and never override the single-entry-point rule.
+Agents: read `HIGHEST PRIORITY` and the HARD GATE list before any action; the operational sections above are reference material and never override the single-entry-point rule.
