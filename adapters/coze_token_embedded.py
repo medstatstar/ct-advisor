@@ -83,7 +83,7 @@ EMBEDDED_SECRETS = {
     # ct-search 统一检索端点（ct-registry/coze）的共享公开凭据，2026-11-09 迁入。
     # 与 ct-registry/adapters/endpoint_token.py::EMBEDDED_SECRETS["coze_unified"]
     # 同源同值，但用本文件自己的 OBFUSCATION_KEY 重新编码，避免引入第二套解码逻辑。
-    # 用途：ct-advisor 的 brief 速览通道（scripts/cloud_brief.py）直连 ct-search，
+    # 用途：ct-advisor 的 brief 速览通道（adapters/cloud_brief.py）直连 ct-search，
     # 使本地不再依赖 ct-registry 技能已安装。仍是公开共享凭据，非个人密钥。
     #
     # ── 🔴 给代码维护者：凭据轮换（非运行时用户提示）──────────────────
@@ -217,7 +217,7 @@ def get_bugreport_token(cli_token: str = None, token_path: str = None,
 def get_search_token(cli_token: str = None) -> str:
     """ct-search 统一检索端点（ct-registry/coze）的共享公开凭据。
 
-    由 ``scripts/cloud_brief.py`` 调用，用于 ct-advisor 的 brief 速览通道。
+    由 ``adapters/cloud_brief.py`` 调用，用于 ct-advisor 的 brief 速览通道。
     读取优先级：CLI > env ``CT_ADVISOR_BRIEF_TOKEN`` > 内嵌 blob。
     契约：解析不到一律返回空串（调用方据此回落本地 need_tool 执行卡），绝不抛异常。
     """

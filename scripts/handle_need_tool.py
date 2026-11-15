@@ -802,10 +802,12 @@ def execute_card(card: dict) -> dict:
     #    让用户不必为了一句速览问答而先安装三个技能。开关关闭时本块零副作用。
     import sys  # noqa: F401 - 保证下方 stderr 信号在直接调用本函数时可用
     # 本模块既被 subprocess 直接运行、也被 refine_answer.py import；后者场景下
-    # sys.path 未必含 scripts/，显式补齐，避免 import 失败被误当成「回落」静默降级。
+    # sys.path 未必含 adapters/（cloud_brief 已按 §16.9 归位），显式补齐，避免 import 失败被误当成「回落」静默降级。
     _scripts_dir = str(Path(__file__).resolve().parent)
-    if _scripts_dir not in sys.path:
-        sys.path.insert(0, _scripts_dir)
+    _adapters_dir = str(Path(__file__).resolve().parent.parent / "adapters")
+    for _d in (_adapters_dir, _scripts_dir):
+        if _d not in sys.path:
+            sys.path.insert(0, _d)
     try:
         from cloud_brief import try_cloud_brief
         _brief_text = try_cloud_brief(card)

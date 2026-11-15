@@ -13,7 +13,7 @@
      串行耗时对照 0.5.00 基线（registry 24s / literature 18s / safety 12s）。
 
 用法：
-    C:/Tools/Anaconda3/python.exe scripts/canary_cloud_brief.py --only all
+    C:/Tools/Anaconda3/python.exe adapters/canary_cloud_brief.py --only all
     --only search | guard | advisor | local | perf | all     默认 all
     --check                                          离线自检（不触网），校验契约与凭证
 退出码：0 全通过 / 1 有 FAIL / 2 环境或凭证错误
@@ -39,7 +39,7 @@ from pathlib import Path
 
 S = Path(__file__).resolve().parents[1]
 SKILLS = S.parent
-for p in (str(S / "scripts"), str(S)):
+for p in (str(S / "adapters"), str(S / "scripts"), str(S)):
     if p not in sys.path:
         sys.path.insert(0, p)
 

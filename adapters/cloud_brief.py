@@ -26,8 +26,8 @@
 
 用法
 ====
-    python scripts/cloud_brief.py --self-test          # 离线自测，不触网
-    python scripts/cloud_brief.py --dry-run --tool ct-safety --params '{"drug":"aspirin","event":"hepatic failure"}'
+    python adapters/cloud_brief.py --self-test          # 离线自测，不触网
+    python adapters/cloud_brief.py --dry-run --tool ct-safety --params '{"drug":"aspirin","event":"hepatic failure"}'
 """
 from __future__ import annotations
 

@@ -9,10 +9,10 @@
     "enabled_default": false,
     "on_values": ["1", "true", "yes", "on"],
     "off_values": ["0", "false", "no", "off"],
-    "local_note": "2026-11-09 晚间架构重评：**默认关闭**。客户端已可直接调用 ct-registry / ct-safety / ct-literature 本体并拿到完整交付物，brief 只给非审计级速览，继续默认启用反而会把用户挡在技能本体能力之外。仅当用户显式设 CT_ADVISOR_CLOUD_BRIEF=1（或明确要快答/速览）时，handle_need_tool.execute_card 与 orchestrate._fire_prefetch 才先走 scripts/cloud_brief.py 直连；任何失败（无凭证 / 超时 / status=error / 契约违约）自动回落 handoff / 本地执行卡（§20.19.7 红线 2）。设 0 / 不设均为关闭。",
+    "local_note": "2026-11-09 晚间架构重评：**默认关闭**。客户端已可直接调用 ct-registry / ct-safety / ct-literature 本体并拿到完整交付物，brief 只给非审计级速览，继续默认启用反而会把用户挡在技能本体能力之外。仅当用户显式设 CT_ADVISOR_CLOUD_BRIEF=1（或明确要快答/速览）时，handle_need_tool.execute_card 与 orchestrate._fire_prefetch 才先走 adapters/cloud_brief.py 直连；任何失败（无凭证 / 超时 / status=error / 契约违约）自动回落 handoff / 本地执行卡（§20.19.7 红线 2）。设 0 / 不设均为关闭。",
     "cloud_field": null,
     "cloud_note": "已废弃：Coze 云端**不持有任何共享凭据、不发起需凭据的外部调用**，不再有云端直连节点或开关。tool_router 命中后一律返回 need_tool 执行卡，由本地取数并缝合。",
-    "rollout_order": ["1. 部署 ct-search 0.5.00 云端包（纯代码检索/聚合，不含凭据）并 canary 三个 brief source", "2. 部署 ct-advisor 云端工作流（纯代码，不含凭据）", "3. 更新本地技能 / 工作台发布物（凭据仅在本地）", "4. 跑 scripts/canary_cloud_brief.py 线上回归；无需任何 Coze 控制台环境变量或输入变量配置"]
+    "rollout_order": ["1. 部署 ct-search 0.5.00 云端包（纯代码检索/聚合，不含凭据）并 canary 三个 brief source", "2. 部署 ct-advisor 云端工作流（纯代码，不含凭据）", "3. 更新本地技能 / 工作台发布物（凭据仅在本地）", "4. 跑 adapters/canary_cloud_brief.py 线上回归；无需任何 Coze 控制台环境变量或输入变量配置"]
   },
   "endpoint": {
     "run_url": "https://ct-search.coze.site/run",
