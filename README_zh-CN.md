@@ -418,10 +418,9 @@ ct-advisor 是路由到兄弟技能、并把问题转发给云端精校器的总
 
 ## 保密声明
 
-> CT 全系列技能由 20+ 个技能构成，按「输入是否涉密」分为 **A、B 两档**（network / egress / publish 为独立正交属性，详见 ct-base §11），完整覆盖新药临床试验（Clinical Trial）全流程的各方面需求。
+> CT 全系列技能由 20+ 个技能构成，按「输入是否涉密」分为 **A、B 两档**，完整覆盖新药临床试验全流程。
 >
-> - **A 档（输入非涉密）**：输入为普通数据，不涉及任何保密信息；按 `network` 子属性再分三类——① **全程本地**（`network=off`，零出域）；② **向公开源检索**（`network=public-retrieval`，如 ct-registry / ct-safety / ct-literature，仅公开查询词出域）；③ **云端专用受控出站**（`network=controlled-coze-opt-in`，如 **ct-advisor**：仅向单一云端端点出站、需用户显式 opt-in、payload 先经 `sanitize()` 脱敏，配套 `egress=cloud`）。⚠️ 注意：③ **不等于「可完全本地运行」**——其问答默认转发云端引擎，仅在云端不可达时才回退本地兜底答案（并会标注）。A 档技能均在 GitHub 公开发布。
-> - **B 档（输入涉密）**：输入含药企需严格保密的临床试验数据 / 方案 / CRF（如 ct-analysis、ct-sdtm、ct-protocol、ct-eligibility 等）；B 档**既能本地处理**（`egress=none`，数据不出域）**也能对外公开检索**（`network=public-retrieval`，如 ct-protocol 调 ct-registry / ct-literature 抓取公开试验设计与文献作参考——仅公开查询词出域）；或需审批出站（`egress=approval-req`，如 ct-eligibility）。但**均不对外公开发布**；涉密输入绝不随包 / 出站；若有定制 / 本地部署需求，欢迎与作者联系。
->
+> - **A 档（输入非涉密）**：输入为普通数据，不涉及保密信息，可本地安装后运行或Web网页方式使用，A 档技能均在 GitHub 公开发布。
+> - **B 档（输入涉密）**：输入含药企需严格保密的临床试验数据 / 方案 / CRF 等；B 档既能安装后本地处理（可保证数据不出域），也能使用Web网页方式免安装使用（数据会脱敏后再上传），但B档技能本身均不对外公开发布。若有定制 / 本地部署需求，欢迎与作者联系。
 
 > 🌐 其他语言：[English README](README.md)
