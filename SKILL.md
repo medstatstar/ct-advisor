@@ -3,7 +3,7 @@ slug: ct-advisor
 name: ct-advisor
 displayName: Clinical Trial Chief Advisor / 临床试验总顾问
 cn_name: 临床试验总顾问
-version: 1.3.47
+version: 1.3.55
 invocable: true
 required_commands: [python]
 summary: "面向临床研发全生命周期的 ct 系列「总入口」，云端辅助的临床试验总顾问，覆盖合规应答 / 项目运营 / 交付物撰写 / 方案设计 / 统计分析 / 注册申报 / 安全性 / 数据管理 / 真实世界研究等各方面。"
@@ -66,7 +66,7 @@ Machine-checked by `ct-base/scripts/spec_lint.py` rule **F33**.
 >
 > ``` {the answer text, as many lines as it needs} <<<CT_ANSWER_END>>> checksum: {sha256[:16]} answer_file: C:/Users/<user>/.workbuddy/skills/ct-advisor/_answers/{checksum}.md ```
 >
-> **One entry point, one output shape, one protocol, one place where the protocol is produced.** Since v1.3.21 there is **no base64 anywhere in the pipeline** — not between code modules, not on the wire, not in the browser. The reason is historical: v1.3.9 introduced base64 to survive cp936 console mojibake, but that forced the LLM to hand-copy a ~2.6k-char random string into a second command (2026-10-16 incident: `5Lzd` typed for `5L+d`, a "checksum failure" that was pure transcription damage, then three real Coze calls for one question). The wrapper that fixed it left two parallel protocols, a 4× payload inflation, and — once the browser started taking the API directly — a decoder in *each* client. v1.3.21 removes the need instead of managing it: **encoding is no longer a decision made at the exit**. `entry.py` writes UTF-8 bytes straight to `stdout.buffer` (constant, no code-page inspection, no flags), the marker/checksum pair is produced in exactly one function, and the same bytes are also on disk. `scripts/ask.py` survives only as a zero-logic forwarding shim for stale callers.
+> **One entry point, one output shape, one protocol, one place where the protocol is produced.** No base64 anywhere in the pipeline; `entry.py` writes UTF-8 bytes straight to `stdout.buffer` and the marker/checksum pair is produced in exactly one function. Historical rationale → `references/ADVANCED.md` §10.1.
 
 **HARD GATE — the following are absolutely PROHIBITED for the local LLM:**
 - ❌ **NEVER** read, search, or reference any local knowledge base (the `knowledge/` directory has been removed)
@@ -79,6 +79,7 @@ Machine-checked by `ct-base/scripts/spec_lint.py` rule **F33**.
 - ❌ **NEVER** translate or align language (the code already handles that)
 - ❌ **NEVER** inject process narration ("Step 2", "Coze returned", "assembling payload")
 - ❌ **NEVER** decide whether to forward to Coze — ALL questions are forwarded (entry.py handles routing internally)
+- ✅ **EXCEPTION**: when stdout carries `<<<CT_TOOL_MENU>>>`, presenting that code-generated menu to the user and re-running `entry.py --resume <token> --selected <user's literal picks>` is permitted — the agent still makes no judgement; it relays the user's choice verbatim. See "Skill-call confirmation menu" above.
 - ❌ **NEVER** wrap, encode, base64-ify, or otherwise re-transport the answer on your own — the pipeline already emits the final form
 - ❌ **NEVER** present the `answer_file:` line as part of the answer (it is a pointer, not content)
 - ❌ **NEVER** discard stderr with `2>$null` / `2>/dev/null` — stderr carries the answer-cache-hit / resident-service / `[ct-advisor][ERR]` signals that tell you whether a Coze call actually happened
@@ -89,7 +90,7 @@ Machine-checked by `ct-base/scripts/spec_lint.py` rule **F33**.
 
 Normal path: `scripts/entry.py` runs, the answer is delivered verbatim, and the local LLM analyzes nothing. It may intervene **only** when code-level parsing actually fails — a missing `<<<CT_ANSWER_END>>>` marker, a checksum mismatch, a garbled stdout body, or an `[ct-advisor][ERR]` signal on stderr. Parse-shape failures follow the Integrity check table above; `[ERR]` alone triggers self-healing below. Even then the action is mechanical only: re-capture the **same** command, read the printed `answer_file:` path, or relay the machine signal. **Never** decode, repair, reconstruct, summarise or author answer content, and never fall back to the host model's own knowledge. Parse-failure byte-level rules: `ADVANCED.md` §9.
 
-> **`--stitch` is the sole non-forwarding mode.** It consumes skill outputs that already exist (no question is being answered, so no Coze call happens). It is still `entry.py`, still zero-LLM, still the one permitted action — see the Return path section below.
+> **`entry.py` has exactly two non-forwarding modes, both still zero-LLM and still the one permitted action:** `--stitch` (consume existing skill outputs; no Coze call) and `--resume` (second phase of the user-confirmation skill menu — see "Skill-call confirmation menu" below). Everything else forwards through the normal path.
 
 ## How to use this skill
 
@@ -97,47 +98,39 @@ Run the single entry point with the user's question. Optionally attach a file (e
 
 CLI invocation details, examples, and flag notes → `references/ADVANCED.md`.
 
-### What entry.py does internally (all code, zero LLM) — the canonical pipeline
+### Skill-call confirmation menu (`<<<CT_TOOL_MENU>>>` → `--resume`)
 
-```
-STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
-        ├─ < 5 MB   → doc_memory.build_file_payload(allow_upload=True): upload ORIGINAL file to Coze /upload_file, ship as `doc_context` (mode=file_id; base64-forward fallback on failure)
-        └─ > 5 MB   → convert locally (office_to_md.py for OOXML / direct read for txt-like), upload the resulting **.md** through the SAME doc_context channel + ℹ️ notice that cloud answers from the md version
-STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
-STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): Coze async submit (/async_run, ms-level → task_id) + local prefetch (handoff card by default; brief only when explicitly enabled) → poll /task/{id} until terminal → merge (sync /run only as fallback when the async endpoint is unavailable)
-STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM); since 2026-11-09 this normally emits a client handoff card (@skill:<slug>) instead of executing the sibling CLI
-STEP 5  Output — entry.py writes the answer file (UTF-8), then the same bytes + `<<<CT_ANSWER_END>>>` + `checksum:` + `answer_file:` to stdout.buffer (single protocol, single producer since v1.3.21)
-```
+For questions that need sibling A-tier skills, the skill **never auto-executes** the skill call. After the first `entry.py --q`, if stdout contains a `<<<CT_TOOL_MENU>>>…<<<CT_TOOL_MENU_END>>>` block, do this — and nothing else:
 
-> **LLM-forbidden zone**: every STEP above is executed by code. The local LLM never picks the channel, never judges difficulty, never decides forwarding.
+1. **Show the text BEFORE the block verbatim** (for a single skill this is already the preliminary answer; for multi-skill it is a short "please choose" lead-in). Both modes append a "quick reference / use the full skill or web portal for formal output" note — show that verbatim as part of the menu text too. Do not show the block itself to the user.
+2. **Parse the JSON inside the block**. It has `token`, `mode` (`single`/`multi`), `question`, and `options` (each option has `skill`, `label`, `desc`).
+3. **Ask the user once with a multi-select menu** (AskUserQuestion, `multiSelect=true`):
+   - use each option's `label` as a choice; include an explicit **"都不调用 / 不需要"** choice (the user may pick it to decline);
+   - for `mode=single` phrase it as "是否调用这一个技能补充数据"; for `mode=multi` as "勾选需要执行的技能".
+4. **Map the user's picked labels back to skill ids**: a label starts with `ct-<slug>｜`; take that prefix as the skill id. If the user picked "都不调用", use an empty list.
+5. **Run the second command** (still `entry.py`, still the only permitted action): `python scripts/entry.py --resume <token> --selected '["ct-registry","ct-safety"]'` (use `[]` if the user declined). Pipe this command's stdout verbatim as the final answer.
+
+🔴 **This is NOT local-LLM decision-making.** The menu options are code-generated from the cloud's whitelisted judgement; the agent merely presents them and relays the user's literal choice as `--selected`. **Two judgement sources exist — local `route_tool` prediction and remote Coze `plan`/`need_tools`; on conflict the Coze decision always wins (2026-11-20 ruling). Local prediction is only a convenience/fallback (param prefill + backup when Coze returns prose only); it must never override or mix into Coze's tool-call decision.** How a skill runs is a separate concern decided by local install state (`_runs_local`), not by which source proposed it. No tool runs until the user confirms. `--resume` reads a one-time, TTL-bounded local state file (token is a 16-hex id, single use), re-validates that every selected skill was in the offered set (fail-closed), then runs the plan + second-Coze assembly. Second-Coze failure is a hard failure — no local fallback. Emergency rollback: set `CT_ADVISOR_CONFIRM=0` to restore pre-confirmation behavior (v1.75 auto-execute).
+
+### What entry.py does internally (all code, zero LLM)
+
+Five code-only steps: attachment gate → vague gate → Coze forward (async-first) → delegate stitch → plain-text output with the ≥180 s slow-flow guard. Full canonical pipeline → `references/ADVANCED.md` §10.2.
+
+> **LLM-forbidden zone**: every step above is executed by code. The local LLM never picks the channel, never judges difficulty, never decides forwarding.
 
 ## Session, Context, Cache & Routing
 
-Local modules enrich the Coze payload: multi-turn `conversation_history`, 30-min cross-session answer cache, 10-min near-duplicate dedup, and a controlled-vocabulary domain router (`scope_guard`). All four capabilities are wired into both `entry.py` and the workbench proxy. Module details, API tables, and endpoint contracts → `references/ADVANCED.md`.
+Multi-turn history, 30-min answer cache, 10-min near-duplicate dedup and domain routing are all code-side; contracts → `references/ADVANCED.md` §8 and §10.3.
 
 ## Requirements
 
-| Item | Requirement |
-|---|---|
-| Runtime | `python3` stdlib only |
-| Sibling skills | **Client-callable since 2026-11-09**: the client can invoke every locally registered `ct-*` skill directly. Availability is decided by `scripts/sibling_registry.json` (`skills[*].installed`) plus `<SKILLS_DIR>/<slug>/SKILL.md`, implemented in `handle_need_tool._client_callable()` — **not** by SkillHub listing. `need_tool` therefore defaults to a **code-generated `handoff` card** (`@skill:<slug>` + extracted params + the skill's real deliverables + Tier-B confidentiality note) instead of running the sibling's CLI on the user's behalf. `published` is a distribution fact only; `tier` remains the confidentiality boundary (protocols / subject data stay local, F33). `unpublished_a` / `unreleased_b` / `install_required` now fire only when the skill is genuinely absent locally (or `CT_ADVISOR_HANDOFF=0`). |
-| Refiner (Coze) | `scripts/entry.py` (the **only** entry point; internal orchestrator via `scripts/orchestrate.py`) sends payload to `ct-advisor.coze.site` — **async-first** (v1.3.14): `POST /async_run` (ms-level → task_id) + `GET /task/{id}` polling, because sync `/run` / `/stream_run` are both hard-killed at 60.0s by the Coze gateway (stgw) and duration cannot be reliably predicted; sync `/run` remains only as fallback when `/async_run` is unavailable (404/405/5xx), and `CT_ADVISOR_ASYNC=0` disables async entirely. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout (= polling deadline in async mode). |
-| External Refs | **teal** (insightsengineering) — clinical-data interactive exploration framework; **Docling** — structured PDF parsing. See "External Tool References". |
+Python stdlib-only runtime; sibling `ct-*` skills are client-callable via code-generated handoff cards (never auto-run). Full requirements, async-first Coze transport and endpoint details → `references/ADVANCED.md` §1 and §10.4.
 
 ## Attachment handling (docx / xlsx / pptx · doc / xls / ppt · pdf)
 
-**Single gate = 5 MB, decided FIRST inside `entry.py` (v1.1.0 workflow correction, 2026-09-25). BOTH paths deliver a FILE to Coze through the same `doc_context` channel.**
+**Single gate = 5 MB, decided FIRST inside `entry.py`.** `< 5 MB` uploads the original file to Coze through `doc_context` (no local conversion); `> 5 MB` converts locally to Markdown and uploads the `.md` through the same channel with a user-visible notice. Full table and governance pointers → `references/ADVANCED.md` §10.5.
 
-| Size | Behavior | Channel |
-|---|---|---|
-| `< 5 MB` | **Upload the original file directly** — never converted locally | `doc_memory.build_file_payload(allow_upload=True)` → Coze `/upload_file` → `doc_context` (`mode=file_id`); on upload failure auto-degrades to the base64 forward channel (`mode=file`) |
-| `> 5 MB` | Convert to Markdown locally, then **upload the resulting `.md` as the attachment** — same `doc_context` channel — plus an ℹ️ notice that the cloud answers from the md version | `scripts/office_to_md.py` (stdlib-only; OOXML) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported formats get an explicit user prompt |
-
-Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.xls/.ppt` included), so fidelity is higher than any local conversion — this is why the <5 MB path uploads instead of converting.
-
-**Governance pointer**: layered conversion strategy, user prompts and confidentiality boundary are consolidated in **ct-base §6.7**; the shared converter lives in `ct-base/scripts/office_to_md.py` (vendored copy).
-
-**Deliverable boundary — the revised document is never returned (v1.24).** This skill's deliverable is **text only**: it does not generate, export, or hand back a modified document file. When the user asks for the revised file back, state plainly on the **first line** that **this feature is not available — only written suggestions are provided**, then give the suggestions as text the user can copy.
+**Deliverable boundary:** **text only** — never generate / export / hand back a modified document file. When asked for the revised file, state on the **first line** that this feature is unavailable and only written suggestions are provided, then give the suggestions as text.
 
 ### 🔴 Integrity check (HARD GATE · simplified in v1.3.19, final in v1.3.21)
 
@@ -158,6 +151,14 @@ Re-running without capture evidence is a protocol violation: in the 2026-10-15/1
 
 **🔔 Forward-mode user notice (the ONLY allowed process message)** — entry.py emits a brief notice to stderr before firing the Coze call. The local LLM should not add any additional process chatter.
 
+### Slow-response notice (v1.3.48 · code-only, part of the answer)
+
+`entry.py` starts a monotonic clock at process load and, at its single exit, compares the full-flow wall-clock against **180 s (3 min)** (override for testing only: env `CT_ADVISOR_SLOW_SEC`). When the threshold is reached it prepends, in code, a bilingual notice — Chinese when the question (or, absent a question, the answer body) contains CJK, English otherwise:
+
+> `[Slow-response notice]` — code-generated bilingual (CJK-aware, ≥180 s, idempotent). Deliver verbatim as the answer's first lines. Verbatim template + semantics → `references/ADVANCED.md` "Slow-response notice" section.
+
+This notice is **answer content**, produced inside `_emit_plain` before the checksum/answer-file are computed. The local LLM must **deliver it verbatim as the first lines of the answer**, exactly like any other answer text: never strip it, never explain it away, never replace it with its own timing estimate, and never add a second copy. It is idempotent (already-prefixed answers are not prefixed again), so cached/delegated outputs cannot duplicate it. Measured scope is the skill's own process (attachment gate → Coze poll → delegate stitch → callback → exit); reasoning time spent by the host model **before** invoking or **after** receiving `entry.py` is outside this process and cannot be measured by the skill.
+
 ## Outbound Authorization Gate
 
 Runs automatically inside `entry.py` → `scripts/orchestrate.py` before each outbound HTTP call (agent never triggers it manually). Endpoint `https://ct-advisor.coze.site/run` is in `auto_approve_endpoints` by default, so it never prompts. If the user wants another endpoint whitelisted across sessions, the USER adds it explicitly to `config.json` — **the agent MUST NOT edit `config.json`**.
@@ -166,12 +167,9 @@ Runs automatically inside `entry.py` → `scripts/orchestrate.py` before each ou
 
 On defect detection or explicit user request, `adapters/bug_report.py` offers a sanitized 11-key report to `https://ct-bugreport.coze.site/run`. Two-stage confirmation mandatory.
 
-## External Tool References (v1.3.4 · external authoritative assets)
+## External Tool References
 
-- **teal** (insightsengineering, `install.packages('teal')`) — clinical-data interactive exploration framework for building Shiny review apps; reference model for the data-review integration mode.
-- **Docling** (`pip install docling`) — structured parsing of regulatory documents (protocol/IB/CSR PDFs → hierarchical Markdown/JSON); attachment-parsing enhancement layer.
-- **Pinnacle 21 Validation Rules** (Certara, public API `standards.pinnacle21.certara.net/validation-rules/<STD>`, header `X-Requested-With: XMLHttpRequest`) — industry-standard CDISC validation rule set; snapshots archived in `ct-base/references/pinnacle21_validation_rules/` (SDTM 566 / SEND 581 / ADaM 456 / Define-XML 167). Authoritative benchmark for data-standard compliance Q&A; mirrored to Coze KB topic `ref-topic-p21-data-rules`.
-- **ICH M12 DDI Thresholds** (Step 4/5 official PDFs archived alongside `ct-base/references/m12_thresholds.md`) — CYP 50× / intestinal 10×, TDI 1.25, induction R-ratio, transporter Table 1, AUCR 0.80–1.25, GMR 90% CI 80–125%. Authoritative benchmark for DDI interaction Q&A; mirrored to Coze KB topic `ref-topic-m12-ddi`.
+Authoritative external assets (teal, Docling, Pinnacle 21 CDISC rules, ICH M12 DDI thresholds) and their Coze KB mirrors → `references/ADVANCED.md` §10.6.
 
 ## Error Self-Heal Protocol (stderr machine signals · 2026-10-15)
 
@@ -206,19 +204,10 @@ On defect detection or explicit user request, `adapters/bug_report.py` offers a 
 6. If stderr carries an `[ERR]` line but stdout has no answer block, treat the turn as failed: relay the signal's meaning plus any human-readable guidance. **Never fabricate an answer.**
 7. Signals are emitted from failure paths only (`adapters/errsignal.py::emit_err_signal`). If an `[ERR]` line appears on a run that returned a valid answer, treat it as a skill defect and report it.
 
-**Note on `[DEP-MISS]`:** before 2026-10-15 a missing `requests` library surfaced as `[DEP-MISS]` + an install prompt. The transport now uses stdlib `urllib`, so this failure class no longer exists; the handler remains as dormant defensive code.
-
 ---
 
 ## Extended reference
 
-The sections below remain in [`references/ADVANCED.md`](references/ADVANCED.md) (moved 2026-11-15); they are authoritative and `ct-base/BASE.md §N.M` anchors are unchanged. Pulled back into this file during the 2026-11-15 compaction: the canonical `entry.py` pipeline, session/context/cache/routing, requirements, attachment handling, external tool references and the Error Self-Heal Protocol.
-
-- Return path (`entry.py --stitch`) and the full output-format contract
-- Integrity-check verification code and the extended HARD GATE field table
-- Performance / deployment notes; capability domains; client handoff contract
-- Consultation vs execution; retrieval keyword translation gate
-
-The HIGHEST PRIORITY action, the Data Egress Guardrail (F33), the HARD GATE integrity table, Quality Gate / Stop Rules, Outbound Authorization Gate and Bug Report stay in this file.
+Full technical material (moved out 2026-11-20, wording unchanged) lives in [`references/ADVANCED.md`](references/ADVANCED.md): return path / output contract, integrity verification code, session-routing contracts, requirements, attachment handling, external tools, error-code note, performance notes, capability domains, consultation-vs-execution, keyword translation gate. The HIGHEST PRIORITY action, Data Egress Guardrail (F33), HARD GATE integrity table, Quality Gate / Stop Rules, Outbound Authorization Gate and Bug Report stay in this file.
 
 Agents: read `HIGHEST PRIORITY` and the HARD GATE list before any action; the operational sections above are reference material and never override the single-entry-point rule.

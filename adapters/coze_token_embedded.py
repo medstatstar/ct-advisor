@@ -112,7 +112,15 @@ EMBEDDED_SECRETS = {
         "OwJfNFcyBUopSisUF1k1A3gDXG1SWgEcGxRANkUiBBo5XxIfWR4rVHsbAEkEXGkaGwJ-Gw4gJwYY"
         "I2cADRYASSVbV10uQGZcFHAmVzxZJyohGkM1H1s3NygsFFsGAEMmRnhpUAA7CjhHLAgAKkI3BQ=="
     ),
-    # "another_public_key": "<obfuscated blob>",
+    #     # ct-samplesize 样本量计算端点（ct-samplesize.coze.site/run）的共享公开凭据，
+    # 2026-11-18 Plan 驱动两阶段迁入。与 ct-samplesize/adapters/coze_token_embedded.py
+    # ::EMBEDDED_SECRETS["ct_samplesize_coze"] 同源同值，用本文件 OBFUSCATION_KEY 重编码。
+    # 仍是公开共享凭据，只保存在本地技能 / 工作台；Coze 云端包内零凭据不变。
+    # 用途：adapters/plan_endpoints.py 的 call_samplesize 直连计算端点。
+    "ct_samplesize_coze": (
+        "Bg1nCQYxChogG2cwOgAsHCELL14_XFlDPnorVT1HNFU5LTkFPEA5BTYxdFwvC2ACf2lfDXQxUh1jNi4fJSQpHmMJKREoaQcJKFcjAWBgLgBMBg1nEQdFJBogG2cMCzI3WgwYCVs6A2tEBWpXCRYeEQg6BD0aO0QUBiM9ewQrDF0UeEFmV20IDydOJSY1P0ALAnhTKQ03RhcxKB04A2BnPgswUxxGOFckOxIEKH0qA0oWZAI0Uk41eBt8IHAaLjBkUyocDkAhGE5WICkSRA41IB0_W0JLKkMFUDlpJBw5LSIVPm4pFR4yZAYtD2cMUmpfCWMPNkJhGF0eCjQEB3RRVkw_floIBERPAk8ALksAJE1FOyJPGSkoJFgHKBZVSDxbFncyXh59DmBXLCB0UisyJAQgJngUID4GVSI2J1c_WFpaBwooCT1HDg0XPkYGEB41GiAjFAcGPn8ZaR91DmBQNQ5OUF1GC0EbHk8PVgo_aQBRKEcVAGBnMQosJz0cLiAjHj47JxwuKz9RZAFSSEI4YnwFEAxPUBVHO1MPD0s5HxlOW0M3Z0IHUWs9AUpUUVgQMDVUAigPKhcHM3INAyoJdD0bPxkRWmwKVGAFPAVMUy0mIDgmO047PjEwVB0lE2E6dnRxKmgMDiBlPi8VRD0YNnUnXxUhRxcaXxsQRV5CO3sMECxaMQ8cLCE6R3lWBCpVVQkEV0kHSFhpUAolEiJCUCZPWUYmCnQgOk02Swg2FhsUa3JwKGMHFg1qJghOIzEfBVUVGg8WWjoFCUM3RE5AFA01VxdPE1Y0LzgwJmovHlciYh8aCR8pfUpmLWgGAA5LKBQ1DRQaMHkyVzsnRj4ENQBFAnx5DXAPJVlPUlY5UUAmGWpRGxIjfy1XNUZGWEl0DXotUU1IBCUiAQYCGncJXQJdYS0nMUpHSGR2E3hVO0Z9FBEUXCoVIF8SWxEUeA0jFGcaY0VRM3c4JgJrJgMXJCUrBQ=="
+    ),
+    "another_public_key": "<obfuscated blob>",
 }
 
 # 局部落盘绝对路径（兼容历史：允许用户/作者用私有 key 覆盖内嵌默认值）。
@@ -222,4 +230,15 @@ def get_search_token(cli_token: str = None) -> str:
     契约：解析不到一律返回空串（调用方据此回落本地 need_tool 执行卡），绝不抛异常。
     """
     return get_secret("ct_search_coze", cli_token, "CT_ADVISOR_BRIEF_TOKEN",
+                      DEFAULT_TOKEN_PATH)
+
+
+def get_samplesize_token(cli_token: str = None) -> str:
+    """ct-samplesize 计算端点（ct-samplesize.coze.site/run）的共享公开凭据。
+
+    由 ``adapters/plan_endpoints.py`` 的 call_samplesize 调用（Plan 驱动两阶段，
+    2026-11-18）。读取优先级：CLI > env ``CTSS_COZE_TOKEN`` > 内嵌 blob。
+    契约：解析不到一律返回空串，由调用方按硬失败处理，绝不伪造结果。
+    """
+    return get_secret("ct_samplesize_coze", cli_token, "CTSS_COZE_TOKEN",
                       DEFAULT_TOKEN_PATH)

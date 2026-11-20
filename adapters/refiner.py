@@ -312,6 +312,7 @@ def _normalize_coze_message(raw: Any) -> Optional[dict]:
 _KNOWN_RESPONSE_KEYS = (
     "final_answer", "answer", "need_tool", "need_tools", "deferred_tools",
     "params", "run_id", "message", "coze_version", "cached_answer", "cache_hit",
+    "plan",  # 2026-11-18 Plan 驱动两阶段
 )
 
 
@@ -415,6 +416,10 @@ class RefineResult:
     # 2026-11-09：Coze 侧 tool_router 若返回多技能命中，必须带进本地，
     # 否则预判未命中的混合问题在委托路径里只剩单一技能。缺省空列表，向后兼容。
     need_tools: list = field(default_factory=list)
+    # 2026-11-18 Plan 驱动两阶段：云端 tool_router 命中多技能时返回的结构化计划。
+    # 缺省空列表 = 能直接回答 / 单技能走原 need_tool，行为逐字不变。
+    # 每步 {skill,params,depends_on,expect,prefill}，由本地 plan_runner 校验执行。
+    plan: list = field(default_factory=list)
     # 2026-11-11 v1.68：云端端点版本（出参侧，与飞书 coze_version 同源）。
     # 空串 = 云端未声明（老版本 / 响应契约不匹配）→ 本地兜底提醒升级。
     coze_version: str = ""
@@ -453,6 +458,10 @@ class RefineRequest:
     # 非空时随契约外发，供 Coze（v1.21+）自行分块检索并按「文档 §N」引用；
     # 老 Coze 忽略该字段（pydantic extra='ignore'）→ 退化为 original_question 内联片段（仍可用）。
     doc_context: str = ""
+    # 2026-11-18 Plan 二次调用（D4）：本地带 plan_results 结构化摘要重入，
+    # Coze 跳过判定直接走综合节点。缺省空 dict = 首次调用，行为逐字不变。
+    # 🔴 只含结构化摘要，禁原始产物 / doc_context / 涉密字段（F33）。
+    tool_results: dict = field(default_factory=dict)
     # 增量兼容字段（2026-09-23）：范围路由标签（""=在范围；"medical_writing" 等=超范围，
     # 由 scope_guard 产出）。本地已前置转介声明；非空时随契约外发，Coze 在提示词层一并强化声明。
     scope_hint: str = ""
@@ -556,6 +565,9 @@ class RefineRequest:
             self.doc_context = ""
         if not isinstance(self.scope_hint, str):
             self.scope_hint = ""
+        # 6.7) tool_results（2026-11-18 Plan 二次调用）：非 dict 一律归一为空 dict
+        if not isinstance(getattr(self, "tool_results", None), dict):
+            self.tool_results = {}
 
         # 3) query_origin：脚本会盖章，写入 query_meta 字典（不再另设顶层字段）
         qm = self.query_meta if isinstance(self.query_meta, dict) else {}
@@ -641,6 +653,10 @@ class RefineRequest:
             payload["doc_context"] = self.doc_context
         if getattr(self, "scope_hint", ""):
             payload["scope_hint"] = self.scope_hint
+        # 2026-11-18 Plan 二次调用：tool_results 非空才外发（首次调用零负担）；
+        # 只含结构化摘要（sanitize 会在出站前再过一遍脱敏）。
+        if getattr(self, "tool_results", None):
+            payload["tool_results"] = self.tool_results
         return payload
 class Refiner(ABC):
     @abstractmethod
@@ -959,6 +975,16 @@ class CozeRefiner(Refiner):
                 _nt = []
         if not isinstance(_nt, list):
             _nt = []
+        # 2026-11-18 Plan 驱动：顶层 `plan` 键，兼容 JSON 字符串 / 列表；
+        # 异常形态安全降级为空列表（与 need_tools 同构，不影响主答案路径）。
+        _plan = data.get("plan") or []
+        if isinstance(_plan, str):
+            try:
+                _plan = json.loads(_plan)
+            except Exception:  # noqa: BLE001
+                _plan = []
+        if not isinstance(_plan, list):
+            _plan = []
         result = RefineResult(
             final_answer=strip_display_tags(final),
             cached_answer=data.get("cached_answer") or "",
@@ -967,6 +993,7 @@ class CozeRefiner(Refiner):
             params=data.get("params") or {},
             run_id=str(data.get("run_id") or ""),
             need_tools=[str(x) for x in _nt if x],
+            plan=[x for x in _plan if isinstance(x, dict)],
         )
         # §20.15：顶层可选 message 字段（Coze 业务侧表面提示），本地置顶渲染 banner
         result.message = _normalize_coze_message(data.get("message"))

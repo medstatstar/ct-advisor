@@ -1,5 +1,124 @@
 # Changelog
 
+## 2026-11-20 · v1.3.55（根治 PD-1/NSCLC 抽参失败与上下文污染：cond/intr/topic 收口 ct-base）
+
+**用户反馈**：「检索 PD-1 三线 NSCLC 的注册 III 期试验」报 `MISSING_REQUIRED:cond`；把上一轮完整输出一起粘贴回来时又抽成 `cond=抗肿瘤 / intr=按限定PD-1单抗`。用户强调此类问题反复修反复犯，要求查根因、直接调 ct-base 公共资源、不在叶子重复补代码。
+
+**根因（三条叠加，同一结构性复发）**：
+1. `cond` 填充要求「疾病 AND 中文药名」同时存在；纯英文靶点 + 疾病缩写（PD-1 + NSCLC，无「单抗/抑制剂」后缀）时 `drug_cjk` 为空 → cond 不填。
+2. 实体抽取对整段历史输出无输入清洗，法条名《抗肿瘤药物临床试验技术指导原则》与「按限定PD-1单抗」被贪心正则吞进 cond/intr；疾病泛词「抗肿瘤」无黑名单。
+3. 本地/云端强触发词表只认「注册试验 / 三期」，不认「注册 III 期试验」→ 短句本地不预判；Web 发布包 `workbench/publish/scripts/` 另存旧版 `query_entity.py` / `route_tool.py`，换入口即回到坏实现。
+
+**改动**：
+- **ct-base `scripts/query_entity.py`（单一真源）**：新增 `strip_generated_tail`（生成物尾段剥离，所有抽取入口统一调用）、`extract_registry_params`（ct-registry 的 `{cond,intr}` 唯一实现；cond 优先级 = 确证疾病 > 中文药名 > 英文靶点，不再要求疾病 AND 药名）、`extract_topic`（literature topic 唯一实现）；`extract_mixed_entities` 增 `disease` 明确字段 + 疾病泛词黑名单 + 药名内部空格归一；`_CJK_DRUG` 允许「PD-1 抑制剂」中间空格；前导噪声词补「按限定/需明确/干预为」等。`--self-test` 4/4 → 14/14。
+- **`scripts/route_tool.py`**：删除 SUFFIX 正则 / 英文兜底 / has_cjk 三层互相覆盖的叶子补丁，registry 与 literature 分支直接 `return` ct-base 函数；`extract_params_for_tools` 只做多技能合并，删除最后的 cond/topic 纠正层；补罗马数字分期强触发词 ③″；PARAM_TEST 增短句 + 长上下文回归及「抗肿瘤/按限定」污染断言。
+- **Coze 镜像**：`adapters/coze/src/graphs/nodes/tool_router_node.py` 同步 ③″，保持本地预判与云端判断同义。
+- **Web 发布包**：`workbench/publish/scripts/query_entity.py` / `route_tool.py` 从旧版同步为真源副本，消除第四处复发入口。
+- 经 `publish_inject.py` 分发（预演确认仅 `query_entity.py` 1 件变化、其余 30 件一致），未手工维护第二份逻辑。
+
+**验证**：ct-base 自测 14/14；route_tool 工具命中 / 软建议 14/14 / 参数 10/10 / 安全提示 4/4；Web 发布包自测全绿；原始复现脚本长上下文与短句均得 `{cond:NSCLC, intr:PD-1}`、`MISSING:[]`；云端词表 AST 校验命中；check_route_drift 无显著差异；shared_sync_check 仅余既存合法 WARN。
+
+## 2026-11-20 · v1.3.54（multi 最终输出恢复「初步说明」原始输出）
+
+**用户反馈**：multi 的最终输出漏掉了一开始的原始输出（初步说明 / draft）。
+
+**根因**：`plan_assemble_local.assemble_local` 有一段"拒答 draft 整段剔除"逻辑——有成功取数且 draft 含"无法直接提供"等措辞时把整段 draft 删掉。三合一首趟 draft 形如"我暂无法直接提供…"命中剔除，导致最终答案只剩取数结果。与模块设计"①首趟草稿原样保留"和 single 的 draft+result 缝合口径都不一致。
+
+**修复**：移除整段剔除，改为原样保留 draft，并加 `## 初步说明（首趟生成，仅供参考）` 小标题分层——原始输出不丢，也与后面的真实取数结果区分，不再产生"先说无法提供、后又列真实结果"的误读。新增两条自测回归断言（拒答措辞 draft 仍保留 + 分层标题）。单文件改动：`adapters/plan_assemble_local.py`（无发布副本）。自测全绿；暂停草稿剔除唯一副作用是直接直答场景本就无 plan_results、不受影响。
+
+## 2026-11-20 · v1.3.53（三合一取数两项失败修复：ct-safety 缺 drug / ct-literature 超时+产物空）
+
+**用户反馈**：三合一问题（信迪利单抗肝癌在研试验 + 系统综述 + 肝损伤安全信号）web 端三项取数，ct-registry 成功，但 ct-safety=`MISSING_REQUIRED:drug`、ct-literature=`LOCAL_TIMEOUT`。
+
+**根因（两条独立缺陷）**：
+1. **ct-safety 缺 drug**：`_enrich_domain_params` 因装机分流对本地技能整体 `continue`，连"必填参数补齐"一起跳过。本地预判只产出通用 `{cond,intr}`，经各技能 allowlist 过滤后 ct-safety/ct-literature 的 params 全空；而 ct_safety.py 的 `--drug` 查 openFDA 只认英文通用名（`--drug-cn` 仅给 CN-PV），本地脚本无中英映射 → drug 直接缺失。旧的 safety 补齐自测在 `CT_ADVISOR_FORCE_CLOUD=1` mock 下跑，全绿却掩盖了真实装机路径。
+2. **ct-literature 超时 + 产物空**：① 默认 `--verify all` 对全部命中逐条联网校验，实测 26 条卡在 europepmc `read operation timed out` 重试 >170s（检索本身命中缓存 0.2s 完成）；② 即便成功，产物是隐藏文件 `.merged.json`，而 `_find_artifact` 的 glob `*.merged.json`/`merged.json` 匹配不到点开头文件 → 产物从未注入 → summary 空（topic 空、0 hits）；③ `.merged.json` 字段为 `{count,works,meta:{topic}}`，旧归一化只读顶层 `total_hits/unique_works/topic` → 读不到。
+
+**改动**：
+- `adapters/plan_runner.py::_enrich_domain_params`：本地技能不再整体 `continue`，改为按能力区分——registry/literature 跳过"英文化翻译"（保留本地脚本自带本地化的裁定），但 ct-safety 的 drug/event 必填补齐（复用 ct-base `term_map`）本地/云端都执行；literature topic 为空时从 card 原始 `{cond,intr}` 拼干净主题（不用整句问话带噪声）。
+- `scripts/tool_mapping.json` ct-literature `extra_args` 加快速档 `--verify top --verify-top-n 3 --no-preprint-fallback --no-consistency`（快捷参考场景只验前 3 条、关预印本联网与一致性校验；完整校验仍由技能本体承担）。同步 `workbench/publish/scripts/tool_mapping.json`。
+- `adapters/local_step_runner.py`：`_find_artifact` literature 增精确名 `.merged.json`；`normalize_ct_literature` 适配 `.merged.json` 真实结构（meta.topic / count / works，sources 从 works[].source 汇总）。
+
+**验证**：三技能参数补齐后 `MISSING:[]` 全空；plan_runner / local_step_runner 自测全绿；端到端 `run_plan` 三项均 status=ok（registry 50 命中+10 清单、safety PRR=5.98/signal=True、literature 28 命中+8 top_works+4 数据源，耗时分别约 19s/5s/37s）；产物归一化离线验证 topic/命中/来源/文献全读出；工作台重启 HTTP 200。
+
+## 2026-11-20 · v1.3.52（工具调用判断统一 Coze 优先：清理两处遗留的本地+Coze 合并）
+
+**用户裁定**：本地预判与 Coze 远端两套"工具调用判断"中，结果以 Coze 为主；本地预判只是方便操作的快捷兜底。一旦冲突，一律以 Coze 的工具调用判断结果为准。
+
+**核查结论**：判断层四处已符合——`confirm_menu.reconcile_candidates`（候选仲裁）、`orchestrate._emit_confirm_menu`（authoritative=cloud 全标 cloud）、`plan_assemble_local.reconcile_results`（结果仲裁）、工作端 `/api/plan-menu`（纯用云端 plan/need_tools，本地只补参数）。**但发现两处遗留违法**：`orchestrate.build_output` 与 `refine_answer` ship 路径仍无条件合并"本地 + Coze"的 `need_tools`，冲突时本地技能混入 Coze 判断。
+
+**改动**：
+- 新增纯函数 `orchestrate.resolve_need_tools(coze_tools, local_tools)`（单一真源）：Coze 有判断 → 纯取 Coze；无判断 → 本地兜底。与 `reconcile_candidates` 同口径。
+- `orchestrate.build_output` 与 `refine_answer` ship 路径改为调用该函数，删除各自的内联合并逻辑（refine_answer 函数内延迟 import 避免顶层循环）。
+- `orchestrate --self-test` 增 3 条仲裁断言（冲突纯 Coze / Coze 无判断本地兜底 / Coze 多技能不追加）。
+- `AGENTS.md` Core Architecture 新增「工具调用判断：Coze 远端为准」小节，明确判断层 / 执行层（按装机、`_runs_local`）/ 结果层三层职责边界，并标注本地预判的正当用途与反模式。
+
+**验证**：py_compile OK；orchestrate 自测新增 3/3 仲裁断言通过（旧逻辑下按预期失败，证明断言有效）；confirm_menu / plan_assemble_local / plan_runner / route_tool 自测全过；test_cross_skill_mixed_extended 15/15、test_cross_skill_handoff 42/42、test_assemble_local_resume 14/14、test_tool_router 71/71 全过。orchestrate 自测 3 条 BADFMT（ct-protocol/ct-pipeline 未安装路径判定 + 软建议）经 monkeypatch 对照为环境既存（本机已装两技能），非本次引入；test_mainflow_mixed 6 FAIL 为确认菜单机制前的历史过时测试，非本次引入。
+
+## 2026-11-20 · v1.3.51（实体抽取上收 ct-base 共用基座：消除叶子分叉）
+
+**用户原则**：「刻意不改单技能」的本意 = 共用能力应上收 ct-base 共用基座、再分发到各技能，不为某技能的某功能在叶子侧单独加代码。v1.3.50 虽根治了双轨，但把 CJK 实体抽取/噪声清洗写进了叶子的 `route_tool.py`，且 `_has_cjk` 与基座 `kw_localize.detect_lang` 分叉——违反该原则。本轮按原则重整。
+
+**改动**：
+- **ct-base 新增共用件 `scripts/query_entity.py`（单一真源）**：沉淀 `has_cjk`（复用 `kw_localize.detect_lang`，不再自建）、`extract_english_entity`、`extract_mixed_entities`（疾病 / 药物 / 靶点 / 前导时间残片 + 请求动词清洗）。纯 stdlib、确定性、带 `--self-test` 4/4。
+- **登记分发**：`ct-base/scripts/publish_inject.py` 的 `SHARED_ASSETS` 加入 `query_entity.py`（下发到各技能 scripts/）；`shared_sync_check.py` 的 `_PY_STRICT` / `_REF_KW` / `_OPTIONAL_MISSING_OK`（渐进接入）三处登记。
+- **route_tool.py 改为 import 复用**：删除叶子侧 `_has_cjk` / `_extract_english_entity` / `_extract_cjk_mixed_entities` 及全部 CJK 正则常量，顶部 `from query_entity import has_cjk, extract_english_entity, extract_mixed_entities`。保留 ct-registry 的 SUFFIX 倒序取词（技能专属参数映射，依赖 tool_mapping.json 键约束，不上收）。
+- **发布载荷同步**：`workbench/publish-kit/build_publish.py` 白名单加入 `query_entity.py` + 其同目录依赖 `kw_localize.py` / `kw_lexicon.json`（kw_localize 在 import 期即校验词库，非懒加载）；重跑构建，云端部署面 route_tool 已改用共用件且可独立自测。
+- `AGENTS.md` 更新：删除「single-skill lexicon 37/37 untouched」旧表述。
+
+**验证**：query_entity 自测 base/leaf/部署面 4/4；route_tool 47/47 + 14/14 + 8/8 + 4/4；check_route_drift 未检出显著差异；shared_sync_check ct-advisor 无 query_entity 漂移（余 1 项 tokens.css 发布产物漂移系构建前既存，已随本次 build 重跑修正）；confirm_menu / plan_assemble_local / local_step_runner 自测全过；test_assemble_local_resume 14/14；test_tool_router 71/71；py_compile 8 文件 OK；部署面与开发面关键用例参数一致。
+
+## 2026-11-20 · v1.3.50（参数抽参双轨根治：cond/intr 分流下沉为单一真相源）
+
+**背景**：中文问句 `cond="年以来帕博利珠单抗"`（疾病 / intr 全丢 → 注册检索 0 命中）反复复发。根因不是某次漏修，而是结构性双轨：底层 `_extract_params` 的 ct-registry 中文分支本就坏，却被标为「稳定区 / 刻意不改」，只在 `extract_params_for_tools` 里绕开；于是每个新入口（`predict`、工作端 `ct-advisor-proxy`）都会重新踩坑、各补一次（11-09 / 11-19 / 11-20 共四处）。
+
+**改动（纯本地，云端包不变）**：
+- `scripts/route_tool.py`：
+  - cond/intr 中文分流**下沉进 `_extract_params`**（`_has_cjk` 时用 `_extract_cjk_mixed_entities` 的 disease + drug_cjk 覆盖），底层直调即正确；
+  - `extract_params_for_tools` 删除重复覆盖，只保留 literature.topic 兜底，职责收敛为「多技能合并」；
+  - `predict` 删除 `_has_cjk` 分叉，统一走 `extract_params_for_tools([tool], q)`；
+  - `_extract_cjk_mixed_entities` 的 drug_cjk 同处清掉「查找 / 检索 / 查询」等请求动词前缀（统一残片清洗）；
+  - 删除返回字符串的 `predict_tool()` 兼容接口；自测改用 `predict().get("need_tool")`。
+- `scripts/orchestrate.py` / `scripts/refine_answer.py`：`predict as predict_tool` / `_predict_tool` 别名统一为 `_predict`。
+- 删除 `scripts/route_tool.py.bak_condfix_20261119_223610`（含旧坏逻辑的废弃备份）。
+- `PARAM_TEST` 新增帕博利珠单抗 NSCLC、信迪利单抗肝癌两条中文混合断言，并加「底层直调不得残留『年以来』」校验。
+
+**验证**：route_tool 47/47 + 14/14 + 8/8 + 4/4；confirm_menu / plan_assemble_local / local_step_runner 自测全过；test_assemble_local_resume 14/14；py_compile 4 文件 OK；工作端补参模拟产出正确 cond/intr。`test_mainflow_mixed` 6 FAIL 为 11-09 确认菜单机制之前的存量测试（git stash 对照 FAIL 数不变，非本次引入）。
+
+## 2026-11-19 · v1.3.49（技能调用用户确认菜单：两阶段 defer → resume）
+
+**用户需求**：入口 LLM 判 single/multi 后不自动调技能，改为交用户以多选菜单确认一次——single 先显示已生成的初步答案再问是否调那 1 个 Tool；multi 不出答案、直接多选让用户勾选要调哪些 Tool；勾选后才执行并二次 Coze 综合。避免误判导致无谓取数与综合开销。
+
+**改动（纯本地，云端包 v1.75 不变）**：
+- `adapters/confirm_menu.py`（新增）：候选提取/mode 判定/single 步 plan 规范化/菜单标记块渲染与解析/pending 一次性 TTL 落盘（token=16hex、禁路径穿越）/resume 执行（勾选 ⊆ 候选 fail-closed、二次 Coze 不通硬失败无兜底、取消保留初步答案）。
+- `scripts/orchestrate.py`：plan 执行前插入 defer 判定；命中技能时先落盘 + 输出「正文 + `<<<CT_TOOL_MENU>>>` 标记块」，用户勾选前绝不调 plan_runner / 二次 Coze；菜单态禁入答案缓存。`CT_ADVISOR_CONFIRM=0` 紧急回退 v1.75 自动执行路径。
+- `scripts/entry.py`：新增 `--resume <token> --selected <json>` 二阶段续跑模式，复用唯一出口协议；HARD GATE 不变（agent 仍是「运行 entry.py → 原样输出 stdout」，参数由用户勾选确定性生成）。
+- `SKILL.md` v1.3.49：新增「Skill-call confirmation menu」章节 + HARD GATE 例外条款；`references/ADVANCED.md` 补 CLI 与 `CT_ADVISOR_CONFIRM` 环境变量。
+
+**验证**（managed Python 3.13.12）：
+- `adapters/confirm_menu.py --self-test` 18/18 PASS；`scripts/test_confirm_menu_e2e.py` 22/22 PASS（direct 不弹 / single 先答案后菜单 / multi 纯菜单 / resume 按勾选执行+二次综合 / 取消 / 越权 fail-closed / 硬失败无兜底 / 开关回退）。
+- CTQA PLAN 层新增 G 组（CONFIRM + CMUNIT 共 40+ 项）全绿，`ctqa_plan_checks.py` FAIL 0。
+- `py_compile` 全通过；orchestrate 存量自测 9/11（会话前存量，本轮未引入回归）。
+
+**边界**：`_pending/` 为本地一次性状态（TTL 24h、读完即删），不含凭据、不出域；二次 Coze 综合仍禁带 doc_context（F33）。
+
+## 2026-11-18 · v1.3.48（全流程耗时守卫：超 3 分钟提示换 Flash / 用 Web 版）
+
+**用户需求**：每次提问回来后判断全流程耗时，超过 3 分钟即提示「回复超长，很可能是本地用了过度思考的大模型，请改用 Flash 类快速模型或直接使用 Web 版本」。
+
+**改动**：
+- `scripts/entry.py`：模块加载即以 `time.monotonic()` 起表；唯一出口 `_emit_plain` 内在所有分支之前计算墙钟耗时，≥180s 时在答案最前幂等附加中/英提示（问题含 CJK → 中文；无问题则按正文判定；英文兜底）。提示含实测「N 分 N 秒」+ Flash 快速模型 + Web 版本两条出路。
+- 提示走同一明文协议：先前置再算 `_answer_body` / checksum / answer_file，随答案落盘并由 agent 原样透传；HARD GATE 不变，本地 LLM 仍零决策。
+- stderr 同步留痕 `[entry] 全流程耗时 Xs ≥ 180s → 已附加慢响应提示`，便于审计；阈值可用 `CT_ADVISOR_SLOW_SEC` 覆盖（仅测试/特殊部署），异常一律降级为不附加，绝不阻断交付。
+- `SKILL.md` 记录该提示属答案内容、不得剥离或二次添加；`STEP 5` 同步。
+
+**验证**（Anaconda Python 3.13.9）：
+- 新增 `scripts/test_slow_flow_notice.py`：17/17 PASS（阈值、双语、幂等、语言回退、阈值覆盖、出口 marker/checksum/answer_file 完整性）。
+- 存量回归：`test_stitch_results.py` 14/14、`test_local_guards.py` ALL PASS、`test_tool_router.py` 71/71，`py_compile` 通过。
+- 实跑：`CT_ADVISOR_SLOW_SEC=1 python scripts/entry.py --q "帮我"` → 提示在答案首行、协议完整、rc=0；默认阈值 `--stitch` 冒烟无提示。
+
+**边界（如实标注）**：计时覆盖技能自身进程（附件门 → Coze 轮询 → 委托缝合 → 回传 → 出口），**不含**宿主模型在调用 `entry.py` 之前 / 收到 stdout 之后的推理耗时；后者无法由技能代码观测。
+
 ## 2026-11-15 · v1.3.47 发布（README 案例集实跑重建 + 保密声明统一 + 用户可见文案合规）
 
 - README 案例集按 ct-base §13.21/§16.21 实跑重建（8 卡 → 7 卡），全部替换为真实运行输出；删除编造数值的补参轮与同质卡。

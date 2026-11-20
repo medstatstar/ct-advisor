@@ -6,13 +6,28 @@
   "design_note": "把 ct-advisor 后台调用 ct-registry / ct-safety / ct-literature 的执行位置从『本地技能 CLI』上移到 Coze ct-search 端点内的 3 个聚合 source。上移的是能力接口，不是产品：三个技能的交付物、SAFE PREVIEW 确认门、独立发布单元与合规边界原样保留。本地 need_tool 执行卡保留为兜底（ct-base §20.19.7 红线 2）。2026-11-09 晚间架构重评：客户端已可直接调用这三个技能本体，brief（非审计级速览、不产文件）不再是默认主链路，降为显式开启的降级/快答路径；默认主路径改为 handoff（见 tool_mapping.json 顶层 handoff 段）。",
   "switch": {
     "local_env": "CT_ADVISOR_CLOUD_BRIEF",
-    "enabled_default": false,
-    "on_values": ["1", "true", "yes", "on"],
-    "off_values": ["0", "false", "no", "off"],
-    "local_note": "2026-11-09 晚间架构重评：**默认关闭**。客户端已可直接调用 ct-registry / ct-safety / ct-literature 本体并拿到完整交付物，brief 只给非审计级速览，继续默认启用反而会把用户挡在技能本体能力之外。仅当用户显式设 CT_ADVISOR_CLOUD_BRIEF=1（或明确要快答/速览）时，handle_need_tool.execute_card 与 orchestrate._fire_prefetch 才先走 adapters/cloud_brief.py 直连；任何失败（无凭证 / 超时 / status=error / 契约违约）自动回落 handoff / 本地执行卡（§20.19.7 红线 2）。设 0 / 不设均为关闭。",
+    "enabled_default": true,
+    "on_values": [
+      "1",
+      "true",
+      "yes",
+      "on"
+    ],
+    "off_values": [
+      "0",
+      "false",
+      "no",
+      "off"
+    ],
+    "local_note": "2026-11-20 口径对齐：本地直连速览为主链路（v1.59 2026-11-09 15:51 用户拍板），默认启用。Advisor 工具调用（含工作台 plan 二次调用）一律走 ct-search 速览节点。Cloud_brief_enabled 云端开关已作废，凭据仅存本地 coze_token_embedded / 工作台。设 CT_ADVISOR_CLOUD_BRIEF=0 可显式关闭回滚到 handoff 执行卡（§20.19.7 红线 2 仍有效：任何失败自动回落，绝不伪造）。",
     "cloud_field": null,
     "cloud_note": "已废弃：Coze 云端**不持有任何共享凭据、不发起需凭据的外部调用**，不再有云端直连节点或开关。tool_router 命中后一律返回 need_tool 执行卡，由本地取数并缝合。",
-    "rollout_order": ["1. 部署 ct-search 0.5.00 云端包（纯代码检索/聚合，不含凭据）并 canary 三个 brief source", "2. 部署 ct-advisor 云端工作流（纯代码，不含凭据）", "3. 更新本地技能 / 工作台发布物（凭据仅在本地）", "4. 跑 adapters/canary_cloud_brief.py 线上回归；无需任何 Coze 控制台环境变量或输入变量配置"]
+    "rollout_order": [
+      "1. 部署 ct-search 0.5.00 云端包（纯代码检索/聚合，不含凭据）并 canary 三个 brief source",
+      "2. 部署 ct-advisor 云端工作流（纯代码，不含凭据）",
+      "3. 更新本地技能 / 工作台发布物（凭据仅在本地）",
+      "4. 跑 adapters/canary_cloud_brief.py 线上回归；无需任何 Coze 控制台环境变量或输入变量配置"
+    ]
   },
   "endpoint": {
     "run_url": "https://ct-search.coze.site/run",
@@ -39,7 +54,15 @@
     "note": "P0-2：给代码维护者的说明（非运行时用户提示）。Coze 端点自身已有结果缓存，本层是本地短 TTL 兜底，避免同一问答在 10 分钟内重复触发 18–24s 取数。关闭：设 CT_ADVISOR_BRIEF_CACHE=0。"
   },
   "envelope": {
-    "required_top_level": ["source", "keyword", "mode", "query_origin", "skill_version", "locale", "params"],
+    "required_top_level": [
+      "source",
+      "keyword",
+      "mode",
+      "query_origin",
+      "skill_version",
+      "locale",
+      "params"
+    ],
     "mode": "search",
     "keyword_channel": "JSON 字符串；键必须属于对应 source 的 param_allowlist，未知键 fail-closed 拒绝（护栏 1）。",
     "query_origin": "ct-base §8.6：必须由客户端（技能安装设备）生成 sha256:<64hex>，服务端禁止兜底生成；本地透传 entry.py 已生成的值，云端工作流原样透传给 ct-search。",
@@ -55,8 +78,20 @@
     "why": "公开共享凭据（XOR+base64 混淆非加密，2026-08-03 授权随本地技能发布）。放调用方是家族既有范式：本地技能持 ct_advisor_coze 调用 advisor Coze 端点，Coze 包内不持有该凭据。"
   },
   "response": {
-    "common_keys": ["projects", "status", "total_count"],
-    "brief_keys": ["brief", "brief_kind", "disclaimer", "suggest_skill", "suggest_text", "param_allowlist", "scope"],
+    "common_keys": [
+      "projects",
+      "status",
+      "total_count"
+    ],
+    "brief_keys": [
+      "brief",
+      "brief_kind",
+      "disclaimer",
+      "suggest_skill",
+      "suggest_text",
+      "param_allowlist",
+      "scope"
+    ],
     "status_ok": "status=ok 且 disclaimer / suggest_skill / suggest_text 三者齐备才采信（护栏 2、3）；缺任一即视为契约违约 → 回落。",
     "status_error": "status=error + error=CODE → 客户端静默回落本地执行卡，不把错误伪装成 0 命中。",
     "project_list": "SearchNodeOutput.project_list 为 JSON 字符串，return_full=True 解析后合并进 final 顶层。"
@@ -65,46 +100,139 @@
     "advisor_registry_brief": {
       "skill": "ct-registry",
       "node": "ct-registry/adapters/coze/src/graphs/nodes/advisor_brief_nodes.py::advisor_registry_brief",
-      "param_allowlist": ["cond", "intr", "sponsor", "status", "max", "drug", "with_cde", "cde_keyword"],
-      "required": ["cond"],
-      "upstream_sources": ["who", "chinadrugtrials (only when with_cde=true)"],
-      "response_keys": ["projects", "status", "total_count", "brief", "brief_kind", "disclaimer", "suggest_skill", "suggest_text", "param_allowlist", "scope"],
+      "param_allowlist": [
+        "cond",
+        "intr",
+        "sponsor",
+        "status",
+        "max",
+        "drug",
+        "with_cde",
+        "cde_keyword"
+      ],
+      "required": [
+        "cond"
+      ],
+      "upstream_sources": [
+        "who",
+        "chinadrugtrials (only when with_cde=true)"
+      ],
+      "response_keys": [
+        "projects",
+        "status",
+        "total_count",
+        "brief",
+        "brief_kind",
+        "disclaimer",
+        "suggest_skill",
+        "suggest_text",
+        "param_allowlist",
+        "scope"
+      ],
       "local_fallback": "ct-advisor/scripts/tool_mapping.json::skills.ct-registry (engine=local)"
     },
     "advisor_safety_brief": {
       "skill": "ct-safety",
       "node": "ct-registry/adapters/coze/src/graphs/nodes/advisor_brief_nodes.py::advisor_safety_brief",
-      "param_allowlist": ["drug", "event", "top", "date_from", "date_to", "run"],
-      "required": ["drug"],
-      "upstream_sources": ["faers"],
-      "response_keys": ["projects", "status", "total_count", "brief", "brief_kind", "disclaimer", "suggest_skill", "suggest_text", "param_allowlist", "scope"],
+      "param_allowlist": [
+        "drug",
+        "event",
+        "top",
+        "date_from",
+        "date_to",
+        "run"
+      ],
+      "required": [
+        "drug"
+      ],
+      "upstream_sources": [
+        "faers"
+      ],
+      "response_keys": [
+        "projects",
+        "status",
+        "total_count",
+        "brief",
+        "brief_kind",
+        "disclaimer",
+        "suggest_skill",
+        "suggest_text",
+        "param_allowlist",
+        "scope"
+      ],
       "local_fallback": "ct-advisor/scripts/tool_mapping.json::skills.ct-safety (engine=local)"
     },
     "advisor_literature_brief": {
       "skill": "ct-literature",
       "node": "ct-registry/adapters/coze/src/graphs/nodes/advisor_brief_nodes.py::advisor_literature_brief",
-      "param_allowlist": ["topic", "year_from", "year_to", "safety", "max", "with_europepmc"],
-      "required": ["topic"],
-      "upstream_sources": ["openalex", "europepmc (default on)"],
-      "response_keys": ["projects", "status", "total_count", "brief", "brief_kind", "disclaimer", "suggest_skill", "suggest_text", "param_allowlist", "scope"],
+      "param_allowlist": [
+        "topic",
+        "year_from",
+        "year_to",
+        "safety",
+        "max",
+        "with_europepmc"
+      ],
+      "required": [
+        "topic"
+      ],
+      "upstream_sources": [
+        "openalex",
+        "europepmc (default on)"
+      ],
+      "response_keys": [
+        "projects",
+        "status",
+        "total_count",
+        "brief",
+        "brief_kind",
+        "disclaimer",
+        "suggest_skill",
+        "suggest_text",
+        "param_allowlist",
+        "scope"
+      ],
       "local_fallback": "ct-advisor/scripts/tool_mapping.json::skills.ct-literature (engine=local)"
     }
   },
   "param_allowlist": {
-    "advisor_registry_brief": ["cond", "intr", "sponsor", "status", "max", "drug", "with_cde", "cde_keyword"],
-    "advisor_safety_brief": ["drug", "event", "top", "date_from", "date_to", "run"],
-    "advisor_literature_brief": ["topic", "year_from", "year_to", "safety", "max", "with_europepmc"]
+    "advisor_registry_brief": [
+      "cond",
+      "intr",
+      "sponsor",
+      "status",
+      "max",
+      "drug",
+      "with_cde",
+      "cde_keyword"
+    ],
+    "advisor_safety_brief": [
+      "drug",
+      "event",
+      "top",
+      "date_from",
+      "date_to",
+      "run"
+    ],
+    "advisor_literature_brief": [
+      "topic",
+      "year_from",
+      "year_to",
+      "safety",
+      "max",
+      "with_europepmc"
+    ]
   },
   "skill_to_source": {
     "ct-registry": "advisor_registry_brief",
     "ct-safety": "advisor_safety_brief",
     "ct-literature": "advisor_literature_brief"
   },
-  "disclaimer_text": "【速览，非审计级】本结果由公开数据一次性聚合，仅供问答参考；不含可复算交付物、未经人工复核，不得用于注册申报、信号判定或临床决策。需要 XLSX/HTML 报告、完整检索策略与多轮确认，请调用对应技能。",
+  "disclaimer_text": "本结果由公开数据一次性聚合，仅供问答参考；不含可复算交付物、未经人工复核，不得用于注册申报、信号判定或临床决策。需要 XLSX/HTML 报告、完整检索策略与多轮确认，请调用对应技能。",
   "suggest_text": {
-    "ct-registry": "完整分析请调用 @skill:ct-registry（跨源注册库检索 · 竞品格局 · report.xlsx）。",
-    "ct-safety": "完整分析请调用 @skill:ct-safety（PRR/ROR/IC/EBGM 四种测量含 95%CI · L0–L4 分层 · faers_report.xlsx）。",
-    "ct-literature": "完整分析请调用 @skill:ct-literature（PICO 检索 · PRISMA · 全文 PDF · lit_report.xlsx）。"
+    "ct-registry": "完整分析请调用 @skill:ct-registry（跨源注册库检索 · 竞品格局）。",
+    "ct-safety": "完整分析请调用 @skill:ct-safety（PRR/ROR/IC/EBGM 四种测量含 95%CI · L0–L4 分层）。",
+    "ct-literature": "完整分析请调用 @skill:ct-literature（PICO 检索 · PRISMA · 全文 PDF）。"
   },
   "guardrails": {
     "1_param_allowlist_locked": "brief 参数白名单锁死在现有 8/6/6 个，禁止随版本扩张到 L0–L4 / PICO / batch / 本地导入 / 文件产出等技能本体能力面。云端节点对未知键 fail-closed，本地客户端发送前二次过滤。这是『advisor 不替代三个技能』的可执行约束。",

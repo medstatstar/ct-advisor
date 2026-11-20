@@ -194,14 +194,18 @@
         "topic"
       ],
       "extra_args": [
-        "--run"
+        "--run",
+        "--verify", "top",
+        "--verify-top-n", "3",
+        "--no-preprint-fallback",
+        "--no-consistency"
       ],
       "result_files": [
         ".merged.json",
         "references_apa.md"
       ],
       "prep_hint": "文献检索：需确认检索主题（药物 / 靶点 + 适应症）、年份范围、是否限定安全性文献（病例报告 / 药物警戒）",
-      "note": "OpenAlex / Europe PMC / Semantic Scholar 文献检索（公开源）。2026-08-23 联调修复：补 --run——原执行卡停在 PREVIEW 安全门，stdout 返回 '[PREVIEW] would run literature pipeline …' 却仍被判 status=ok，属**假成功**（缝合层拿到零文献仍照常作答）。对齐 ct-registry/ct-safety：经编排器执行卡调用时用户提问本身即检索指令。"
+      "note": "OpenAlex / Europe PMC / Semantic Scholar 文献检索（公开源）。2026-08-23 联调修复：补 --run——原执行卡停在 PREVIEW 安全门，stdout 返回 '[PREVIEW] would run literature pipeline …' 却仍被判 status=ok，属**假成功**（缝合层拿到零文献仍照常作答）。对齐 ct-registry/ct-safety：经编排器执行卡调用时用户提问本身即检索指令。2026-11-20 联调修复 LOCAL_TIMEOUT：默认 --verify all 对全部命中逐条联网校验 + 预印本回退 + 一致性交叉校验，实测 26 条引用校验卡在 europepmc 'read operation timed out' 重试 >170s（检索本身命中缓存 0.2s 完成）。快捷参考场景加 --verify top --verify-top-n 3 --no-preprint-fallback --no-consistency：只验被引前 3 条、关预印本候选联网与一致性校验，实测 17s RC0、产出 .merged.json；命中清单/标题/DOI 主结果不受影响。完整校验由 ct-literature 技能本体承担。"
     },
     "ct-samplesize": {
       "skill": "ct-samplesize",
@@ -303,6 +307,17 @@
       "prep_hint": "样本量/效能计算：需确认检验类型（率比较 / 均值比较 / 生存等）与效应量假设（p1+p2 / effect+sd / HR），以及 α、power、单双侧",
       "note": "样本量/效能计算；引擎=coze 远程 R 服务（v5 唯一后端，无本地回退）。SAFE PREVIEW 按 ct-base §5 双语义：coze 引擎无 --yes 闸门，请求信封由执行卡触发直接发送，故 extra_args 不携 --yes（§5 规定 coze 引擎 --yes 不适用）；本地引擎技能（ct-registry/ct-safety/ct-literature）才用 --run/--auto-confirm 跳过交互确认门。locale 由 ct-advisor 经 CTSS_LOCALE 环境变量透传（内容级检测用户语言），对齐 coze 端 user_language。2026-08-23 联调：stdout 含 __FIGURE__ / __SVG_WIDGET__ 内联图（单次可达数万字符），由 handle_need_tool._sanitize_result 剥离后再交缝合层，避免上下文爆炸。"
     }
+  },
+  "plan": {
+    "version": "2026-11-18",
+    "contract": "config/plan_contract.json",
+    "runner": "adapters/plan_runner.py",
+    "endpoints": "adapters/plan_endpoints.py",
+    "enabled_env": "CT_ADVISOR_PLAN",
+    "default": true,
+    "max_steps": 5,
+    "assemble": {"mode": "cloud_second_call", "module": "adapters/plan_assemble_cloud.py"},
+    "note": "2026-11-18 Plan 驱动两阶段（D1 默认开启）：Coze 第一次调用先判断，能直接回答就不产 plan、答不了才产（≤5 步）；本地 plan_runner 纯代码校验并按 plan 调用四个 A 档端点，二次 Coze 综合。CT_ADVISOR_PLAN=0 仅作紧急关闭。白名单/参数/出域约束真相源是 config/plan_contract.json；凭据只在本地 adapters/coze_token_embedded.py，Coze 云端包零凭据不变。"
   },
   "handoff": {
     "version": "2026-11-09",

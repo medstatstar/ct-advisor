@@ -59,6 +59,13 @@ Public API
       "term_map","online","miss"}.
   localize_for_source(text, source) -> (result, source)
       source in {"ctgov","cde","chictr","eu_ctr","isrctn","drks","ictrp"}.
+  localize_literature(topic, mesh_expand=True, online_fallback=True) -> dict
+      文献检索词中译英 + 同义词/MeSH OR 扩展（供 ct-literature / 文献检索端点）。
+      返回 {"topic_zh","topic_en","translated","hits","untranslated","sources"}。
+      ⚠️ 注册库结构化字段请用 localize()/localize_for_source() 的干净单术语，
+      勿用本函数的 OR 布尔串（会导致 0 命中）。
+  literature_gate_records(info) -> list
+      localize_literature 结果 → bilingual_retrieval §5.2 翻译确认门契约记录。
   bilingual_pair(text) -> (zh, en)
       Best-effort (zh, en) pair for `text`; if only one language is known,
       both slots carry that same text.
@@ -834,6 +841,194 @@ def render_kw_system_menu_multi(manifests):
     menu += "\n  " + _t("kw_gate.opt_cancel")
     menu += "\n\n" + _t("kw_gate.after")
     return menu
+
+
+# ===========================================================================
+# 文献检索词翻译（2026-11-20 家族统一：topic_translator 上移 ct-base 单一真源）
+# ---------------------------------------------------------------------------
+# 注册库结构化字段（cond/intr）用 localize()/localize_for_source() 产干净单术语；
+# 文献库（OpenAlex/Europe PMC/PubMed）用 localize_literature() 产 OR 同义词布尔串，
+# 命中条目的 brand/synonym/MeSH entry_terms 展成 `(a OR b OR c)` 保召回。
+# 两者共用同一份词库（term_map / drug_name_map / kw_lexicon），只输出形态不同。
+# ct-literature/topic_translator.py 与 ct-advisor/plan_runner.py 均转调本节。
+# ===========================================================================
+_LIT_MESH_PATH = os.path.join(HERE, "..", "references", "mesh_terms_mapping.json")
+_LIT_USER_PATH = os.path.join(HERE, "..", "references", "user_terms.json")  # 可选，gitignored
+_LIT_CACHE = None
+
+
+def _lit_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _lit_load_dict():
+    """构建文献翻译用 zh2en multi-map（main + syns）与 MeSH 同义词表。
+
+    词库全部取自 ct-base 单一真源，返回 {"zh2en": {...}, "mesh": {...}}。
+    """
+    global _LIT_CACHE
+    if _LIT_CACHE is not None:
+        return _LIT_CACHE
+    zh2en = {}
+
+    def _merge(zh, main, syns=(), source=""):
+        syns = [s for s in syns if s and s != main]
+        cur = zh2en.get(zh)
+        if cur is None:
+            zh2en[zh] = {"main": main, "syns": syns,
+                         "sources": [source] if source else []}
+        else:
+            have = [cur["main"]] + cur["syns"]
+            if main not in have:
+                cur["syns"].append(main)
+                have.append(main)
+            for s in syns:
+                if s not in have:
+                    cur["syns"].append(s)
+                    have.append(s)
+            if source and source not in cur["sources"]:
+                cur["sources"].append(source)
+
+    def _zh_keys(data):
+        out = {}
+        if not isinstance(data, dict):
+            return out
+        for k, v in data.items():
+            if k == "_meta" or not isinstance(k, str) or not _has_cjk(k):
+                continue
+            out[k] = v
+        return out
+
+    # 1) term_map.json（中文 key → 英文 str）
+    for zh, en in _zh_keys(_lit_json(TERM_PATH)).items():
+        if isinstance(en, str):
+            _merge(zh, en.strip(), (), "term_map")
+    # 2) drug_name_map.json（中文 key → [英文...]）
+    _dm_path = os.path.join(HERE, "..", "references", "drug_name_map.json")
+    for zh, ens in _zh_keys(_lit_json(_dm_path)).items():
+        if isinstance(ens, list) and ens:
+            _merge(zh, str(ens[0]).strip(),
+                   [str(x).strip() for x in ens[1:] if x], "drug_name_map")
+    # 3) kw_lexicon.json（ct-base 共享词库）
+    for zh, en in _zh_keys(_LEX.get("extra") or {}).items():
+        if isinstance(en, str):
+            _merge(zh, en.strip(), (), "kw_lexicon.extra")
+    for pair in (_LEX.get("synonyms") or []):
+        if isinstance(pair, list) and len(pair) >= 2 and _has_cjk(str(pair[0])):
+            _merge(str(pair[0]), str(pair[1]).strip(), (), "kw_lexicon.synonyms")
+    for chain in (_LEX.get("brand_generic") or []):
+        if not isinstance(chain, list):
+            continue
+        ens = [str(x).strip() for x in chain if x and not _has_cjk(str(x))]
+        zhs = [str(x).strip() for x in chain if x and _has_cjk(str(x))]
+        if ens and zhs:
+            for zh in zhs:
+                _merge(zh, ens[0], ens[1:], "kw_lexicon.brand_generic")
+    for zh, en in _zh_keys(_LEX.get("class_alias") or {}).items():
+        if isinstance(en, str):
+            _merge(zh, en.strip(), (), "kw_lexicon.class_alias")
+    for en, zh in (_LEX.get("drug_en2zh") or {}).items():
+        if isinstance(en, str) and isinstance(zh, str) and _has_cjk(zh):
+            _merge(zh, en.strip(), (), "kw_lexicon.drug_en2zh")
+    # 4) user_terms.json（可选用户自定义，覆盖优先）
+    for zh, val in _zh_keys(_lit_json(_LIT_USER_PATH)).items():
+        if isinstance(val, list) and val:
+            _merge(zh, str(val[0]).strip(),
+                   [str(x).strip() for x in val[1:] if x], "user_terms")
+        elif isinstance(val, str):
+            _merge(zh, val.strip(), (), "user_terms")
+    # 5) MeSH entry_terms（英文侧等价同义词，用于 OR 扩展）
+    mesh = {}
+    mm = _lit_json(_LIT_MESH_PATH)
+    if isinstance(mm, dict):
+        for tname, tinfo in (mm.get("terms") or {}).items():
+            ents = [str(tname)] + [str(x) for x in (tinfo.get("entry_terms") or []) if x]
+            ents = list(dict.fromkeys(ents))
+            for e in ents:
+                mesh.setdefault(e.lower(), ents)
+    _LIT_CACHE = {"zh2en": zh2en, "mesh": mesh}
+    return _LIT_CACHE
+
+
+def _lit_mesh_syns(mesh, en, limit=2):
+    group = mesh.get((en or "").lower())
+    if not group:
+        return []
+    others = [e for e in group if e.lower() != (en or "").lower()]
+    return list(dict.fromkeys(others))[:limit]
+
+
+def localize_literature(topic, mesh_expand=True, online_fallback=True):
+    """中文检索主题 → 英文布尔检索串（含同义词/MeSH OR 扩展）。
+
+    与历史 ct-literature/scripts/topic_translator.translate_topic 返回结构一致：
+      {"topic_zh","topic_en","translated","hits","untranslated","sources"}
+    无中文字符 → translated=False、topic_en 原样。未命中走 ct-base 联网兜底，
+    失败保留原文并记 untranslated（配合 gate 的 fail_open）。
+    """
+    topic = (topic or "").strip()
+    if not _has_cjk(topic):
+        return {"topic_zh": topic, "topic_en": topic, "translated": False,
+                "hits": [], "untranslated": [], "sources": []}
+    data = _lit_load_dict()
+    zh2en, mesh = data["zh2en"], data["mesh"]
+    keys = sorted(zh2en, key=len, reverse=True)
+    hits, hit_sources = [], []
+
+    def _repl(m):
+        zh = m.group(0)
+        info = zh2en[zh]
+        parts = [info["main"]] + [s for s in info["syns"] if s != info["main"]]
+        if mesh_expand and len(parts) == 1:  # 通用术语 → MeSH 等价同义词 OR 扩展
+            parts += [s for s in _lit_mesh_syns(mesh, info["main"])
+                      if s != info["main"]]
+        parts = list(dict.fromkeys(parts))[:4]  # 主名 + ≤3 同义
+        hits.append((zh, info["main"]))
+        for s in info["sources"]:
+            if s not in hit_sources:
+                hit_sources.append(s)
+        if len(parts) > 1:
+            return "(" + " OR ".join(parts) + ")"
+        return parts[0]
+
+    query = re.compile("|".join(re.escape(k) for k in keys)).sub(_repl, topic) \
+        if keys else topic
+
+    untranslated = []
+    if online_fallback and _has_cjk(query) and _CT_TRANSLATE_ONLINE:
+        def _repl_online(m):
+            zh = m.group(0)
+            en, src = localize_with_fallback(zh, "en")
+            if src in ("online", "term_map") and en and not _has_cjk(en):
+                hits.append((zh, en))
+                if src and src not in hit_sources:
+                    hit_sources.append(src)
+                return en
+            untranslated.append(zh)
+            return zh
+        query = re.sub(r"[\u4e00-\u9fff]+", _repl_online, query)
+    else:
+        untranslated = sorted(set(re.findall(r"[\u4e00-\u9fff]+", query)))
+    return {"topic_zh": topic, "topic_en": query, "translated": True,
+            "hits": hits, "untranslated": untranslated, "sources": hit_sources}
+
+
+def literature_gate_records(info):
+    """localize_literature 结果 → 翻译确认门契约记录（ct-base bilingual_retrieval §5.2）。"""
+    if not info or not info.get("translated"):
+        return []
+    recs = []
+    for zh, en in (info.get("hits") or []):
+        recs.append({"original": zh, "localized": en, "candidates": [en],
+                     "mode": "whole", "ambiguous": False, "source": "literature"})
+    for zh in (info.get("untranslated") or []):
+        recs.append({"original": zh, "localized": zh, "candidates": [],
+                     "mode": "fail_open", "ambiguous": False, "source": "literature"})
+    return recs
 
 
 if __name__ == "__main__":

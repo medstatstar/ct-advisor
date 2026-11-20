@@ -1,0 +1,92 @@
+{
+  "_comment": "Plan 驱动两阶段执行的唯一真相源（2026-11-18）。云端 tool_router_node.py 内嵌 _PLAN_SKILLS / _PLAN_PARAM_ALLOWLIST / _PLAN_EXPECT_ENUM / _PLAN_MAX_STEPS 副本（禁跨技能运行时 import，ct-base §20.19.6），由 scripts/check_route_drift.py 用 AST 断言逐字一致。改契约 = 改本文件 → 同步云端副本 → 跑 check_route_drift.py → 重打 Coze 包。",
+  "version": "2026-11-18",
+  "created": "2026-11-18",
+  "status": "implemented / pending Coze package republish",
+  "design_note": "提升复杂多步问题的判断灵敏度：问题第一次原样发 Coze，full_analysis 先判断——能直接回答就直接回答（plan 缺省 []）；只有判断答不了（命中需取数技能）才由 tool_router 输出结构化 plan。本地 plan_runner（纯代码）校验并按 plan 调用四个 A 档技能后端 Coze 端点，再把结构化结果交二次 Coze 综合成最终答案。Coze 全程只出 Plan 指令 + 最终综合，不执行、不持凭据；执行与凭据发起都在本地。",
+
+  "switch": {
+    "local_env": "CT_ADVISOR_PLAN",
+    "enabled_default": true,
+    "off_values": ["0", "false", "no", "off"],
+    "note": "默认开启（D1）：Coze 能直接回答就不产 plan，答不了才产；设 off 值仅作紧急关闭，关闭后行为逐字回到改造前（final_answer + handoff 卡）。",
+    "cloud_note": "云端 tool_router 内嵌 plan 产出逻辑默认启用；回滚需恢复旧版云端包（Coze 端不读本地 env）。"
+  },
+
+  "plan": {
+    "field": "plan",
+    "emitted_when": "tool_router 命中至少一个 A 档白名单技能（need_tools 非空）",
+    "skip_when": "未命中强规则（Coze 能直接回答，plan 缺省 []，链路到此结束）",
+    "max_steps": 5,
+    "max_steps_note": "D5：_validate 硬拒 len(plan)>5，超出部分不执行、在结果中标注；与云端 _PLAN_MAX_STEPS 逐字一致。",
+    "step_schema": {
+      "skill": "技能标识，必须在 skills 白名单内",
+      "params": "技能入参 dict；键必须属于 param_allowlist[skill]，未知键 fail-closed 丢弃",
+      "depends_on": "依赖的前置步骤 index 列表（0-based）；为空表示可并行；有环即拒绝",
+      "expect": "期望结果类型，取值必须在 expect_enum 内",
+      "prefill": "布尔；true 表示真实必填参数需本地 route_tool 预判结果补齐（云端只给 defaults）"
+    },
+    "expect_enum": ["registry_landscape", "safety_signal", "literature_evidence", "samplesize_number"]
+  },
+
+  "skills": ["ct-registry", "ct-safety", "ct-literature", "ct-samplesize"],
+  "skills_note": "D3：B 档（ct-sdtm / ct-adam 等）暂不考虑，F33 禁止方案/受试者数据出域；本期白名单锁死四个 A 档。",
+
+  "param_allowlist": {
+    "ct-registry": ["cond", "intr", "sponsor", "status", "max", "drug", "with_cde", "cde_keyword"],
+    "ct-safety": ["drug", "event", "top", "date_from", "date_to", "run"],
+    "ct-literature": ["topic", "year_from", "year_to", "safety", "max", "with_europepmc"],
+    "ct-samplesize": ["test", "alpha", "power", "nobs", "effect", "k_groups", "side", "sd", "margin", "p1", "p2"]
+  },
+  "param_allowlist_note": "registry/safety/literature 三档与 brief_contract.json::param_allowlist（8/6/6）逐字一致；samplesize 取自 tool_mapping.json::skills.ct-samplesize.params 全量键。",
+
+  "required_params": {
+    "ct-registry": ["cond"],
+    "ct-safety": ["drug"],
+    "ct-literature": ["topic"],
+    "ct-samplesize": ["test"]
+  },
+  "required_params_note": "必填参数云端拿不到（由本地 route_tool.py 确定性抽取）；补齐后仍缺失的 step 标 status=error 交二次 Coze 据实说明，绝不伪造 0 结果。",
+
+  "expect_by_skill": {
+    "ct-registry": "registry_landscape",
+    "ct-safety": "safety_signal",
+    "ct-literature": "literature_evidence",
+    "ct-samplesize": "samplesize_number"
+  },
+
+  "endpoint_routing": {
+    "ct-registry": "advisor_registry_brief",
+    "ct-safety": "advisor_safety_brief",
+    "ct-literature": "advisor_literature_brief",
+    "ct-samplesize": "ct_samplesize_coze"
+  },
+  "endpoint_routing_note": "复用 config/brief_contract.json::skill_to_source 与 cloud_brief.py 的本地直连实现；samplesize 走 ct-samplesize 的 CozeBackend 调用形态。凭据只在本地内嵌 blob。",
+
+  "assemble": {
+    "mode": "local_render",
+    "mode_note": "2026-11-20 D4' 性能改造：默认本地顺序陈列（plan_assemble_local.assemble_local），零 LLM/零出域/零网络，省去二次 Coze 50-65s。mode=cloud_second_call 或 env CT_ADVISOR_ASSEMBLE=cloud 可回滚到原二次 Coze 综合。统一入口 plan_assemble_local.assemble 同时服务 orchestrate 自动兜底 + confirm_menu 工作台 defer→resume。",
+    "local": {
+      "module": "adapters/plan_assemble_local.py",
+      "entry": "assemble",
+      "order": "首趟草稿原样保留 → 一句跨技能归纳(纯代码) → 按 plan 顺序逐项陈列 → F33 导流页脚",
+      "env": "CT_ADVISOR_ASSEMBLE=cloud|cloud_second_call 回滚；=local|local_render 强制本地"
+    },
+    "endpoint": "https://ct-advisor.coze.site/async_run",
+    "reentry_field": "tool_results",
+    "outbound_fields": ["original_question", "first_draft_answer", "plan_results"],
+    "plan_result_fields": ["skill", "status", "expect", "summary", "error"],
+    "forbidden_fields": ["doc_context", "raw_artifact", "attachment_payload", "protocol", "subject_data", "scheme"],
+    "note": "D4'（2026-11-20）：默认本地顺序陈列（无出域、无二次 Coze 调用）。出域字段/禁字段仅在 mode=cloud_second_call 回滚路径生效；回滚时禁止原始产物/附件/涉密字段（F33），二次 Coze 不通按三通道硬失败。本地路径无网络，error 步据实标注不伪造。"
+  },
+
+  "boundary": {
+    "hard_gate": "plan 由云端产出、本地代码校验执行；结果默认本地顺序陈列（D4'），mode=cloud_second_call 回滚时走二次 Coze 综合；本地 LLM 仍零决策，只跑 entry.py 一条命令并原样透传 stdout。",
+    "credential": "Coze 包内不含任何端点凭据。凭据 blob 只在本地 adapters/coze_token_embedded.py；调用发起都在本地 adapters/plan_endpoints.py。",
+    "f33": "Plan 只含四个 A 档公开检索/计算；二次 Coze 的 tool_results 只发结构化摘要，不发原始产物/附件；B/C 档永不入 Plan。drift 门禁 + plan_runner._validate 双保险。",
+    "failure": "主 Coze 不通 = 硬失败、无本地兜底（与现状一致）；Plan 步骤失败 = 该步标 status=error，由陈列层/二次 Coze 据实标注，二者不可混称『回落』。",
+    "audit": "产出的是快速调用的文字结果，不得宣称可替代技能本体审计级交付物；末尾强制 @skill 导流页脚。"
+  },
+
+  "known_change": "2026-11-18 首版：D1 默认开启（能答直答、答不了才出 plan）；D2 复用 brief 速览口径；D3 B 档不入；D4 一律二次 Coze；D5 步数上限 5。"
+}

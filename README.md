@@ -84,7 +84,7 @@ ct-advisor's coverage was broadened (v1.3.17) to three previously-uncovered but 
 
 ct-advisor is a **conversational skill**: you simply tell the assistant what you're working on — no commands, no parameter names to remember. As a WorkBuddy skill it **auto-loads with no extra installation**, and activates only when you call it via the Skill tool (not automatically in the background).
 
-Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / ★★★ professional), matching the Scenario Index in §1. Each case has three parts: **"You say"**, **"The reply you see"**, and **"🖥️ Workbench"**. The "reply you see" below are captured from **real runs of the skill** (machine markers stripped), reproduced as-is with no factual rewriting; for queries that need real data, the skill **hands off to the relevant sibling skill** running locally — it does not run the data itself nor fabricate numbers.
+Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / ★★★ professional), matching the Scenario Index in §1. Each case has three parts: **"You say"**, **"Assistant replies"**, and **"🖥️ Workbench"**. The "assistant replies" below are captured from **real runs of the skill** (machine markers stripped), reproduced as-is with no factual rewriting; for queries that need real data, the skill **hands off to the relevant sibling skill** running locally — it does not run the data itself nor fabricate numbers.
 
 **🖥️ Workbench, general steps**: open the workbench web page, paste the case's question verbatim into the chat box at the bottom → click **Send** → wait about a minute (cloud analysis) → the answer appears in the chat area; data-bound questions additionally return directly callable `@skill:…` handoff cards. Each case's "🖥️ Workbench" paragraph only notes what is specific to that case.
 
@@ -97,7 +97,7 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **You say:**
 > The protocol states subjects who complete all visits get a CNY 5,000 travel allowance. One subject withdrew early due to an SAE — must the investigator pay the full amount? What does GCP require?
 
-**The reply you see:**
+**Assistant replies (sketch):**
 > For a subject who withdrew early due to an SAE, **the investigator should not pay the full CNY 5,000 travel allowance; the allowance should be pro-rated by the proportion of visits the subject actually completed, and the allowance the subject is entitled to must not be withheld because of the early withdrawal caused by the SAE**.
 >
 > The 2020 edition of China's *Good Clinical Practice* makes subject rights the priority — subject safety and rights must outweigh scientific and social interests. The travel allowance compensates the actual travel costs a subject incurs during participation, not a reward for completing the trial: the protocol clause "full allowance upon completing all visits" applies to subjects who complete the trial as planned, not to early withdrawal that is not the subject's choice. An SAE is an uncontrollable risk of trial participation and the early withdrawal is not a breach by the subject, so the allowance should be pro-rated by the visits actually completed.
@@ -113,7 +113,7 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **You say:**
 > An adverse reaction is listed as "uncommon" in the IB, but the observed rate in the trial reached 15%. How should PV assess whether the IB and the label need updating?
 
-**The reply you see:**
+**Assistant replies (sketch):**
 > When an adverse reaction's observed incidence reaches 15% — far above the "uncommon" grading in the IB — PV should immediately start a safety-update assessment: **by default the IB's safety content must be updated, and the label update proceeds in parallel according to the product's marketing stage and regulatory requirements**.
 >
 > **Verify the baseline first**: check the "uncommon" threshold defined in the IB (different IBs use CIOMS/ICH or custom grading; "uncommon" is conventionally 0.1%–1%, ⚠️ pending verification against the IB's explicit definition), and confirm the statistical basis of the 15%: whether it is population-adjusted, whether confounders are excluded, and whether causality with the investigational drug is established.
@@ -133,7 +133,7 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **You say:**
 > Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature.
 
-**The reply you see:**
+**Assistant replies (sketch):**
 > The currently confirmable core competitive-intel for GLP-1 RA in obesity: on the marketed-product side, liraglutide (SCALE program) achieved 8.4 kg weight loss at 68 weeks with 63% of subjects losing ≥5% of body weight; semaglutide (STEP program) achieved 15.3 kg at 68 weeks with 86% achieving ≥5% loss; tirzepatide (SURMOUNT program) achieved up to 22.5 kg at 72 weeks at the highest dose, with 91% achieving ≥5% loss. On the common safety profile: the most frequent adverse reactions are nausea, vomiting, and diarrhea — GI reactions that ease with dose titration; hypoglycemia risk is far below insulin; signals to watch are pancreatitis, thyroid C-cell tumors, and GI obstruction. Core evidence sources include SIGN 154, the *Chinese Guidelines for Obesity Prevention and Control (2022 edition)*, and the STEP / SCALE / SURMOUNT pivotal RCT literature. The full dynamic competitive intel falls into trials, safety signals, and literature — pipeline updates and newer trial/safety/literature findings require the dedicated retrieval skills; the frameworks, public baselines, and retrieval paths for each module follow, and actual retrieval can be done by the corresponding local offline skills.
 >
 > **1. Trial-retrieval framework**
@@ -168,7 +168,7 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **You say:**
 > I'm planning a Phase II oncology trial and also need the sample size — help me decide the design.
 
-**The reply you see:**
+**Assistant replies (sketch):**
 > A **Simon two-stage single-arm design** is recommended as the default for a Phase II oncology trial; the sample size can be generated by the dedicated sample-size tool.
 > The Simon two-stage design evaluates the efficacy signal after stage-1 enrollment and terminates early when futile, substantially reducing subject exposure and development cost — it is the industry standard for exploratory solid-tumor Phase II trials; for biomarker-driven cohort expansion, a Bayesian adaptive design allows flexible enrollment adjustment.
 > > Basis: ICH E9 *Statistical Principles*; CDE *Technical Guidelines for Antitumor Drug Clinical Trials*
@@ -194,7 +194,7 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **You say:**
 > I'm not sure what I actually need — I have a half-written protocol and some questions.
 
-**The reply you see:**
+**Assistant replies (sketch):**
 > Before answering, the following need clarification:
 >
 > - Specify the target population / subjects (disease, stage, line of therapy, age band) — it changes applicability.
@@ -211,7 +211,7 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 **You say:**
 > One of our PD-1 products has case reports of interstitial lung disease; QA suspects a new safety signal. Search the published literature for how much support this signal has, and give me a citable evidence summary.
 
-**The reply you see:**
+**Assistant replies (sketch):**
 > ⚠️ **Safety note**: this question spans multiple sibling skills (ct-safety, ct-literature); it is a complex combined call. Consider splitting it into separate questions for more accurate, verifiable results. If there is **no response for a long time**, abort and re-ask by splitting.
 >
 > ---
@@ -239,10 +239,10 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 
 ### Case 7 · Protocol intro evidence + superiority sample size (ct-literature + ct-samplesize)
 
-**You say (round 1, no parameters):**
-> We're drafting a phase-3 protocol in this indication. Give me the published RCT and systematic-review evidence from the last 5 years for the introduction, then compute the sample size for a superiority design.
+**You say:**
+> (round 1, no parameters) We're drafting a phase-3 protocol in this indication. Give me the published RCT and systematic-review evidence from the last 5 years for the introduction, then compute the sample size for a superiority design.
 
-**The reply you see (round 1):**
+**Assistant replies (sketch, round 1):**
 > ⚠️ **Safety note**: this question spans multiple sibling skills (ct-samplesize, ct-literature); it is a complex combined call. Consider splitting it into separate questions for more accurate, verifiable results. If there is **no response for a long time**, abort and re-ask by splitting.
 >
 > ---
@@ -276,10 +276,10 @@ Below are **7 real cases**, graded by difficulty (★ basic / ★★ advanced / 
 > This question also involves the following skill, callable directly from its card (params attached):
 > - `@skill:ct-literature`: lit_report.xlsx / references_apa.md (PICO search + PRISMA) | params: topic=RCT 我们准备为这个适应症 | to supply: none
 
-**You say (round 2, parameters supplied):**
-> Two-proportion, p1=0.30, p2=0.50, two-sided α=0.05, power 80%.
+**You say:**
+> (round 2, parameters supplied) Two-proportion, p1=0.30, p2=0.50, two-sided α=0.05, power 80%.
 
-**The reply you see (after supply):**
+**Assistant replies (sketch, after supply):**
 > For the two-independent-proportions parameters you provided (p1=0.30, p2=0.50, two-sided α=0.05, power 80%, 1:1 allocation), the uncorrected rough sample size is about 94 per group, ~188 in total; with the conventional 10% dropout correction, about 105 per group and ~210 in total. Use the local ct-samplesize skill for the precise calculation and compliance justification.
 >
 > > **Professional Tip**: this question is suggested via the local **ct-samplesize** skill (sample size and power calculation expert, runs locally offline, no data leaves the machine): @skill:ct-samplesize.
@@ -363,6 +363,8 @@ You stay in full control: the report is shown to you **before** anything is sent
 ### Latency note
 Every **non-vague** question is handled by the advisor's local orchestration layer, which forwards to a remote analysis service (async submit + poll; a sync fallback is kept only for endpoints without async support). The polling deadline is 90 s (300 s for long tasks); **measured 3–72 s per round**, mostly 30–70 s, and data-intel questions also run the needed sibling skill locally. **A timeout is not a hard error**: the answer falls back to the local draft (not cloud-polished) with a clear fallback notice. A `vague` question is clarified locally first (a few seconds via the Local Clarify Loop), then re-routed. Because the orchestrator, prefetch, merge, and stitching are all **code** (not the LLM), dependence on the local model's performance is low — but reasoning models (e.g. Hunyuan-3, DeepSeek-R1) have been observed to over-think locally. **If a single reply routinely takes longer than 3 minutes, switch to a simpler / flash model to speed things up.**
 
+**Since v1.3.48 this advice appears automatically:** `entry.py` starts a clock at process load and checks it at its single exit; once the full flow reaches 3 minutes, a code-generated ⏱️ slow-response notice (with the measured "N m N s") is prepended to the first line of the answer, recommending a Flash-class fast model or this skill's Web version to avoid the delay entirely. The notice is part of the answer bytes covered by the checksum and delivered verbatim — it is not the model's own judgement and cannot be duplicated. Timing covers the skill's own process only (attachment gate → cloud poll → delegate stitch → callback → exit); it **excludes** the host model's reasoning before `entry.py` is called or after its output is received.
+
 ---
 
 ## 5. Data & Privacy
@@ -398,7 +400,7 @@ ct-advisor is the entry point that routes to sibling skills and forwards questio
 
 ---
 
-**Version**: v1.3.46 | **License**: MIT | **Authors**: medstatstar, phoe-zip
+**Version**: v1.3.55 | **License**: MIT | **Authors**: medstatstar, phoe-zip
 
 For feature requests, bug reports, or other feedback, please contact the author directly at <medstatstar@gmail.com> (Wintone Zhang).
 
@@ -410,5 +412,3 @@ For feature requests, bug reports, or other feedback, please contact the author 
 >
 > - **Tier A (non-confidential input)**: the input is ordinary data and involves no confidential information. Tier A skills can run after local installation or be used via the Web interface, and all Tier A skills are published openly on GitHub.
 > - **Tier B (confidential input)**: the input contains clinical-trial data / protocols / CRFs that pharma sponsors must keep strictly confidential. Tier B skills can either be installed and processed locally (data never leaves your domain) or be used via the Web interface with no installation required (data is de-identified before upload), but Tier B skills themselves are not published openly. For custom / on-prem deployment needs, contact the author.
-
-> 🌐 Other languages: [中文 README](README_zh-CN.md)

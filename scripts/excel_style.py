@@ -355,14 +355,34 @@ def add_chart(wb, chart_type, title, w, h):
     return ch
 
 
-def style_series(ch, chart_type):
-    lbl_font = {"size": 9, "font_name": FONT, "color": "#1F3864", "bold": False}
+def style_series(ch, chart_type, series_color=None, label_color="#404040",
+                 accent=None):
+    """Chart series style — single source for every ct- workbook (§31).
+
+    ``series_color`` / ``label_color`` / ``accent`` let a skill express its own
+    palette without re-implementing the layout rules; passing None keeps the
+    neutral default that suits generic workbooks.
+
+    设计要点：本函数只产样式，不建图表——调用顺序恒为
+    ``add_chart(...)`` → ``style_series(ch, ...)`` → ``wb.insert_chart(..., {"series": [...]})``。
+    """
+    lbl_font = {"size": 9, "font_name": FONT, "color": label_color, "bold": False}
     opts = {"data_labels": {"value": True, "font": lbl_font}}
     if chart_type == "pie":
         opts = {"data_labels": {"percentage": True, "category": True,
                                 "num_format": "0.0%", "font": lbl_font}, "gap": 55}
     if chart_type in ("col", "barh"):
         opts["gap"] = 55
+        if series_color:
+            opts["fill"] = {"color": series_color}
+    if chart_type == "line":
+        line_col = series_color or accent or "#1F3864"
+        marker_fill = series_color or accent or "#1F3864"
+        marker_border = accent or series_color or "#1F3864"
+        opts["line"] = {"color": line_col, "width": 2.25}
+        opts["marker"] = {"type": "circle", "size": 6,
+                          "fill": {"color": marker_fill},
+                          "border": {"color": marker_border}}
     return opts
 
 

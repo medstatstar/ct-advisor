@@ -11,8 +11,9 @@ doc_comments.py — Word 批注操作（§29，2026-11-05 新增）
   - 任何需要「在原批注内追加结构化回复」的场景。
 
 用法：
-  # 列出现有批注
+  # 列出现有批注（含正文锚点定位）
   python doc_comments.py list <input.docx>
+  python doc_comments.py list <input.docx> --no-anchors
   # 追加回复
   python doc_comments.py append-reply <input.docx> --replies replies.json -o out.docx
 
@@ -53,19 +54,25 @@ def esc(t):
 
 
 def md_runs(line):
-    """把一行 markdown 文本转成 w:r 序列（支持 **粗体**）。"""
+    """把一行 markdown 文本转成 w:r 序列（支持 **粗体**）。
+
+    星号约定（v1.4.43）：仅 `**粗体**` 被解析；非粗体段的 `*` **原样保留**
+    （Word 里就是普通字符）。旧版无条件 `p.replace("*", "")` 会把 `α*`、`p*`、
+    `α^*` 这类记号里的星号吞掉，已废弃。若需字面 `**`，写成 `\\*\\*`。
+    """
     parts = re.split(r"(\*\*.+?\*\*)", line)
     runs = []
     for p in parts:
         if not p:
             continue
         if p.startswith("**") and p.endswith("**") and len(p) > 4:
+            inner = p[2:-2].replace("\\*", "*")
             runs.append(
                 '<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">%s</w:t></w:r>'
-                % esc(p[2:-2])
+                % esc(inner)
             )
         else:
-            txt = p.replace("*", "")
+            txt = p.replace("\\*", "*")
             runs.append(
                 '<w:r><w:t xml:space="preserve">%s</w:t></w:r>' % esc(txt)
             )
@@ -140,7 +147,16 @@ def append_replies(docx_path, out_path, replies,
     new_xml = pattern.sub(repl, comments_xml)
 
     if os.path.exists(out_path):
-        os.remove(out_path)
+        try:
+            os.remove(out_path)
+        except OSError:
+            # 目标被占用（如 Word 预览锁定）→ 降级 _v2，不静默覆盖、不静默失败
+            base, ext = os.path.splitext(out_path)
+            new_path = "%s_v2%s" % (base, ext)
+            sys.stderr.write(
+                "输出文件被占用，改用：%s\n" % new_path
+            )
+            out_path = new_path
     zout = zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED)
     for zi in zin.infolist():
         data = zin.read(zi.filename)
@@ -150,6 +166,56 @@ def append_replies(docx_path, out_path, replies,
     zout.close()
     zin.close()
     return count, skipped
+
+
+W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+
+
+def _para_text(p):
+    """段落纯文本（含 OMML 的 m:t），用于锚点预览。"""
+    return "".join(
+        (t.text or "") for t in p.iter()
+        if t.tag in ("{%s}t" % W_NS, "{%s}t" % M_NS)
+    )
+
+
+def comment_anchors(docx_path):
+    """解析 document.xml，返回 {cid: (start_idx, end_idx, preview)}。
+
+    - 段落下标 = `root.iter(w:p)` 的文档顺序序号（含表格内段落，与正文阅读顺序一致）；
+    - start/end 取该批注 `w:commentRangeStart` / `w:commentRangeEnd` 所在段落；
+    - preview 取起始段落前 80 字。
+    用于回答「批注 id=X 锚定在正文哪一段」。document.xml 缺失或解析失败时返回 {}。
+    """
+    import xml.etree.ElementTree as ET
+
+    try:
+        with zipfile.ZipFile(docx_path, "r") as zin:
+            doc_xml = zin.read("word/document.xml")
+    except (KeyError, OSError):
+        return {}
+    try:
+        root = ET.fromstring(doc_xml)
+    except ET.ParseError:
+        return {}
+
+    anchors = {}
+    for i, p in enumerate(root.iter("{%s}p" % W_NS)):
+        text = _para_text(p)
+        for el in p.iter("{%s}commentRangeStart" % W_NS):
+            cid = el.get("{%s}id" % W_NS)
+            if cid is not None:
+                anchors.setdefault(cid, [i, i, text])
+        for el in p.iter("{%s}commentRangeEnd" % W_NS):
+            cid = el.get("{%s}id" % W_NS)
+            if cid is None:
+                continue
+            if cid in anchors:
+                anchors[cid][1] = i
+            else:
+                anchors[cid] = [i, i, text]
+    return {k: (v[0], v[1], v[2]) for k, v in anchors.items()}
 
 
 def list_comments(docx_path):
@@ -185,6 +251,8 @@ def main(argv=None):
     # list
     p_list = sub.add_parser("list", help="列出现有批注")
     p_list.add_argument("input", help="输入 docx")
+    p_list.add_argument("--no-anchors", action="store_true",
+                        help="不输出正文锚点定位（默认输出）")
 
     # append-reply
     p_ar = sub.add_parser("append-reply", help="向已有批注追加回复")
@@ -205,10 +273,20 @@ def main(argv=None):
         if not items:
             print("未发现批注。")
             return 0
+        anchors = {} if args.no_anchors else comment_anchors(args.input)
         print("现有批注（共 %d 条）：" % len(items))
         for cid, author, text in items:
             preview = text.replace("\n", " ")[:80]
             print("  [%s] %s: %s" % (cid, author, preview))
+            if anchors:
+                a = anchors.get(cid)
+                if a:
+                    s, e, ptext = a
+                    loc = ("段#%d" % s) if s == e else ("段#%d–#%d" % (s, e))
+                    ptext = ptext.replace("\n", " ")[:80]
+                    print("      ↳ 锚点 %s ｜ 正文: %s" % (loc, ptext))
+                else:
+                    print("      ↳ 锚点: 未在 document.xml 找到 commentRangeStart/End")
         return 0
 
     if args.cmd == "append-reply":

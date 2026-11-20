@@ -15,9 +15,9 @@
 
 红线
 ====
-* 开关 ``CT_ADVISOR_CLOUD_BRIEF`` **默认关闭**（2026-11-09 晚间架构重评）：
-  客户端已可直接调用三个技能本体并拿到完整交付物，brief 只给非审计级速览，
-  故默认主路径改为 handoff；未开时调用方 100% 走 handoff / 原执行卡。
+* 开关 ``CT_ADVISOR_CLOUD_BRIEF`` **默认启用**（2026-11-20 口径对齐 v1.59 用户拍板）：
+  本地直连 ct-search 速览节点为主链路，Advisor 工具调用一律先走 brief。
+  设 ``CT_ADVISOR_CLOUD_BRIEF=0`` 可显式关闭，回落 handoff / 原执行卡。
 * 任何失败（未部署 / 无凭证 / 超时 / status=error / 契约违约）一律返回 None，
   由调用方回落本地 need_tool 执行卡（ct-base §20.19.7 红线 2）。绝不伪造数据。
 * ``doc_context`` 绝不进入本通道（F33 数据出域红线）。
@@ -60,10 +60,11 @@ def load_contract() -> dict:
 
 
 def enabled(contract: Optional[dict] = None) -> bool:
-    """本地直连为 opt-in，默认关闭；显式 on 值才启用（否则走 handoff / 执行卡）。
+    """本地直连速览为主链路，默认启用；显式 off 值才关闭（回落 handoff / 执行卡）。
 
-    2026-11-09 晚间架构重评：客户端已可直接调用技能本体，brief 降级为快答路径，
-    默认主路径是 handoff。Coze 云端仍不持有凭据、不发起需凭据的外部调用。
+    2026-11-20 口径对齐 v1.59（2026-11-09 15:51 用户拍板）：云端节点归档、
+    cloud_brief_enabled 作废，本地直连升主链路。设 CT_ADVISOR_CLOUD_BRIEF=0
+    可回滚到 handoff。Coze 云端仍不持有凭据、不发起需凭据的外部调用。
     """
     cfg = (contract or load_contract())["switch"]
     val = os.environ.get(cfg["local_env"], "").strip().lower()
@@ -339,7 +340,26 @@ def render_brief_text(source: str, payload: dict, contract: dict) -> str:
             if block:
                 lines.append("- %s：%s" % (label, "；".join(
                     "%s %s" % (k, v) for k, v in list(block.items())[:8])))
-        for t in (brief.get("sample_trials") or [])[:5]:
+        # 速览字段映射兜底（与 plan_endpoints._repair_sample_trials 同口径）：
+        # 端点偶发 brief.sample_trials 全空壳，但顶层 projects 带真实登记号/标题/状态。
+        # 空壳直接渲染成「- ｜ ｜ -」无效列表，这里用 projects 公开字段重建。
+        trials = brief.get("sample_trials") or []
+        if not trials or all(not any(str(v or "").strip() for v in t.values())
+                             for t in trials if isinstance(t, dict)):
+            repaired = []
+            for p in ((payload.get("projects") or [])[:5]):
+                if not isinstance(p, dict):
+                    continue
+                rid = str(p.get("登记号") or p.get("Main ID") or p.get("project_id") or "").strip()
+                title = str(p.get("公共标题") or p.get("试验通俗题目") or "").strip()
+                status = str(p.get("招募状态") or p.get("试验状态") or "").strip()
+                if rid or title:
+                    repaired.append({"id": rid, "title": title, "status": status})
+            if repaired:
+                trials = repaired
+        for t in trials[:5]:
+            if not isinstance(t, dict):
+                continue
             lines.append("  - %s ｜ %s ｜ %s" %
                          (t.get("id") or "-", (t.get("title") or "")[:90],
                           t.get("status") or "-"))
@@ -404,12 +424,12 @@ def self_test() -> int:
 
     print("cloud_brief 离线自测（不触网）")
     print("-" * 62)
-    chk("本地直连默认关闭（opt-in 降级路径）", cfg["switch"]["enabled_default"] is False)
-    chk("未设环境变量时 enabled() 为 False", enabled(cfg) is False)
+    chk("本地直连默认启用（主链路）", cfg["switch"]["enabled_default"] is True)
+    chk("未设环境变量时 enabled() 为 True", enabled(cfg) is True)
+    os.environ["CT_ADVISOR_CLOUD_BRIEF"] = "0"
+    chk("显式 off 值可整条关闭（回滚 handoff）", enabled(cfg) is False)
     os.environ["CT_ADVISOR_CLOUD_BRIEF"] = "1"
     chk("显式 on 值可整条开启", enabled(cfg) is True)
-    os.environ["CT_ADVISOR_CLOUD_BRIEF"] = "0"
-    chk("显式 off 值可整条关闭", enabled(cfg) is False)
     os.environ.pop("CT_ADVISOR_CLOUD_BRIEF", None)
     chk("3 个 source 均已登记", len(cfg["sources"]) == 3)
     chk("白名单规模锁死 8/6/6",

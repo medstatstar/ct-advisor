@@ -37,6 +37,13 @@ import time
 import uuid
 from pathlib import Path
 
+# ── 全流程耗时守卫（SLOW-FLOW GUARD · v1.3.48）──────────────────────────────
+# 计时从进程启动（模块加载）开始，到唯一出口 _emit_plain 结束；墙钟时间覆盖
+# 附件转换 / vague 澄清 / Coze 异步轮询 / 委托缝合 / 出站回传 / 缓存短路全部阶段。
+# 超过阈值（默认 180s = 3 分钟）时，由出口在答案最前附加一条用户可见提示，
+# 引导改用 Flash 类快速模型或本技能 Web 版本。纯代码、不触网、不依赖 LLM。
+_FLOW_START_MONO = time.monotonic()
+
 # UTF-8 强制（三流统一）+ stdout 恒 LF（2026-10-15：控制台回传链路会把 \n
 # 转 \r\n，源头输出 LF + 校验和按 LF 口径计算，双保险免疫 CRLF 损耗）
 for _s in (sys.stdin, sys.stdout, sys.stderr):
@@ -75,7 +82,8 @@ def _hidden_kwargs() -> dict:
     return kw
 
 # ── 下游代码模块 ──────────────────────────────────────────────────────────────
-from route import is_vague
+# v1.77：vague 判定已上移 Coze plan_gate（强信号正则 + LLM 混合），本地零判定。
+# 移除 `from route import is_vague`；route.py 仅保留 timeout_tier 内部用途。
 from orchestrate import ANSWER_END, run_orchestrate
 
 # ── query_origin 透传（2026-11-11 修复：advisorlog 5/9 非法根因）─────────────
@@ -257,14 +265,89 @@ def _write_answer_file(payload: str, cs: str) -> str:
     return ""
 
 
+# ── 全流程耗时守卫：阈值 / 提示文案 / 出口前置（v1.3.48）─────────────────────
+# 阈值可用环境变量 CT_ADVISOR_SLOW_SEC 覆盖（仅用于测试 / 特殊部署）；默认 3 分钟。
+SLOW_FLOW_THRESHOLD_SEC = 180
+try:
+    SLOW_FLOW_THRESHOLD_SEC = max(1, int(os.environ.get("CT_ADVISOR_SLOW_SEC", "180")))
+except (TypeError, ValueError):
+    pass
+
+_SLOW_FLOW_MARK_ZH = "⏱️ **耗时提示**"
+_SLOW_FLOW_MARK_EN = "⏱️ **Slow response**"
+_FLOW_QUERY = ""  # 本轮问题原文（仅用于提示语言判定，main() 开头赋值）
+
+
+def _slow_flow_body(elapsed_sec: float, lang: str) -> str:
+    """慢响应提示正文（无分隔线）。中英文案与 SKILL.md / CHANGELOG 同步。"""
+    mm, ss = divmod(int(elapsed_sec), 60)
+    if lang == "zh":
+        return (
+            f"{_SLOW_FLOW_MARK_ZH}：本次全流程耗时约 {mm} 分 {ss} 秒，回复时间偏长。"
+            "这很可能是本地使用了过度思考的大模型导致的。"
+            "建议改用 Flash 类快速模型，或直接使用本技能的 Web 版本以彻底解决此问题。"
+        )
+    return (
+        f"{_SLOW_FLOW_MARK_EN}: this request took about {mm}m {ss}s and the response was slow. "
+        "This is most likely caused by an over-thinking model on the local side. "
+        "Switch to a Flash-class fast model, or use this skill's Web version to avoid the delay entirely."
+    )
+
+
+def _with_slow_flow_notice(output: str, elapsed_sec: float | None = None,
+                           question: str | None = None) -> str:
+    """出口幂等前置：全流程耗时超阈值时，在答案最前附加提示且仅一次。
+
+    语言优先取本轮问题；问题缺失则按答案正文前 2000 字的 CJK 字符判定
+    （答案语言跟随用户问题语言）。任何异常都降级为「不附加」，绝不阻断交付。
+    """
+    try:
+        if elapsed_sec is None:
+            elapsed_sec = time.monotonic() - _FLOW_START_MONO
+        if elapsed_sec < SLOW_FLOW_THRESHOLD_SEC:
+            return output
+        text = output or ""
+        head = text.lstrip()
+        if head.startswith(_SLOW_FLOW_MARK_ZH) or head.startswith(_SLOW_FLOW_MARK_EN):
+            return output  # 幂等：缓存答案 / 子进程已前置时不重复
+        q = question if question is not None else _FLOW_QUERY
+        if re.search(r"[\u4e00-\u9fff]", q or ""):
+            lang = "zh"
+        elif re.search(r"[\u4e00-\u9fff]", text[:2000]):
+            lang = "zh"
+        else:
+            lang = "en"
+        sys.stderr.write(
+            f"[entry] 全流程耗时 {elapsed_sec:.1f}s ≥ {SLOW_FLOW_THRESHOLD_SEC}s "
+            f"→ 已附加慢响应提示（lang={lang}）\n")
+        return _slow_flow_body(elapsed_sec, lang) + "\n\n---\n\n" + text
+    except Exception as _e:  # noqa: BLE001 - 提示是附加信息，异常绝不阻断主流程
+        sys.stderr.write(f"[entry] 耗时提示异常（忽略）: {type(_e).__name__}: {_e}\n")
+        return output
+
+
 def _emit_plain(output: str, exit_code: int = 0) -> None:
-    """唯一出口：写答案文件（UTF-8）→ 按 UTF-8 字节写 stdout → 退出。
+    """唯一出口：全流程耗时守卫 → 写答案文件（UTF-8）→ 按 UTF-8 字节写 stdout → 退出。
 
     编码决策**不在这里做**：不看 isatty、不看 sys.stdout.encoding、不看环境变量，
     一律 `stdout.buffer.write(utf-8 字节)`——常量编码，没有协商分支，也没有开关。
     显示层（终端代码页）与本函数无关：数据真源是 `_answers/<sha16>.md`，
     stdout 末尾的 `answer_file:` 行是纯 ASCII，任何代码页下都读得出来。
+
+    v1.3.48：耗时守卫在所有分支之前执行——提示与折叠后的正文一起进 checksum /
+    answer_file，作为答案的一部分由 agent 原样透传（HARD GATE 不变）。
     """
+    output = _with_slow_flow_notice(output)
+    # 2026-11-19 用户裁定：出口确定性 scrub——删云端 C13 契约吐出的
+    # 「本地离线执行 / 数据不出域 / 方案不出域」卖点措辞并改成快捷路径口径。
+    # 纯代码、零 LLM 决策；菜单块内部原样保留；在 checksum/答案文件之前完成，
+    # 保证 stdout 与 answer_file 字节一致。失败时降级为原文，绝不阻断交付。
+    try:
+        from adapters.confirm_menu import scrub_egress_promo as _scrub
+        output = _scrub(output)
+    except Exception as _e:  # noqa: BLE001
+        sys.stderr.write(f"[entry] 出口 scrub 异常（忽略，用原文）: "
+                         f"{type(_e).__name__}: {_e}\n")
     body = _answer_body(output)
     cs = _checksum16(body + "\n")          # 校验口径 = 标记之前的全部字节（含尾换行）
     payload = f"{body}\n{PLAIN_END_MARK}\nchecksum: {cs}\n"
@@ -347,31 +430,6 @@ def _handle_attachment_normal(attach_path: str, question: str) -> str:
     return payload_json
 
 
-def _run_clarify(original_question: str, max_rounds: int = 3) -> dict:
-    """调用 clarify_loop 获取澄清问题（纯本地，无网络）"""
-    payload = json.dumps({
-        "original_question": original_question,
-        "previous_answers": [],
-        "round": 0,
-        "max_rounds": max_rounds,
-    }, ensure_ascii=False)
-    # 2026-10-16 修复：subprocess.run 的 TimeoutExpired / OSError 此前落在 try 之外，
-    # clarify_loop 卡住或拉起失败会让 main 直接崩溃。澄清是**可选**增强步骤，
-    # 任何失败都必须降级为「可直接作答」并继续主流程，绝不阻断。
-    try:
-        result = subprocess.run(
-            [sys.executable, str(SCRIPT_DIR / "clarify_loop.py"),
-             "--payload-inline", payload],
-            capture_output=True, text=True, timeout=30, **_hidden_kwargs()
-        )
-        return json.loads(result.stdout)
-    except Exception as _e:  # noqa: BLE001
-        sys.stderr.write(
-            f"[entry] 澄清循环不可用（降级为直接作答）: {type(_e).__name__}: {_e}\n"
-        )
-        return {"status": "decidable", "ambiguous": False, "questions": []}
-
-
 def _extract_call_info(card_json) -> tuple:
     """从委托卡抽取「实际调用的兄弟技能 + 调用方法」。无卡（非 handoff）→ 本地直接作答。
 
@@ -441,7 +499,7 @@ def _run_orchestrate(payload: str, config: str) -> str:
 
 
 def main():
-    global _EARLY_HINT, _EARLY_NOTICE
+    global _EARLY_HINT, _EARLY_NOTICE, _FLOW_QUERY
     ap = argparse.ArgumentParser(
         description="ct-advisor 唯一代码入口（本地 LLM 唯一允许动作）"
     )
@@ -457,7 +515,32 @@ def main():
     ap.add_argument("--session", default="",
                     help="会话标识（跨轮上下文/去重键）：proxy 或飞书应传入稳定 ID；"
                          "缺失则退化为单轮（仍享全局答案缓存，仅无多轮上下文）")
+    ap.add_argument("--resume", default=None,
+                    help="技能确认菜单的二阶段续跑：填菜单块里的 token（16 位十六进制）；"
+                         "配合 --selected 传用户勾选的技能 JSON 数组。"
+                         "直接执行选中技能的 plan + 二次 Coze 综合，不再走判定 / 预取 / 缓存")
+    ap.add_argument("--selected", default="[]",
+                    help="与 --resume 配套：用户勾选的技能 JSON 数组，如 '[\"ct-registry\"]'；"
+                         "空数组 = 用户取消，返回首趟初步答案")
     args = ap.parse_args()
+    _FLOW_QUERY = args.q or ""  # 耗时提示语言判定（--stitch 无问题，走正文判定）
+
+    # ── 0b) 二阶段续跑（2026-11-19 用户确认菜单）：零判定、零预取、零缓存 ──────
+    # 用户勾选后由 agent 二次调用本入口；复用同一出口协议（_emit_plain）。
+    # HARD GATE 不变：本地 LLM 唯一动作仍是「运行 entry.py → 原样输出 stdout」，
+    # 只是这一轮的命令带了 --resume/--selected 两个参数（参数由用户勾选确定性生成）。
+    if args.resume:
+        sys.stderr.write("[entry] 确认菜单续跑（resume）：token=%s selected=%s\n"
+                         % (args.resume, args.selected))
+        try:
+            from adapters.confirm_menu import run_resume
+            _resume_out = run_resume(args.resume, args.selected, args.config)
+        except BaseException as _e:  # noqa: BLE001 顶层硬失败，仍走合法出口
+            sys.stderr.write("[entry] resume 异常: %s: %s\n" % (type(_e).__name__, _e))
+            _resume_out = ("⚠️ 技能执行出现异常（%s: %s），未返回未经精校的答案。请稍后重试。"
+                           % (type(_e).__name__, _e))
+        _emit_plain(_resume_out)
+        return
 
     # ── 0a) 回程汇总模式（2026-11-09，纯代码；默认零出站）────────────────
     # 补齐混合 handoff 的「回程」：用户分别调用多个兄弟技能后，把产物路径交给
@@ -543,13 +626,10 @@ def main():
                 else:
                     sys.stderr.write("[entry] doc_context 构建失败，回退为无附件模式\n")
 
-    # ── 2) 难度分级（仅判断 vague）──────────────────────────────────────────
-    vague = is_vague(original_question)
-    sys.stderr.write(f"[entry] vague: {vague}\n")
-
-    # ── 3) 构建 payload ─────────────────────────────────────────────────────
-    # query_meta 仅保留 difficulty（non-vague 统一标记为 forwarded，Coze 端自行判断）
-    query_meta["difficulty"] = "vague" if vague else "forwarded"
+    # ── 2/3) 构建 payload（v1.77：本地不做 vague 判定，全交 Coze plan_gate）────
+    # query_meta.difficulty 统一 forwarded；vague 与否由云端 plan_gate 的
+    # 强信号正则 + LLM 混合判定，命中则 clarify 路由 + message 回传。
+    query_meta["difficulty"] = "forwarded"
 
     # 2026-10-16 修复：scope_hint 主链路缺失。此前 scope_guard 仅在 forward_guards
     # 中生效（refine_answer 路径），entry.py 主链路不调用。现加入 payload，
@@ -613,24 +693,12 @@ def main():
         "request_id": _request_id,
     }, ensure_ascii=False)
 
-    # ── 4) vague → 澄清循环 ─────────────────────────────────────────────────
-    if vague:
-        sys.stderr.write("[entry] 进入澄清循环\n")
-        clarify_result = _run_clarify(original_question, args.max_clarify)
-        status = clarify_result.get("status", "decidable")
-        if status == "need_clarify":
-            questions = clarify_result.get("questions", [])
-            q_text = "\n".join(f"  - {q}" for q in questions)
-            sys.stderr.write(f"[entry] 需澄清 {len(questions)} 项\n")
-            _emit_plain(
-                f"在回答之前，需要澄清以下问题：\n\n{q_text}\n\n"
-                f"请针对以上问题逐一回复后，我将基于您的补充信息继续分析。"
-            )
-        # decidable / forced_decide → 继续发 Coze
+    # ── 4)（v1.77 移除）vague 澄清循环 ──────────────────────────────────────
+    # 本地零判定：vague 由 Coze plan_gate 判定，命中则 clarify 路由 + message 回传，
+    # 由 _emit_plain 出口统一渲染。此处不再有 if vague / _run_clarify 分支。
 
     # ── 5) 短路：近窗去重 + 全局答案缓存（P0-2 修复）────────────────────
-    # 对所有路径生效：vague 的 need_clarify 已在步骤 4 提前 exit，不会误短路；
-    # 此处仅对「真正会出站」的问题做本地复用（覆盖重复发送澄清类问题也省出站）。
+    # 此处对「真正会出站」的问题做本地复用；vague/澄清已在云端 END，不走本链路。
     shortcut = False
     _output_format = query_meta.get("output_format", "") or ""
     try:

@@ -1,0 +1,14 @@
+# 换行与编码统一（ct-base docs/06-readme-brand.md §13.4.1 · §16.1 F38/F46/F51）
+# 目的：无论 core.autocrlf 如何配置，检出/提交的文本文件一律 LF，
+# 避免 README / SKILL.md 在一次 git 检出后整体变成 CRLF 而触发 F38 / F46 ERROR。
+* text=auto eol=lf
+
+# 二进制资产不参与文本归一化
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.gif binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.zip binary

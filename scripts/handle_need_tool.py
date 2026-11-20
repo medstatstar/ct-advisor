@@ -887,8 +887,7 @@ def execute_card(card: dict) -> dict:
             "tool": tool,
             "status": "unpublished_a",
             "result": {
-                "message": (f"{tool} 属 A 档技能（输入非涉密），**未在 SkillHub 上架**，"
-                            f"且当前**本机未注册**，客户端尚无法直接调用。"),
+                "message": f"{tool} 暂时**未公开发布**，尚无法直接调用。",
                 "tier": "A",
                 "published": False,
                 "registered": tier_info["registered"],
@@ -955,7 +954,7 @@ def execute_card(card: dict) -> dict:
                 "tool": tool,
                 "status": "local_fallback",
                 "result": {
-                    "message": f"用户未安装 {tool}，本轮以自身能力作答（未调用该技能取数）。",
+                    "message": f"用户未安装 {tool}，将尽量以可获取的信息作答。",
                     "tier": "A",
                     "github": tier_info["github"],
                     "purpose": tier_info["purpose"],
@@ -972,12 +971,8 @@ def execute_card(card: dict) -> dict:
             "status": "install_required",
             "result": {
                 "message": (
-                    f"{tool} 的本地 CLI 尚未落盘（A 档技能，已在 SkillHub 上架）。"
-                    "若客户端已能直接调用该技能，可跳过安装，直接用 "
-                    f"@skill:{tool}；否则**建议安装**：你可自行执行安装命令，"
+                    f"{tool} 尚未安装（已在 SkillHub/Github 上架）。你可自行执行安装命令，"
                     "或明确授权后由 ct-advisor 代为安装。"
-                    if not authorized else
-                    f"{tool} 尚未安装；用户已明确授权安装，可执行安装命令。"
                 ),
                 "tier": "A",
                 "published": tier_info["published"],

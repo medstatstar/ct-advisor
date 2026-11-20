@@ -1,0 +1,7 @@
+# Runtime dependencies / 运行时依赖（ct-advisor）
+# Core CLI/assembly/workbench-proxy: Python stdlib only.
+requests>=2.28          # adapters/http_probe.py, scripts/entry.py（可选兜底出站）
+xlsxwriter>=3.0         # scripts/excel_style.py（XLSX 交付）
+
+# 已排除（不随包发布，无需声明）：
+#   langgraph / langchain_core / coze_coding_*  - 仅 adapters/coze/ 云端部署项目使用，整目录 ignore

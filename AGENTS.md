@@ -1,4 +1,4 @@
-# AGENTS.md — ct-advisor v1.3.46 (ct- series A-tier entry point)
+# AGENTS.md — ct-advisor v1.3.55 (ct- series A-tier entry point)
 
 > This document is ct-advisor's self-improvement contract. It follows ct-base AGENTS.md structure and is written in English per §4 (references·AGENTS are English-only for published ct- skills).
 
@@ -15,6 +15,17 @@ python scripts/entry.py --q "<user question>" [--attach "<path>"]
 ```
 
 **Everything else — attachment gate, vague gate, clarify loop, Coze forwarding, skill delegation — is done by code inside entry.py. The local LLM has NO decision space.**
+
+### 🔴 工具调用判断：Coze 远端为准（2026-11-20 用户裁定，全库强制）
+
+本技能有**两套**"要不要调技能 / 调哪些技能"的判断：本地 `route_tool.predict` 预判（零联网，只为方便操作 / 补参数）与 Coze 远端结构化判断（`plan` / `need_tools` / `need_tool`）。职责边界**严格固定**：
+
+1. **判断层（调哪些）**：冲突一律以 **Coze 远端**为准。Coze 有结构化技能判断 → 候选纯取 Coze，本地预判**不追加、不覆盖、不混入**；Coze 只回散文无判断 → 本地预判才兜底（避免停摆）。单一真源 `confirm_menu.reconcile_candidates`（菜单/plan 路径）与 `orchestrate.resolve_need_tools`（build_output / refine_answer ship 路径）同口径。
+2. **执行层（怎么调）**：与本条**解耦**——只看技能是否装在本机（`plan_runner._runs_local`）：装了走本地脚本，没装走云端端点；与技能的 `origin` 来源标记无关。
+3. **结果层（输出谁）**：`authoritative=cloud` 时 `plan_assemble_local.reconcile_results` 只陈列 Coze 端结果；本地兜底来源全部保留。
+4. **本地预判的正当用途**：仅为①Coze 无判断时的兜底候选 ②参数补齐（`extract_params_for_tools` / `predict().params`，setdefault 不覆盖云端值）。**不得**用它覆盖或混入 Coze 的工具调用判断。
+
+> 反模式（已清理）：早期 `build_output` / `refine_answer` 无条件合并"本地 + Coze"的 `need_tools`，冲突时本地技能混进 Coze 结果；2026-11-20 收紧为 Coze 优先并加防回归断言。新增任何工具判断入口前，先确认是否经上述单一真源仲裁。
 
 ### Module layer map (the whole skill, 4 layers, one entry)
 
@@ -68,8 +79,10 @@ through the same `entry._emit_plain` exit — no second entry point, no Coze, no
 no LLM. Outputs may be Tier-B confidential, so F33 keeps everything on this machine
 (extension allowlist, size / count / excerpt caps, credential-name denylist).
 `--q` is optional in stitch mode only. Chinese mixed asks now resolve `cond` / `topic`
-inside `route_tool.extract_params_for_tools`; the single-skill lexicon (37/37) is
-untouched, and ct-safety never receives a Chinese `drug` (openFDA needs English).
+inside the ct-base shared module `query_entity.py` (vendored into `scripts/` by
+`publish_inject`); `route_tool.py` imports it — no leaf-side copy of the entity
+extraction / language detection logic is kept. ct-safety never receives a Chinese
+`drug` (openFDA needs English).
 
 **Removed in v1.2.0 (dead code, coze-only leftovers)**: `adapters/backend.py` / `data_context.py` / `qa_store.py` (legacy LocalBackend + QA-log seams, never on the entry chain), `_patch14*.py`, `drug_name_resolver.py`, `keyword_breadth.py`, `landscape_scorer.py`, `source_guard.py`, `r_libs.py`, `workflows.json`, `menu.json`, `test_modeB.py`, and all `*.park-20260924*` / `_TRASH-*` / `out/` snapshot dirs (~185 MB).
 

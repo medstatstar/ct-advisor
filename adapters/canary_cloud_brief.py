@@ -336,18 +336,10 @@ def local_canary() -> None:
     os.environ.pop("CT_ADVISOR_BRIEF_TOKEN", None)
     os.environ.pop("CT_ADVISOR_CLOUD_BRIEF", None)
     os.environ.pop("CT_ADVISOR_HANDOFF", None)
-    # 2026-11-09 晚间：brief 降为 opt-in，默认主路径是 handoff。先验证默认态，
-    # 再显式开启以保留原有的「真实取数 + 端到端缝合」回归覆盖。
-    chk("CT_ADVISOR_CLOUD_BRIEF 未设 → 直连默认关闭", cb.enabled() is False)
+    # 2026-11-20 口径对齐 v1.59：本地直连速览为主链路、默认启用。先验证默认态
+    # 走 brief（真实取数 + 端到端缝合），再显式=0 验证可回滚 handoff。
+    chk("CT_ADVISOR_CLOUD_BRIEF 未设 → 直连默认启用", cb.enabled() is True)
     import handle_need_tool
-    _default_card = handle_need_tool.execute_card(dict(card))
-    chk("未设开关时 execute_card 走 handoff（默认主路径）",
-        _default_card.get("status") == "handoff"
-        and _default_card.get("mode") == "client_handoff",
-        "status=%s" % _default_card.get("status"))
-    os.environ["CT_ADVISOR_CLOUD_BRIEF"] = "1"
-    chk("显式 CT_ADVISOR_CLOUD_BRIEF=1 可整条开启", cb.enabled() is True)
-
     text = cb.try_cloud_brief(card)
     chk("本地 cloud_brief 真实取数 + 三护栏渲染",
         bool(text) and all(x in text for x in ("补充数据速览", "速览，非审计级", "@skill:ct-safety", "PRR=")),
@@ -369,9 +361,15 @@ def local_canary() -> None:
     os.environ["CT_ADVISOR_BRIEF_TOKEN"] = "INVALID_FOR_FALLBACK_TEST"
     r = cb.try_cloud_brief(card)
     chk("无效凭证 → 回落本地执行卡（不伪造数据）", r is None)
+    os.environ.pop("CT_ADVISOR_BRIEF_TOKEN", None)
     os.environ["CT_ADVISOR_CLOUD_BRIEF"] = "0"
     chk("显式 CT_ADVISOR_CLOUD_BRIEF=0 可整条关闭", cb.enabled() is False)
-    os.environ.pop("CT_ADVISOR_BRIEF_TOKEN", None)
+    # 回滚验证：显式关闭后 execute_card 应回到 handoff / 执行卡（不再走 brief）
+    _off_card = handle_need_tool.execute_card(dict(card))
+    chk("显式关闭 → execute_card 回滚 handoff",
+        _off_card.get("status") == "handoff"
+        and _off_card.get("mode") == "client_handoff",
+        "status=%s" % _off_card.get("status"))
     # P0-2：短 TTL 缓存命中（前面已真实取数写入）；缓存段需重新显式开启 brief。
     os.environ["CT_ADVISOR_CLOUD_BRIEF"] = "1"
     os.environ.pop("CT_ADVISOR_BRIEF_CACHE", None)

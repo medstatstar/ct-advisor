@@ -40,6 +40,7 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import List
 
 ALLOWED_EXT = {".md", ".txt", ".log", ".json", ".csv", ".tsv", ".xlsx"}
 MAX_FILE_BYTES = 2 * 1024 * 1024      # 单文件 2 MB
@@ -217,12 +218,9 @@ def stitch(spec: dict) -> str:
     zh = _zh(question) or not question
     if not isinstance(results, list):
         results = []
-    title = "## 跨技能结果汇总（本地代码缝合，未出站）" if zh else \
-            "## Cross-skill result summary (local code stitching, no egress)"
-    lines = [title, ""]
-    if question:
-        lines.append(("原始问题：%s" if zh else "Original question: %s") % question)
-        lines.append("")
+    # 2026-11-19 用户裁定：整合回来必须是干净的答案——去掉最外层框架
+    # （「跨技能结果汇总」标题、「原始问题：」行），不输出缝合机制元信息。
+    lines: List[str] = []
     if not results:
         lines.append("⚠️ " + ("未提供任何技能产物，无可汇总内容。" if zh else
                              "No skill outputs supplied; nothing to stitch."))
@@ -260,16 +258,13 @@ def stitch(spec: dict) -> str:
         lines.extend(blocks)
         lines.append("")
 
+    # 2026-11-19 用户裁定：合规声明压成一行，保留三个必需要素（非审计级 /
+    # 未发生任何出站 / 不改写、不推断），去掉冗长模板——整合结果要干净。
     disclaimer = (
-        "⚠️ 本汇总由本地代码**机械解析**各技能产物生成：未调用云端精校、未经人工复核、"
-        "非审计级，不得用于注册申报、信号判定或临床决策。ct-advisor 不改写、不推断、"
-        "不补数值；结论一律以各技能原始产物为准。产物内容全程留在本机，未发生任何出站。"
+        "⚠️ 非审计级；ct-advisor 不改写、不推断、不补数值，结果以各技能原始产物为准；未发生任何出站。"
         if zh else
-        "⚠️ This summary was produced by local code mechanically parsing skill outputs: "
-        "no cloud refinement, no human review, not audit-grade — do not use for regulatory "
-        "submissions, signal decisions or clinical decisions. ct-advisor does not rewrite, "
-        "infer or fill in numbers; rely on each skill's original output. All content stayed "
-        "local — no egress occurred.")
+        "⚠️ Not audit-grade; ct-advisor does not rewrite, infer or fill in numbers; "
+        "rely on each skill's original output; no egress occurred.")
     lines.extend(["---", "", disclaimer])
     return "\n".join(lines)
 

@@ -55,6 +55,11 @@ python scripts/serve.py                    # 手动前台启动（独立终端�
 curl http://127.0.0.1:18771/health
 curl http://127.0.0.1:18771/version        # {"version","code_fingerprint","orchestrate_mtime","port"}
 curl http://127.0.0.1:18771/shutdown       # 应急：端口被卡住的服务占用时
+
+# 技能调用确认菜单（二阶段，2026-11-19）：首趟出 <<<CT_TOOL_MENU>>> 后，
+# agent 呈现多选、收集用户勾选，再续跑（token 来自菜单块，一次性、TTL 24h）
+python scripts/entry.py --resume <token> --selected '["ct-registry","ct-safety"]'
+python scripts/entry.py --resume <token> --selected '[]'    # 用户取消 → 返回首趟初步答案
 ```
 
 ### 环境变量
@@ -65,6 +70,7 @@ curl http://127.0.0.1:18771/shutdown       # 应急：端口被卡住的服务�
 | `CT_ADVISOR_IDLE` | `3600` | 空闲超时（秒），超时自动退出 |
 | `CT_ADVISOR_DATA_ROOT` | 技能 `config/` | 缓存 / 去重库的数据根目录 |
 | `CT_ADVISOR_ANSWER_TTL` | `1800` | 答案缓存 TTL（秒） |
+| `CT_ADVISOR_CONFIRM` | `1` | 技能调用确认菜单开关；`0/false/no/off` 紧急关闭 → 回到 v1.75 自动执行 |
 
 ---
 
@@ -201,6 +207,10 @@ Short-circuit return shape: cache/dedup hit on `/async_run` returns `{"task_id":
 > canonical `entry.py` pipeline, session/context/cache/routing, requirements,
 > attachment handling, external tool references, and the Error Self-Heal Protocol
 > (the LLM-intervention boundary, pulled back 2026-11-15).
+> Moved back here on 2026-11-20 (SKILL.md ≤200-line target, wording unchanged):
+> historical base64 rationale, canonical pipeline detail, session/cache contract,
+> requirements table, attachment handling detail and external tool references —
+> see §10. Flow-critical rules stay in SKILL.md.
 
 ### Return path: `entry.py --stitch` (2026-11-09)
 
@@ -213,7 +223,7 @@ python scripts/entry.py --stitch '{"question":"...","results":[
 python scripts/entry.py --stitch @spec.json     # --q may be omitted in stitch mode
 ```
 
-`scripts/stitch_results.py` parses `.md/.txt/.log/.json/.csv/.tsv/.xlsx` locally (stdlib only) and stitches a deterministic summary through the **same** `_emit_plain` exit (marker / checksum / answer_file). **By default** it never imports the orchestrator or any HTTP client, never calls Coze, and never sends skill outputs anywhere — 🔴 F33: outputs may contain Tier-B confidential material, so the whole path stays on this machine. Reads are bounded by an extension allowlist, a 2 MB per-file cap, a 20-file cap, a 4 000-char excerpt cap and a credential-filename denylist. Missing or unparsable outputs are reported, never invented. The summary is explicitly marked non-audit-grade and never rewrites or infers numbers.
+`scripts/stitch_results.py` parses `.md/.txt/.log/.json/.csv/.tsv/.xlsx` locally (stdlib only) and stitches a deterministic summary through the **same** `_emit_plain` exit (marker / checksum / answer_file). **By default** it never imports the orchestrator or any HTTP client, never calls Coze, and never sends skill outputs anywhere — 🔴 F33: outputs may contain Tier-B confidential material, so the whole path stays on this machine. Reads are bounded by an extension allowlist, a 2 MB per-file cap, a 20-file cap, a 4 000-char excerpt cap and a credential-filename denylist. Missing or unparsable outputs are reported, never invented. The summary is explicitly marked non-audit-grade and never rewrites or infers numbers. **2026-11-19 (user ruling): the stitched answer must be clean** — no outer framing (no "cross-skill result summary" title, no "Original question:" line); only per-tool sections + parsed output + a one-line compressed compliance note (non-audit-grade / no egress / no rewrite). The handoff card that leads into `--stitch` is unchanged.
 
 🔴 **HARD GATE unchanged**: `--stitch` is a mode of `entry.py`, not another script the agent may choose. The agent still runs one command and pipes stdout verbatim; the handoff answer itself carries the ready-to-use `--stitch` hint, generated in code by `refine_answer._stitch_hint()`.
 
@@ -398,3 +408,74 @@ Two mandatory paths (P1-4 / P2-5, reinforced 2026-11-11):
 array in the delegation-result JSON and tiers it mechanically — blocking level (confirm/ask_term) returns `status=confirm_needed` + `confirm_card` (§5.4 unified card). On that status the advisor **must** present the confirmation card first, obtain the chosen term / reference term / waiver, then re-run; skipping the gate and stitching an answer is forbidden.
 2. **Self-assembled keyword path (instruction-enforced)**: when the advisor assembles retrieval
 terms itself without delegation — for Chinese sources (CDE/ChiCTR) or foreign sources — it must first look up the authoritative translation in `ct-base/references/term_map.json` (or `kw_lexicon.json`); when the map offers multiple candidates (e.g. bisoprolol → 比索洛尔 / 富马酸比索洛尔) sending them space-joined is **forbidden** (AND semantics guarantee zero hits) — show the translation confirmation card and let the user choose first; for terms with no mapping, ask the user for a reference term or an explicit waiver before searching.
+
+## Slow-response notice — verbatim bilingual template (moved from SKILL.md 2026-11-20)
+
+When full-flow wall-clock ≥180 s (`CT_ADVISOR_SLOW_SEC` overrides), `entry.py` prepends this in code before checksum/answer-file emission. The agent must deliver it verbatim as the first lines of the answer (never strip / explain / replace / duplicate). Chinese when the question or answer body contains CJK, English otherwise. Idempotent: already-prefixed answers are not prefixed again.
+
+> ⏱️ **耗时提示**：本次全流程耗时约 N 分 N 秒，回复时间偏长。这很可能是本地使用了过度思考的大模型导致的。建议改用 Flash 类快速模型，或直接使用本技能的 Web 版本以彻底解决此问题。
+
+## 10. Operational reference (moved from SKILL.md 2026-11-20)
+
+> 以下段落从 SKILL.md 原文照搬（仅合并硬换行，语义不变）。流程主干（HIGHEST PRIORITY 单一动作、HARD GATE 禁止清单、菜单确认、完整性校验表、Quality Gate、Outbound Authorization Gate、Bug Report、Error Self-Heal Protocol）仍留在 SKILL.md，本节只作开发者参考。
+
+### 10.1 Why the plain-text exit replaced base64 (historical)
+
+> **One entry point, one output shape, one protocol, one place where the protocol is produced.** Since v1.3.21 there is **no base64 anywhere in the pipeline** — not between code modules, not on the wire, not in the browser. The reason is historical: v1.3.9 introduced base64 to survive cp936 console mojibake, but that forced the LLM to hand-copy a ~2.6k-char random string into a second command (2026-10-16 incident: `5Lzd` typed for `5L+d`, a "checksum failure" that was pure transcription damage, then three real Coze calls for one question). The wrapper that fixed it left two parallel protocols, a 4× payload inflation, and — once the browser started taking the API directly — a decoder in *each* client. v1.3.21 removes the need instead of managing it: **encoding is no longer a decision made at the exit**. `entry.py` writes UTF-8 bytes straight to `stdout.buffer` (constant, no code-page inspection, no flags), the marker/checksum pair is produced in exactly one function, and the same bytes are also on disk. `scripts/ask.py` survives only as a zero-logic forwarding shim for stale callers.
+
+### 10.2 Canonical `entry.py` pipeline (full detail)
+
+```
+STEP 1  Attachment gate (if --attach) — BOTH paths ship a FILE via doc_context
+        ├─ < 5 MB   → doc_memory.build_file_payload(allow_upload=True): upload ORIGINAL file to Coze /upload_file, ship as `doc_context` (mode=file_id; base64-forward fallback on failure)
+        └─ > 5 MB   → convert locally (office_to_md.py for OOXML / direct read for txt-like), upload the resulting **.md** through the SAME doc_context channel + ℹ️ notice that cloud answers from the md version
+STEP 2  Vague gate (deterministic regex, scripts/route.py — binary: vague | forwarded, the ONLY local gate): vague → clarify_loop.py (≤3 rounds) → questions to user, stop; forwarded → continue (Coze re-judges difficulty with its own LLM; timeout tier via route.timeout_tier)
+STEP 3  Forward to Coze — orchestrate.run_orchestrate(payload): Coze async submit (/async_run, ms-level → task_id) + local prefetch (handoff card by default; brief only when explicitly enabled) → poll /task/{id} until terminal → merge (sync /run only as fallback when the async endpoint is unavailable)
+STEP 4  Delegate stitch — if Coze returns <<<CT_TOOL_DELEGATE>>>, entry.py auto-runs refine_answer.py --card-inline (code, no LLM); since 2026-11-09 this normally emits a client handoff card (@skill:<slug>) instead of executing the sibling CLI
+STEP 5  Output — entry.py runs the SLOW-FLOW GUARD first (v1.3.48: wall-clock from process start to this exit; if ≥180 s, prepend a user-visible notice recommending a Flash-class fast model or this skill's Web version), then writes the answer file (UTF-8), then the same bytes + `<<<CT_ANSWER_END>>>` + `checksum:` + `answer_file:` to stdout.buffer (single protocol, single producer since v1.3.21)
+```
+
+> **LLM-forbidden zone**: every STEP above is executed by code. The local LLM never picks the channel, never judges difficulty, never decides forwarding.
+
+### 10.3 Session, Context, Cache & Routing
+
+Local modules enrich the Coze payload: multi-turn `conversation_history`, 30-min cross-session answer cache, 10-min near-duplicate dedup, and a controlled-vocabulary domain router (`scope_guard`). All four capabilities are wired into both `entry.py` and the workbench proxy. Module details, API tables, and endpoint contracts are in §8 above.
+
+### 10.4 Requirements
+
+| Item | Requirement |
+|---|---|
+| Runtime | `python3` stdlib only |
+| Sibling skills | **Client-callable since 2026-11-09**: the client can invoke every locally registered `ct-*` skill directly. Availability is decided by `scripts/sibling_registry.json` (`skills[*].installed`) plus `<SKILLS_DIR>/<slug>/SKILL.md`, implemented in `handle_need_tool._client_callable()` — **not** by SkillHub listing. `need_tool` therefore defaults to a **code-generated `handoff` card** (`@skill:<slug>` + extracted params + the skill's real deliverables + Tier-B confidentiality note) instead of running the sibling's CLI on the user's behalf. `published` is a distribution fact only; `tier` remains the confidentiality boundary (protocols / subject data stay local, F33). `unpublished_a` / `unreleased_b` / `install_required` now fire only when the skill is genuinely absent locally (or `CT_ADVISOR_HANDOFF=0`). |
+| Refiner (Coze) | `scripts/entry.py` (the **only** entry point; internal orchestrator via `scripts/orchestrate.py`) sends payload to `ct-advisor.coze.site` — **async-first** (v1.3.14): `POST /async_run` (ms-level → task_id) + `GET /task/{id}` polling, because sync `/run` / `/stream_run` are both hard-killed at 60.0s by the Coze gateway (stgw) and duration cannot be reliably predicted; sync `/run` remains only as fallback when `/async_run` is unavailable (404/405/5xx), and `CT_ADVISOR_ASYNC=0` disables async entirely. Credential embedded in `adapters/coze_token_embedded.py` (obfuscated public token — keep as-is). 90s timeout / 300s long timeout (= polling deadline in async mode). |
+| External Refs | **teal** (insightsengineering) — clinical-data interactive exploration framework; **Docling** — structured PDF parsing. See "External Tool References" below. |
+
+### 10.5 Attachment handling (full detail)
+
+**Single gate = 5 MB, decided FIRST inside `entry.py` (v1.1.0 workflow correction, 2026-09-25). BOTH paths deliver a FILE to Coze through the same `doc_context` channel.**
+
+| Size | Behavior | Channel |
+|---|---|---|
+| `< 5 MB` | **Upload the original file directly** — never converted locally | `doc_memory.build_file_payload(allow_upload=True)` → Coze `/upload_file` → `doc_context` (`mode=file_id`); on upload failure auto-degrades to the base64 forward channel (`mode=file`) |
+| `> 5 MB` | Convert to Markdown locally, then **upload the resulting `.md` as the attachment** — same `doc_context` channel — plus an ℹ️ notice that the cloud answers from the md version | `scripts/office_to_md.py` (stdlib-only; OOXML) or direct read (`.txt/.md/.csv/.tsv/.json`); unsupported formats get an explicit user prompt |
+
+Coze decodes the original file natively for **any** Office format (OLE2 `.doc/.xls/.ppt` included), so fidelity is higher than any local conversion — this is why the <5 MB path uploads instead of converting.
+
+**Governance pointer**: layered conversion strategy, user prompts and confidentiality boundary are consolidated in **ct-base §6.7**; the shared converter lives in `ct-base/scripts/office_to_md.py` (vendored copy).
+
+**Deliverable boundary — the revised document is never returned (v1.24).** This skill's deliverable is **text only**: it does not generate, export, or hand back a modified document file. When the user asks for the revised file back, state plainly on the **first line** that **this feature is not available — only written suggestions are provided**, then give the suggestions as text the user can copy.
+
+### 10.6 External Tool References (v1.3.4 · external authoritative assets)
+
+- **teal** (insightsengineering, an R package for clinical-data interactive exploration) — framework for building Shiny review apps; reference model for the data-review integration mode. Install manually in R if needed; the skill itself never installs packages.
+- **Docling** (`pip install docling`) — structured parsing of regulatory documents (protocol/IB/CSR PDFs → hierarchical Markdown/JSON); attachment-parsing enhancement layer.
+- **Pinnacle 21 Validation Rules** (Certara, public API `standards.pinnacle21.certara.net/validation-rules/<STD>`, header `X-Requested-With: XMLHttpRequest`) — industry-standard CDISC validation rule set; snapshots archived in `ct-base/references/pinnacle21_validation_rules/` (SDTM 566 / SEND 581 / ADaM 456 / Define-XML 167). Authoritative benchmark for data-standard compliance Q&A; mirrored to Coze KB topic `ref-topic-p21-data-rules`.
+- **ICH M12 DDI Thresholds** (Step 4/5 official PDFs archived alongside `ct-base/references/m12_thresholds.md`) — CYP 50× / intestinal 10×, TDI 1.25, induction R-ratio, transporter Table 1, AUCR 0.80–1.25, GMR 90% CI 80–125%. Authoritative benchmark for DDI interaction Q&A; mirrored to Coze KB topic `ref-topic-m12-ddi`.
+
+### 10.7 DEP-MISS note
+
+**Note on `[DEP-MISS]`:** before 2026-10-15 a missing `requests` library surfaced as `[DEP-MISS]` + an install prompt. The transport now uses stdlib `urllib`, so this failure class no longer exists; the handler remains as dormant defensive code.
+
+### 10.8 Extended reference note (historical)
+
+The sections below remain in [`references/ADVANCED.md`](ADVANCED.md) (moved 2026-11-15); they are authoritative and `ct-base/BASE.md §N.M` anchors are unchanged. Pulled back into this file during the 2026-11-15 compaction: the canonical `entry.py` pipeline, session/context/cache/routing, requirements, attachment handling, external tool references and the Error Self-Heal Protocol.

@@ -35,6 +35,12 @@ from pathlib import Path
 # 复用 route.py 的入口信号（同目录 import；route.py 的 main 在 __main__ 守卫内，import 安全）
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from route import is_vague, DEF as DEF_ZH  # noqa: E402
+# 2026-11-20（共用基座上收）：中英混合实体抽取 / 语言检测统一复用 ct-base 共用件
+# query_entity.py（经 publish_inject 下发到本技能 scripts/）。禁止在本文件重建
+# _has_cjk / 疾病·药物·靶点抽取——那是 ct-base 单一真源，叶子侧分叉正是反复漂移的根因。
+from query_entity import (  # noqa: E402
+    has_cjk, extract_english_entity, extract_registry_params, extract_topic,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -86,7 +92,14 @@ TOOL_TRIGGERS = {
         r"(?:注册试验|登记试验|临床试验|试验注册|试验登记|注册临床试验|注册库|登记库|三期|二期)|"
         # ③′ 英文同型句式
         r"(?:find|search|list|retrieve|pull|fetch|give me|show me|how many|get)\b[^.;]{0,40}?"
-        r"(?:registered trials?|clinical trials?|trials?\b|landscape|pipeline|competitive[- ]intel)"),
+        r"(?:registered trials?|clinical trials?|trials?\b|landscape|pipeline|competitive[- ]intel)|"
+        # ③″ 2026-11-20 根治：「注册 III 期试验 / 注册性 III 期试验」罗马数字分期句式。
+        #   ③ 的对象表只有「注册试验 / 三期」，「注册 III 期试验」整句漏判 →
+        #   本地不预判、Coze 兜底调 registry 却没带参数 → MISSING_REQUIRED:cond。
+        #   predict() 传入的是 lower 后的问句，故罗马数字用 [iv] 小写类。
+        r"(?:检索|查询|查找|搜索|列出|整理|拉一下|查一下|搜一下|帮我查|给我查)"
+        r"[^。；;，,]{0,24}?"
+        r"注册性?\s*(?:[iv]{1,4}|[一二三四])\s*期\s*(?:临床)?试验"),
     "ct-safety": re.compile(
         # 具名数据源 / 统计量 / 高特异性方法（因果判定、去激发再激发、具体 irAE）
         r"faers|disproportionality|\bprr\b|\bror\b|\bebgm\b|"
@@ -94,7 +107,11 @@ TOOL_TRIGGERS = {
         r"不良反应因果关系|ae因果关系|免疫相关不良事件|\birae\b|"
         r"带状疱疹|vzv|水痘-带状疱疹|herpes zoster|"
         r"间质性肺炎|免疫性肺炎|心肌炎|免疫性肝炎|甲状腺炎|垂体炎|免疫性肾炎|"
-        r"pneumonitis|myocarditis|nephritis|thyroiditis|hypophysitis|causality assessment"),
+        r"pneumonitis|myocarditis|nephritis|thyroiditis|hypophysitis|causality assessment|"
+        # 2026-11-20：明确「动作动词 + 安全信号」= 强命中（多技能三合一问题实测漏 safety）。
+        # 「XX 的安全性信号有哪些」这类咨询（动词仅「查」）仍落 WEAK，不自动调用。
+        r"(?:检测|识别|查找|检索|分析|评估|监测|筛查)[^。；;，,]{0,20}?"
+        r"(?:安全信号|安全性信号|不良反应信号|药物警戒信号)"),
     "ct-literature": re.compile(
         # 具名文献源 / 高特异性研究类型 / 「检索动词 + 文献」句式
         r"pubmed|openalex|\bmeta\s*[- ]?分析|meta[- ]analysis|系统综述|系统评价|"
@@ -283,7 +300,7 @@ def _rank_hits(hits: list, q: str) -> list:
             if p.get("p1") is not None or p.get("p2") is not None:
                 s += 2
             cond = p.get("cond") or p.get("drug") or ""
-            if cond and _has_cjk(cond):
+            if cond and has_cjk(cond):
                 s += 2
             if RETRIEVAL.search(q) or _EXEC_INTENT_RE.search(q):
                 s += 1
@@ -318,52 +335,6 @@ def _candidate_evidence(tools, q: str) -> list:
     return out
 
 
-# 英文抽取停用词（避免把「registered trials for…」这类结构词当实体）
-_EN_STOP = {
-    "the", "a", "an", "our", "one", "registered", "trials", "trial",
-    "case", "reports", "report", "published", "literature", "safety",
-    "signal", "signals", "full", "picture", "help", "introduction",
-}
-
-
-def _extract_english_entity(q: str) -> str:
-    """尽力抽取英文药名/靶点实体（route_tool 预取参数兜底）。
-
-    2026-08-21：README 示例 2/3/7/8 实测——英文提示词在中文 SUFFIX 逻辑下抽不到
-    cond/topic/drug，预取退化 need_params（只给检索指引、不出格局）。此处补英文
-    抽取：已知靶点 > 「for X」> 「X in/of/with Y」。仅英文问题生效（CJK 占比守卫），
-    中文问题不受影响。抽不到返回空串（由 handle_need_tool 追问）。
-    """
-    q = q or ""
-    if len(re.findall(r"[\u4e00-\u9fff]", q)) >= max(1, len(q) * 0.15):
-        return ""  # 中文主导，跳过英文抽取
-    # 1) 已知靶点/药物形态（PD-1、GLP-1 RA 等）
-    KNOWN = re.compile(
-        r"\b(PD-1|PD-L1|CTLA-4|GLP-1(?:\s*RA)?|HER2|EGFR|ALK|ROS1|BRCA1|BRCA2|VEGF|CD20)\b",
-        re.I)
-    m = KNOWN.search(q)
-    if m:
-        return m.group(1).upper()
-    # 2) 「for X」捕获（Pull the registered trials for semaglutide → semaglutide；
-    #    介词/逗号/结尾处截断，避免吞入后续词）
-    m = re.search(
-        r"\bfor\s+((?:[A-Za-z][A-Za-z0-9\-]*\s+){0,2}[A-Za-z][A-Za-z0-9\-]*)"
-        r"(?=\s+(?:in|among|of|with)\b|\s*[,.;]|$)", q)
-    if m:
-        cand = re.sub(r"^(?:the|a|an)\s+", "", m.group(1).strip(), flags=re.I)
-        if cand and cand.lower() not in _EN_STOP:
-            return cand
-    # 3) 「X in/among/of/with Y」捕获（semaglutide in T2D → semaglutide）
-    m = re.search(
-        r"\b([A-Za-z][A-Za-z0-9\-]*(?:\s+[A-Za-z][A-Za-z0-9\-]+){0,2})\s+(?:in|among|of|with)\s+",
-        q)
-    if m:
-        cand = re.sub(r"^(?:the|a|an)\s+", "", m.group(1).strip(), flags=re.I)
-        if cand and cand.lower() not in _EN_STOP:
-            return cand
-    return ""
-
-
 def _extract_params(tool: str, q: str) -> dict:
     """尽力抽取执行卡参数；抽不到的留空（handle_need_tool 补全/追问）。"""
     params: dict = {}
@@ -386,105 +357,33 @@ def _extract_params(tool: str, q: str) -> dict:
             except ValueError:
                 pass
     elif tool == "ct-registry":
-        # 抽取检索主词 cond（覆盖 药/抑制剂/单抗/药物/化合物/制剂/类 等形态）。
-        # 取 drug 后缀前紧邻的实体、并裁剪前导动词（检索/查/针对…），避免把动词当检索词。
-        # ⚠️ 键必须是 tool_mapping.json 的 required_params 值「cond」（非 drug）：
-        #   抽成 drug 会与 required_params 对不上 → handle_need_tool 仍判 need_params，
-        #   前端预判对 registry 形同虚设（已踩过 REKEY 坑，详见 v0.9.68 修复记录）。
-        SUFFIX = r"(?:抑制剂|单抗|药物|药|化合物|制剂|类|肽|抗体)"
-        m = re.search(SUFFIX, q)
-        if m:
-            pre = q[: m.start()].strip()
-            # 2026-08-20：剥离前导口语动词/请求短语（拉一下/帮我查…），
-            # 避免连续中文合成一个 run 时把"拉一下"当 cond 的一部分。
-            LEAD = re.compile(
-                r"^(?:请|麻烦)?(?:(?:帮我|给我|帮|拉一下|查一下|搜一下|找一下|看一下|"
-                r"检索|查询|查|看|拉|搜|找|了解|关于|针对|整理|列一下|列出|给我列)\s*)+")
-            pre = LEAD.sub("", pre)
-            runs = re.findall(r"[\u4e00-\u9fa5A-Za-z0-9]+(?:[-][\u4e00-\u9fa5A-Za-z0-9]+)*", pre)
-            BLACK = {"检索", "查询", "查", "看", "关于", "针对", "治疗", "了解",
-                     "找", "这个", "该", "那", "适应症", "在研", "试验", "有", "哪些",
-                     "撰写", "完整", "一份", "请", "根据", "以下", "模板",
-                     "提取", "文本", "内容", "doc", "文件"}
-            ent = ""
-            for r in reversed(runs):
-                if r not in BLACK:
-                    ent = r
-                    break
-            if ent:
-                params["cond"] = ent + m.group(0)
-        if not params.get("cond"):
-            # 2026-08-21：英文药名/靶点兜底（README 示例 2/3 实测根因：
-            # 英文问题无中文 SUFFIX → m=None 整块跳过；此处独立于 if m 块执行）
-            en = _extract_english_entity(q)
-            if en:
-                params["cond"] = en
+        # 2026-11-20 根治（单一真相源）：cond/intr 的全部逻辑已收进 ct-base
+        # `query_entity.extract_registry_params`（生成物尾段剥离 + 疾病泛词黑名单
+        # + 纯英文靶点/疾病缩写兜底 + cond 优先级）。任何入口直接 return 其结果，
+        # 禁止在本叶子再补 SUFFIX 正则 / 英文兜底 / has_cjk 分叉——那三层互相
+        # 覆盖正是 MISSING_REQUIRED:cond 与 cond=抗肿瘤 反复复发的根因。
+        return extract_registry_params(q)
     elif tool == "ct-literature":
-        # 2026-08-21：英文 topic 尽力抽取（示例 3/8）；中文仍留空由 need_params 追问
-        en = _extract_english_entity(q)
-        if en:
-            params["topic"] = en
+        # 2026-11-20：topic 收口 ct-base `extract_topic`（中英统一 + 尾段清洗）。
+        # 此前中文 topic 靠 extract_params_for_tools 的调用方补丁兜底，换入口就丢；
+        # 现在底层一次给出，调用方只做合并。
+        topic = extract_topic(q)
+        if topic:
+            params["topic"] = topic
     elif tool == "ct-safety":
         # 2026-08-21：英文 drug 尽力抽取（示例 7）；中文仍留空由 need_params 追问
-        en = _extract_english_entity(q)
+        en = extract_english_entity(q)
         if en:
             params["drug"] = en
     return params
 
 
 # ---------------------------------------------------------------------------
-# 中文混合问句实体抽取（2026-11-09，仅多技能路径使用）
-#
-# 🔴 刻意不改单技能 `_extract_params`：那是 route_tool --self-test 37/37
-#    词表回归的稳定区。中文增强只作用于新增的 extract_params_for_tools，
-#    因此纯方法论 / 定义 / 咨询护栏等既有断言一条都不受影响。
+# 中文混合问句实体抽取：已上收 ct-base 公用基座 `query_entity.py`（2026-11-20）。
+# 本文件顶部 `from query_entity import has_cjk, extract_english_entity,
+# extract_mixed_entities` 复用单一真源，不再保留叶子侧副本——此前自建 `_has_cjk`
+# 与 ct-base `kw_localize.detect_lang` 分叉，正是反复漂移的根因。
 # ---------------------------------------------------------------------------
-_CJK_DISEASE = re.compile(
-    r"[\u4e00-\u9fa5A-Za-z0-9\-]{1,14}(?:癌|瘤|症|病|综合征|适应症)")
-_CJK_DRUG = re.compile(
-    r"[\u4e00-\u9fa5A-Za-z0-9\-]{1,14}(?:抑制剂|单抗|抗体|肽|类药物|类似物)")
-_LATIN = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*\b")
-_LATIN_DISEASE = {"NSCLC", "SCLC", "HCC", "CRC", "T2DM", "COPD", "AML", "CLL"}
-_ENTITY_BLACK = {
-    "FAERS", "PRR", "ROR", "EBGM", "PubMed", "ORR", "PFS", "OS", "NCT", "CDE",
-    "GCP", "ICH", "AE", "SAE", "IB", "CSR", "SAP", "ITT", "CI", "HR", "FDA",
-    "EMA", "NMPA", "WHO", "CT", "RA", "MedDRA", "PT", "XX", "III", "II", "I",
-    "Pull", "Give", "Find", "Search", "Compute", "Check", "How", "What",
-}
-
-
-def _has_cjk(text: str) -> bool:
-    return any("\u4e00" <= c <= "\u9fff" for c in (text or ""))
-
-
-def _extract_cjk_mixed_entities(q: str) -> dict:
-    """从中文/中英混合问句抽适应症、靶点与文献主题（尽力而为，不编造）。
-
-    返回 {condition, target, drug_cjk, topic}。仅用于给 ct-registry 的
-    `cond` 与 ct-literature 的 `topic` 兜底 —— 两者接受中文检索词。
-    ct-safety 的 `drug` **绝不**填中文：openFDA 只认英文通用名，
-    硬填会导致零命中，属有害参数；改为在副卡给出面向用户的提示。
-    """
-    q = q or ""
-    disease = ""
-    m = _CJK_DISEASE.search(q)
-    if m:
-        disease = m.group(0)
-    else:
-        for tok in _LATIN.findall(q):
-            if tok.upper() in _LATIN_DISEASE:
-                disease = tok
-                break
-    m2 = _CJK_DRUG.search(q)
-    drug_cjk = m2.group(0) if m2 else ""
-    targets = [t for t in _LATIN.findall(q)
-               if t.upper() not in _ENTITY_BLACK
-               and t.upper() not in _LATIN_DISEASE
-               and len(t) >= 2]
-    target = targets[0] if targets else ""
-    topic = " ".join(x for x in (target or drug_cjk, disease) if x).strip()
-    return {"condition": disease or target, "target": target,
-            "drug_cjk": drug_cjk, "topic": topic}
 
 
 def extract_params_for_tools(tools, q: str) -> dict:
@@ -496,20 +395,19 @@ def extract_params_for_tools(tools, q: str) -> dict:
     下游 `_handoff_result` / `_build_deferred` 各自按技能白名单过滤，
     因此合并**不会**造成串参。未知技能返回空字典，不抛异常。
 
-    中文/中英混合问句额外用 `_extract_cjk_mixed_entities` 给 registry 的
-    `cond` 与 literature 的 `topic` 兜底；英文问句完全走原逻辑，不受影响。
+    2026-11-20 起 ct-registry 的 `cond` / `intr` 与 ct-literature 的 `topic`
+    均由 ct-base `query_entity` 的单一函数产出；本函数只负责多技能合并，
+    不再做任何参数纠正——纠正层正是「换个入口就复发」的温床。
     """
     merged = {}
     for t in tools or []:
         for k, v in (_extract_params(t, q) or {}).items():
             if v not in (None, ""):
                 merged.setdefault(k, v)
-    if _has_cjk(q):
-        ent = _extract_cjk_mixed_entities(q)
-        if "ct-registry" in (tools or []) and ent.get("condition"):
-            merged.setdefault("cond", ent["condition"])
-        if "ct-literature" in (tools or []) and ent.get("topic"):
-            merged.setdefault("topic", ent["topic"])
+    # 2026-11-20 根治：本函数**只做多技能合并**，不再做任何 cond/intr/topic 纠正。
+    # 三类参数均已由 `_extract_params` → ct-base 单一函数产出；此处曾有
+    # `setdefault("cond", disease)` 用 condition（target 兜底）覆盖正确结果，
+    # 是「换个入口就复发」的最后一处叶子补丁，现已删除。
     return merged
 
 
@@ -674,7 +572,10 @@ def predict(q: str) -> dict:
         raw_hits = list(strong)
         hits = _rank_hits(raw_hits, q)
         tool = hits[0]
-        params = _extract_params(tool, q)
+        # 2026-11-20 根治：cond/intr 中文分流已下沉进底层 `_extract_params`，
+        # 这里统一走唯一入口 `extract_params_for_tools`，不再按语种分叉打补丁——
+        # 分叉本身就是「换个入口就复发」的温床。
+        params = extract_params_for_tools([tool], q)
         ambiguity = "multi" if len(raw_hits) > 1 else "single"
         # 2026-11-10（安全提示）：多强命中 = 复杂混合调用 → 标记 split_advice 并生成提示文本，
         # 供本地渲染层（refine_answer._merge_answer）注入答案，提示用户拆分问题。
@@ -692,9 +593,9 @@ def predict(q: str) -> dict:
                  candidates=_candidate_evidence(weak, q))
 
 
-def predict_tool(q: str):
-    """兼容接口：仅返回 need_tool 字符串或 None（供编排器快速判定）。"""
-    return predict(q).get("need_tool")
+# 2026-11-20：已删除 `predict_tool()` 兼容接口——它返回技能 id 字符串而非 dict，
+# 工作端曾据此 `.get("params")` 抛 AttributeError 并吞掉整段本地补参。
+# 全链路统一使用 `predict()`（返回完整 dict）。
 
 
 # ---------------------------------------------------------------------------
@@ -812,35 +713,15 @@ def suggest_footer(tools, lang: str = "zh-CN") -> str:
     registry = _load_sibling_registry()
     installed = _get_installed_skills(registry) if registry else set()
 
-    if lang == "zh-CN":
-        items_parts = []
-        for t in tools:
-            # 检查是否已安装（若有注册表）
-            if registry and t not in installed:
-                continue
-            desc = _build_dynamic_desc(t, registry, "zh-CN") or _TOOL_DESC.get(t, {}).get("zh", t)
-            items_parts.append(f"- `@skill:{t}`：{desc}")
-        if not items_parts:
-            return ""
-        items = "\n".join(items_parts)
-        return ("\n\n---\n\n💡 *补充：以上已按本技能自身能力作答。本问题还涉及下列兄弟技能，"
-                "它们已在本机注册、客户端可直接调用；如需**真实数据、可复算结果或文件交付物**，"
-                "直接调用即可：*\n" + items)
-    else:
-        items_parts = []
-        for t in tools:
-            if registry and t not in installed:
-                continue
-            # 英文路径优先用 _TOOL_DESC 的英文文案：sibling_registry 的 summary 恒含中文，
-            # 复用会让英文答案夹中文（2026-11-09 修正）。
-            desc = _TOOL_DESC.get(t, {}).get("en") or _build_dynamic_desc(t, registry, "en") or t
-            items_parts.append(f"- `@skill:{t}`: {desc}")
-        if not items_parts:
-            return ""
-        items = "\n".join(items_parts)
-        return ("\n\n---\n\n💡 *Note: the answer above is ct-advisor's own. The sibling skills "
-                "below are registered locally and can be invoked directly from the client — "
-                "call them for **real data, reproducible results or file deliverables**:*\n" + items)
+    # 2026-11-19 用户裁定：footer 只列可调用技能 id，不输出转介句/命令行/Web 入口。
+    kept = [t for t in tools if not (registry and t not in installed)]
+    if not kept:
+        return ""
+    items = "\n".join(f"- `@skill:{t}`" for t in kept)
+    lead = ("💡 *补充：以上已按本技能自身能力作答。本问题还涉及下列技能：*\n"
+            if lang == "zh-CN" else
+            "💡 *Note: the answer above is ct-advisor's own. Related skills:*\n")
+    return "\n\n---\n\n" + lead + items
 
 
 # ---------------------------------------------------------------------------
@@ -851,6 +732,7 @@ SELF_TEST = [
     # (问题, 期望 need_tool) — 明确查询应高置信命中；定义/方法论/隐晦需求应 none
     ("算下样本量，ORR 30% vs 45%", "ct-samplesize"),
     ("检索 PD-1 抑制剂三期试验有哪些", "ct-registry"),
+    ("检索 PD-1 三线 NSCLC 的注册 III 期试验", "ct-registry"),  # 2026-11-20 根治回归
     ("拉一下司美格鲁肽在 2 型糖尿病的注册试验", "ct-registry"),   # 2026-08-20：README 示例 2 ZH
     ("Pull the registered trials for semaglutide in T2D", "ct-registry"),  # 2026-08-20：README 示例 2 EN
     ("computing sample size with power 80%", "ct-samplesize"),
@@ -947,11 +829,24 @@ SUGGEST_TEST = [
 PARAM_TEST = [
     ("算下样本量，ORR 30% vs 45%", {"p1": 0.3, "p2": 0.45}),
     ("检索 PD-1 抑制剂三期试验有哪些", {"cond": "PD-1抑制剂"}),
+    # 2026-11-20 根治回归：中文混合问句必须 cond=疾病、intr=药物，
+    # 绝不能再出现「年以来帕博利珠单抗」这类残片（本 bug 反复复发的固定用例）。
+    ("2020 年以来帕博利珠单抗（Keytruda）治疗晚期非小细胞肺癌的临床试验注册情况，列出主要的在研试验。",
+     {"cond": "非小细胞肺癌", "intr": "帕博利珠单抗"}),
+    ("查找信迪利单抗治疗肝癌的在研临床试验", {"cond": "肝癌", "intr": "信迪利单抗"}),
     ("computing sample size with power 80%", {}),  # 仅预设，无真实参数可抽
     # 2026-08-21：英文药名/靶点抽取断言（README 示例 2/3/7 修复回归）
     ("Pull the registered trials for semaglutide in type-2 diabetes", {"cond": "semaglutide"}),
     ("Give me the full competitive-intel picture for GLP-1 RA in obesity — trials, safety signals, and literature", {"cond": "GLP-1 RA"}),
     ("One of our PD-1 products has case reports of interstitial lung disease; QA suspects a new safety signal. Search the published literature for how much support this signal has", {"topic": "PD-1"}),
+    # 2026-11-20 根治回归：纯英文靶点 + 疾病缩写（无「单抗/抑制剂」后缀）必须填 cond。
+    ("检索 PD-1 三线 NSCLC 的注册 III 期试验。", {"cond": "NSCLC", "intr": "PD-1"}),
+    # 同一问题连同上一轮完整输出一起粘贴回来：生成物尾段不得污染 cond/intr。
+    ("检索 PD-1 三线 NSCLC 的注册 III 期试验。\n"
+     "初步说明（首趟生成，仅供参考）\n"
+     "可通过 CDE、ClinicalTrials.gov 等平台，按限定PD-1单抗、三线NSCLC检索。\n"
+     "依据：CDE《抗肿瘤药物临床试验技术指导原则（2020年版）》\n"
+     "原因码：MISSING_REQUIRED:cond", {"cond": "NSCLC", "intr": "PD-1"}),
 ]
 
 # 复杂混合调用安全提示断言（2026-11-10）：多强命中 → split_advice=True 且 complexity_hint 非空；
@@ -969,7 +864,7 @@ def run_self_test() -> int:
     print("=" * 56)
     ok = 0
     for q, expect in SELF_TEST:
-        got = predict_tool(q) or "none"
+        got = (predict(q).get("need_tool") or "none")
         mark = "✓" if got == expect else "✗"
         if got == expect:
             ok += 1
@@ -1006,6 +901,13 @@ def run_self_test() -> int:
     for q, expect_params in PARAM_TEST:
         got_params = predict(q).get("params") or {}
         okp = all(got_params.get(k) == v for k, v in expect_params.items())
+        # 2026-11-20 根治回归：底层实现自身也必须正确，不能再靠调用方绕开。
+        # 只要任何入口直接调 `_extract_params("ct-registry", q)` 都不得拿到残片。
+        raw_params = _extract_params("ct-registry", q)
+        okp = okp and "年以来" not in (raw_params.get("cond") or "")
+        # 2026-11-20 根治回归：生成物尾段（法条名 / 限定词）绝不能污染 cond/intr
+        okp = okp and "抗肿瘤" not in (got_params.get("cond") or "")
+        okp = okp and "按限定" not in (got_params.get("intr") or "")
         # 额外防护：registry 绝不能再抽出已废弃的 "drug" 键（会导致与 required_params 失配）
         no_drug = "drug" not in got_params
         if okp and no_drug:

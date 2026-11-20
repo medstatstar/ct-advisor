@@ -40,6 +40,29 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+# ── 技能名 / 版本默认值（2026-11-18 合并自 meta-analysis 分叉）──────────────
+# 原 meta 分叉的 ^version://s*(//S+)//s*$ 中 \s* 会吞掉行尾换行，导致 $ 恒失配，
+# 线上版本恒为 unknown。改为逐行 strip + startswith，并从本技能根 SKILL.md 读取；
+# 底座单一真源即可服务全部叶子，叶子不再各写一份版本读取逻辑。
+def _read_skill_meta():
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _p = os.path.join(_root, "SKILL.md")
+    _name, _version = os.path.basename(_root), "unknown"
+    try:
+        with open(_p, "r", encoding="utf-8") as _f:
+            for _line in _f:
+                _s = _line.strip()
+                if _s.startswith("name:") and len(_s) > 5:
+                    _name = _s[5:].strip().strip('"\'') or _name
+                elif _s.startswith("version:") and len(_s) > 8:
+                    _version = _s[8:].strip().strip('"\'') or _version
+    except Exception:
+        pass
+    return _name, _version
+
+
+SKILL_NAME, SKILL_VERSION = _read_skill_meta()
+
 # ── §8.6 硬件绑定机器标识：统一从本技能 scripts/hardware_id.py 导入（ct-base 共享件 vendored 副本）──
 # 任何叶子技能复制本文件时，须配套复制 scripts/hardware_id.py。取不到时回退主机名（保证永不崩）。
 import os as _os
@@ -68,10 +91,40 @@ REPORT_SCHEMA = {
     "attempts": int,         # 同检验重试次数（1 = 首次失败）
 }
 
-# ── 统一报告端点（占位符；各技能接入时替换为真实 URL）──────────────────
-# 全库共用一个端点（§20.3.5），由作者一次性建设：接收 → 校验 → 落库 → 通知。
-DEFAULT_ENDPOINT = "https://ct-bugreport.coze.site/run"  # TODO: 替换为实际部署 URL
+# ── 统一报告端点（已发布 2026-08-21，ct-bugreport 正式域名）──────────────
+# 全库共用一个端点（§20.3.5）：接收 → 校验 → 飞书表格落库 → 通知。
+DEFAULT_ENDPOINT = "https://ct-bugreport.coze.site/run"
 AUTHOR_EMAIL = "medstatstar@gmail.com"  # §13.2 联系方式（本地兜底）
+
+# ── 端点访问 token：公共凭据（§5 公用凭据最低线 = XOR+base64 混淆内嵌）──
+# 用户授权（2026-08-21）：该 token 绑定公开端点、无个人归属，可随技能发布；
+# OBFUSCATION 非加密（密钥随脚本、可逆），仅防明文扫描/误读，不得宣称安全存储。
+# 与 ct-samplesize 同源同键（§5 全家族共用一份公共凭据）。
+_OBFUSCATION_KEY = b"ct-bugreport-coze-obf-v1-3c9e"
+_EMBEDDED_SECRETS = {
+    "ct_bugreport_coze": (
+        "Bg1nChcgEQw_BjgneBkmSytEJhEvQAJBd3AqDywOLR4sISUeKB02Cjh6MhY0V2AbLCFkDnxuA1Z3HzEeYTU4VTwhExUrI2cPNgAOHjULLBRYVFR5E1pWLh1iCz8IFi0iGBEOQhUjSCNaDjFTRxQCXV8vVCsWPUQVHD4qMxsmGARPKgQwMWAVMC1JMVlMYghJCwYyXQsjMTQSIyo7QH5THz8GHC0yPFcgSHQDWm8sD0ReKxgxRgYzJkQ7aSoXNyFkXSwMSkV_R1BWdjYUHUw1M1c7Dx8XPA5KUCIQBh8gNi8cOnJnSQduLAo7RCgPBDUJHTUfIRsvFkMNTigJE3RECBtpMAwPAR0UURdUOBcSKEscdyVWCj9qORcCahoBSGBaST8nGx4sHwRAKBoIQDpXIl83D2BaLDJsQ395dhlwDBQdTlE_DTsPHwYTIxgKDUkzWDUkX0USaX9cOwsjCS0fNA8EQ1xADUAAQQEDQxV3Kw1VYxxSH34JUlQsIHxTODM_UT4rEQNiNzYDLENfTAAYEHdXdi5dVwcaSgwEIUUQPCQ1QFkxJw0RXzkTVGE3Z3xBCQgNIEdaFTMpBC4IOj8ATyA5TlNMGjAqdxxlTEs3ZiQKBwAaFgUALkUdRTtKFScuLncLGj9iQWlXZCReKws9QlRFIR5WRCgDFmUbGSg2Zh0XEBRACXVmTnQNVwdoUww-O1E3CQobSjEWShN5DAQHewRyZH4waSQmHVw4Ig0ZUzMwNERMJSJOV1VWVjNoJGFjejB7KCkeX1sRVxopKgYeE2oTBRwEb102IHk3XB50AE43FjBlDCIAIRU1NxsseDkcOzxeOFAWQhRFGFcoU10gQXQmLTA8UD0EFxh1UiANL3gIMSheJlB1VjJTJzkwWToxMEFSICQeA0ExWjgSYRYDCmgUUkYCC3UJJDBoFjo9IlAlPjkgYCIGQ1x5XzoMWhhlWQIJFCYnOH0uAAMrHCRXBSMeBA=="
+    ),
+}
+
+
+def _obf_decode(blob: str) -> str:
+    """XOR+base64 解码（§5 公共凭据混淆的逆操作）。"""
+    import base64
+    data = base64.urlsafe_b64decode(blob.strip())
+    key = _OBFUSCATION_KEY
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data)).decode("utf-8")
+
+
+def get_endpoint_token() -> str:
+    """取 bugreport 端点访问 token（内嵌混淆 blob 解码；解析失败回退空串）。"""
+    blob = _EMBEDDED_SECRETS.get("ct_bugreport_coze")
+    if blob:
+        try:
+            return _obf_decode(blob)
+        except Exception:  # pragma: no cover
+            return ""
+    return ""
 
 # ── 内置双语文案（一次性提示走 i18n 精神：中英各一版，供 agent 原样复述）──
 _MSGS = {
@@ -105,25 +158,6 @@ _MSGS = {
     "pending_zh": "另外还需要通知您，您上一次提交的技能 bug 目前尚未完成修复，我们会尽快解决此问题。",
     "pending_en": "Also, a note: the bug you reported last time is not yet fixed — we will resolve it as soon as possible.",
 }
-
-
-def _load_bugreport_token() -> str:
-    """默认 ct-bugreport 凭据来源：adapters/coze_token_embedded.py::get_bugreport_token()。
-
-    所有 Coze 连接凭据已统一收敛到 coze_token_embedded.py（XOR+base64 混淆内嵌，见 ct-base §5）；
-    原 config/coze_token.py 已删除。读取失败回退空串，绝不抛错；
-    调用方可显式传 token 覆盖本默认。
-    """
-    import importlib.util as _ilu
-    embedded_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "coze_token_embedded.py")
-    try:
-        spec = _ilu.spec_from_file_location("coze_token_embedded_mod", embedded_path)
-        mod = _ilu.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        return getattr(mod, "get_bugreport_token", lambda: "")() or ""
-    except Exception:
-        return ""
 
 
 def _current_locale():
@@ -280,20 +314,18 @@ def send_to_endpoint(report: dict, endpoint: str = None, token: str = None,
     """POST 到统一 bug-report 端点（action=report，唯一动作；治理动作不在此实现）。返回 {status, note}。
 
     - 调用方必须先经技能既有出站授权闸门（§5）确认；
-    - token 默认来源 = adapters/coze_token_embedded.py::get_bugreport_token()（即 **ct-bugreport**
-      调用凭据，与同文件内 ct_advisor_coze 区分开）；显式传 token 则覆盖默认；
+    - token 默认取内嵌公共凭据（§5 XOR+base64），可由调用方显式覆盖（见 ct-samplesize 实装）；
     - 协议（2026-08-21 线上实测）：① 网关入口校验 `Authorization: Bearer <token>` 头（缺头 401）；
       ② 应用层 payload 也带 `token` 字段（服务端配置后校验）。两端必须一致携带。
     """
-    if token is None:
-        token = _load_bugreport_token()
     r = sanitize_report(report)
     url = endpoint or DEFAULT_ENDPOINT
+    token = token if token is not None else get_endpoint_token()
     payload = json.dumps({
         "action": "report",
         "report": r,
         "query_origin": r.get("query_origin"),
-        "token": token or "",
+        "token": token,
         "ts": datetime.now(timezone.utc).isoformat(),
     }, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=payload, method="POST", headers={

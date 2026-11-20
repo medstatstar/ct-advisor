@@ -73,7 +73,7 @@ from adapters import build_refiner, RefineRequest, RefineResult, MissingDependen
 from scripts.i18n import t  # noqa: E402  (user-facing prompts EN/ZH, locale-resolved)
 # 复用入口预判（模式 B 前端高置信预取）：--ship 的 need_tool 分支用其补全真实参数，
 # 避免纯 --ship 路径下任意 need_tool 都 100% 落到 need_params（Coze 仅判类别、不抽真实入参）。
-from route_tool import (predict as _predict_tool, suggest_footer,  # noqa: E402
+from route_tool import (predict as _predict, suggest_footer,  # noqa: E402
                         complexity_hint_text, complexity_hint_prefix,
                         has_complexity_hint)
 
@@ -333,7 +333,7 @@ def _complexity_prefix_from_q(question: str, lang: str = "zh-CN",
     字段，也不依赖 _merge_answer 是否执行**。返回空串表示非复杂混合调用。
     """
     try:
-        pred = _predict_tool(question)
+        pred = _predict(question)
         tools = (pred.get("need_tools") or []) if isinstance(pred, dict) else []
     except Exception:  # noqa: BLE001
         tools = []
@@ -502,10 +502,10 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
                      "protocols / subject data; never send those materials to public endpoints.")
         extra = _render_deferred_cards(tool_out, lang)
         back = _stitch_hint(zh)
+        # 2026-11-19 用户裁定：handoff 卡不输出转介句/命令行/Web 入口（内部指令）。
+        # mention 形如 "@skill:ct-registry"，仅作为可调用入口展示，不展开技术细节。
         if zh:
             return (f"{coze_answer}\n\n---\n\n## 可直接调用：{mention}\n\n"
-                    f"该技能已在本机注册，客户端可直接调用；ct-advisor 不再代跑 CLI，"
-                    f"以免只拿到速览摘要。\n"
                     f"{p_line}"
                     f"- 已识别参数：{param_txt}\n"
                     f"{d_line}"
@@ -513,9 +513,6 @@ def _merge_answer(coze_answer: str, tool_out: dict, lang: str = "zh-CN") -> str:
                     f"以上为本技能按自身能力给出的方法学回答；真实数据、可复算结果与文件"
                     f"请以上述技能的实际输出为准。") + extra + back
         return (f"{coze_answer}\n\n---\n\n## Invoke directly: {mention}\n\n"
-                f"This skill is registered locally and can be called from the client; "
-                f"ct-advisor does not run its CLI on your behalf, so you get the full "
-                f"deliverable instead of a brief summary.\n"
                 f"{p_line}"
                 f"- Params identified: {param_txt}\n"
                 f"{d_line}"
@@ -1172,17 +1169,20 @@ def main() -> None:
             # 用本地 route_tool 预判补全真实参数（cond/drug/topic/test/p1/p2），覆盖 Coze 默认值，
             # 使「代码跳过大模型」在 need_tool 场景也成立——避免任意 need_tool 都 100% 弹参数追问。
             params = dict(result.params or {})
-            pred = _predict_tool(req.original_question)
+            pred = _predict(req.original_question)
             if pred.get("need_tool") == need_tool:
                 for k, v in (pred.get("params") or {}).items():
                     if v not in (None, ""):
                         params.setdefault(k, v)
-            # 2026-11-09：ship 路径也要带上混合技能列表（Coze 侧 + 本地预判），
-            # 否则「代码跳过大模型」的直缝路径同样只剩单一技能卡片。
+            # 2026-11-20 用户裁定：工具调用判断冲突时一律以 Coze 为准，本地预判
+            # 只是方便操作的兜底。Coze 给了 need_tools → 纯取 Coze（+主技能）；
+            # Coze 无判断 → 才用本地预判 need_tools 兜底。旧逻辑（11-09）无条件
+            # 合并两路会让本地技能混入 Coze 判断，违反裁定，已收紧。
+            from orchestrate import resolve_need_tools  # 延迟导入，避免顶层循环
+            _pool = resolve_need_tools(
+                getattr(result, "need_tools", None), pred.get("need_tools"))
             mixed_tools = list(dict.fromkeys(
-                list(getattr(result, "need_tools", None) or [])
-                + list(pred.get("need_tools") or [])
-                + ([need_tool] if need_tool else [])))
+                _pool + ([need_tool] if need_tool else [])))
             card = {
                 "need_tool": need_tool,
                 "need_tools": mixed_tools,
@@ -1251,7 +1251,7 @@ def main() -> None:
         # 未自动调用任何兄弟技能、但问题与某技能沾边（弱命中 / 咨询意图）时，
         # 在最终答案**最末**追加一行软建议；不阻断、不改写答案。
         if not need_tool:
-            _st = (_predict_tool(req.original_question).get("suggest_tools") or [])
+            _st = (_predict(req.original_question).get("suggest_tools") or [])
             if _st:
                 merged = merged + suggest_footer(
                     _st, lang=_detect_lang(req.original_question))

@@ -89,6 +89,7 @@ out_live/
 # publish_inject 注入副产物（§16.8：注入时自动备份被覆盖文件 + 写入 .ctbase_injected.json 清单，
 # 均为本地安全副产物，发布前须剔除；发布后可用 publish_inject.py --clean 清理）
 .ctbase_injected.json
+.ctbase_refs_injected.json
 *.ctbase_bak_*
 
 # ── 开发者笔记，不进发布包 ──
@@ -166,3 +167,7 @@ docs/zhihu_scraping_feasibility_*.md
 # ── 运行态会话缓存（2026-11-04 修正 git add -A 误纳入）──
 # session_store.json.tmp 是本地答案缓存，不入版本库。
 *.tmp
+
+# ── 确认菜单 pending token（2026-11-20 发布前补 F20/F26）──
+# 每次多选确认落盘的临时 state，24h TTL 自动清理，运行态产物绝不入发布包。
+_pending/

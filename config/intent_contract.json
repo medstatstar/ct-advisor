@@ -18,11 +18,11 @@
   "decision_table": [
     {"consult": true, "exec": false, "verdict": "L1 咨询", "action": "不下发 need_tool；Coze 端点 KB（ref-topic-*）生成方法学答案；query_meta.domain_hint 传 domain（严禁写 scope_hint，后者会触发「可能超出覆盖范围」错误声明）；答案末尾可给 @skill 软建议"},
     {"consult": true, "exec": true, "verdict": "混合", "action": "2026-11-10 P0-1：仍下发 exec 工具的 need_tool（handoff 卡）；advisor 答原理（Coze KB 生成方法学答案）经 orchestrate 与 handoff 卡合并共存——原理不被吞掉、实际计算/检索也不丢失。旧策略（整体降级为软建议）已弃用。"},
-    {"consult": false, "exec": true, "verdict": "L2 执行", "action": "维持现有 handoff / need_tool 路径"},
+    {"consult": false, "exec": true, "verdict": "L2 执行", "action": "维持现有 handoff / need_tool 路径。2026-11-18 Plan 驱动：云端 tool_router 命中多个 A 档白名单技能且可编排时，改输出 plan（≤5 步）而非单 need_tool；本地 plan_runner 纯代码校验执行、二次 Coze 综合。plan 契约真相源见 config/plan_contract.json；能否直接回答由云端 full_analysis 先判——能答直答（plan 缺省 []），答不了才出 plan。"},
     {"consult": false, "exec": false, "verdict": "现有护栏", "action": "DEF / METHOD / DOC 与词表规则照旧"}
   ],
   "boundary": {
-    "hard_gate": "意图判定全部由代码完成；答案仍由 Coze 产出、经 entry.py 单一出口；本地 LLM 仍只跑一条命令并原样透传 stdout。",
+    "hard_gate": "意图判定全部由代码完成；答案仍由 Coze 产出、经 entry.py 单一出口；本地 LLM 仍只跑一条命令并原样透传 stdout。2026-11-18 Plan 分支：plan 由云端产出、本地代码校验执行、二次 Coze 综合，本地 LLM 仍零决策。",
     "f33": "L1/L2 只发公开方法学问题或公开检索词；L3 只允许字段白名单内的脱敏数值摘要外发，原始产物 / 方案 / 受试者数据绝不出域。",
     "anti_hallucination": "咨询答案不得出现具体试验数、PRR 值、样本量结果，除非用户已通过 entry.py --stitch 回填产物。",
     "regression": "route_tool 37/37 + 13/13 + 6/6、test_tool_router 63/63、test_cloud_brief 53/53、跨技能 28/15/13/14、线上 canary 18/18 必须全绿。"

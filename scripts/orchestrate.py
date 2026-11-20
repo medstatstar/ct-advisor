@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import threading
@@ -101,8 +102,8 @@ def _enrich_coze_params(orig_q: str, coze_tool: str | None, coze_params: dict) -
     """
     if not coze_tool:
         return dict(coze_params)
-    from route_tool import predict as predict_tool  # 函数级 from-import 仅绑定本函数局部，兄弟函数需各自导入
-    pred = predict_tool(orig_q)
+    from route_tool import predict as _predict  # 函数级 from-import 仅绑定本函数局部，兄弟函数需各自导入
+    pred = _predict(orig_q)
     if pred.get("need_tool") != coze_tool:
         return dict(coze_params)
     out = dict(coze_params)
@@ -267,6 +268,75 @@ def _fire_prefetch(card: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Plan 驱动两阶段（2026-11-18，D1 默认开启）
+# ---------------------------------------------------------------------------
+
+def _plan_enabled() -> bool:
+    """Plan 机制开关：默认开启，仅显式 CT_ADVISOR_PLAN=0/false/no/off 关闭。"""
+    val = os.environ.get("CT_ADVISOR_PLAN", "").strip().lower()
+    return val not in ("0", "false", "no", "off")
+
+
+def _run_plan_and_assemble(req, coze_result, config_path, prefetch_params,
+                           orig_q, need_tools):
+    """执行 plan + 二次 Coze 综合；返回二次 RefineResult，或 None 表示不走 Plan。
+
+    触发条件：plan 非空 且 开关开启 且 主 Coze 无错误通道（错误通道由 build_output
+    渲染，不在此叠加）。任何异常都不伪造答案——抛给调用方按硬失败处理，
+    与「Coze 不通直接失败、无本地兜底」的口径一致。
+    """
+    plan = getattr(coze_result, "plan", None) or []
+    if not plan or not _plan_enabled():
+        return None
+    # 主 Coze 已挂错误通道 → 不叠加 Plan（避免把错误答案拿去综合）
+    for attr in ("dependency_error", "connection_error", "internal_error"):
+        if getattr(coze_result, attr, None):
+            return None
+
+    from adapters import plan_runner, plan_assemble_local  # 延迟导入，自测零重依赖
+    # 用本地 route_tool 预判参数补齐 prefill 步骤（多技能已抽全，见 STEP 1）
+    prefill_map = {}
+    if need_tools:
+        for sk in need_tools:
+            prefill_map[sk] = prefetch_params if isinstance(prefetch_params, dict) else {}
+    card = {
+        "need_tool": getattr(coze_result, "need_tool", None),
+        "need_tools": need_tools or [],
+        "params": prefetch_params or {},
+        "original_question": orig_q,
+        "query_origin": (req.query_meta or {}).get("query_origin", ""),
+        "locale": (req.query_meta or {}).get("user_language", "zh-CN"),
+    }
+    plan_results = plan_runner.run_plan(plan, card=card, prefill_map=prefill_map)
+    sys.stderr.write("[ct-advisor] plan executed: %d steps, statuses=%s\n" % (
+        len(plan_results), [r.get("status") for r in plan_results]))
+    # D4'（2026-11-20）：默认本地顺序陈列（零 LLM/零出域）；mode=cloud_second_call
+    # 或 env CT_ADVISOR_ASSEMBLE=cloud 统一入口内部自动回滚到原二次 Coze 综合。
+    # 本路径仅在 Coze 给了 plan 时触发（plan 非空守卫），权威源恒为 Coze
+    return plan_assemble_local.assemble(req, config_path, plan_results,
+                                        authoritative="cloud")
+
+
+# ---------------------------------------------------------------------------
+# 工具调用判断仲裁（2026-11-20 用户裁定：Coze 远端为准）
+# ---------------------------------------------------------------------------
+
+def resolve_need_tools(coze_tools: list | None, local_tools: list | None) -> list:
+    """两套工具调用判断冲突时以 Coze 为准；本地预判仅作便利兜底。
+
+    - Coze 有明确技能判断（need_tools 非空）→ 纯取 Coze，本地不追加、不混入；
+    - Coze 无判断 → 用本地 route_tool 预判 need_tools 兜底（避免只回散文时停摆）。
+
+    与 confirm_menu.reconcile_candidates 同口径。纯函数、零副作用，可离线自测。
+    orchestrate.build_output 与 refine_answer ship 路径共用本函数，防两处漂移。
+    """
+    coze = [str(s) for s in (coze_tools or []) if s]
+    if coze:
+        return list(dict.fromkeys(coze))
+    return list(dict.fromkeys(str(s) for s in (local_tools or []) if s))
+
+
+# ---------------------------------------------------------------------------
 # 核心决策：合并 + 判定信息是否足够（纯代码，无 LLM）
 # ---------------------------------------------------------------------------
 
@@ -324,12 +394,13 @@ def build_output(orig_q: str, coze_result: RefineResult,
     from route_tool import suggest_footer
     coze_answer = coze_result.final_answer or ""
     coze_tool = coze_result.need_tool
-    # 2026-11-09 主流程修复：混合技能列表有两个来源 —— 本地预判 need_tools 与
-    # Coze 侧 RefineResult.need_tools（云端 tool_router 的多技能命中）。
-    # 任一来源单独缺失时另一路仍要能补齐，故在此合并去重后统一向下传递。
-    _coze_tools = list(getattr(coze_result, "need_tools", None) or [])
-    if _coze_tools:
-        need_tools = list(dict.fromkeys(list(need_tools or []) + _coze_tools))
+    # 2026-11-20 用户裁定：两套工具调用判断（本地 route_tool 预判 vs Coze 远端）
+    # 冲突时一律以 Coze 为准，本地预判只是「方便操作」的快捷兜底，不得混入 Coze 判断。
+    # 与 confirm_menu.reconcile_candidates 同口径：Coze 有明确技能判断 → 纯取 Coze；
+    # Coze 无判断 → 才用本地预判 need_tools 兜底（如 v1.77 只回散文的场景）。
+    # 旧逻辑（11-09）无条件合并两路，会让本地技能混入 Coze 结果，违反该裁定，已收紧。
+    need_tools = resolve_need_tools(
+        getattr(coze_result, "need_tools", None), need_tools)
     # P2 修复（2026-08-15）：对 Coze 判定工具做本地 route_tool 参数富集，
     # 避免「Coze 需不同工具」分支(2c)委托时只带 Coze 默认值、再弹一轮 need_params。
     coze_params = _enrich_coze_params(orig_q, coze_tool, coze_result.params or {})
@@ -533,11 +604,71 @@ def _build_request(raw: str) -> RefineRequest:
     return req
 
 
+def _emit_confirm_menu(req, coze_result, candidates: list, prefetch_params,
+                       orig_q: str, config_path: str,
+                       local_need_tools=None, authoritative="local_fallback") -> str:
+    """阶段1：落盘待确认状态 + 输出「正文 + 菜单标记块」，不执行任何技能。
+
+    - single：正文 = 首趟 Coze 初步答案（用户先看，再决定是否补调工具）；
+    - multi ：正文 = 引导语（首趟 Coze 未生成答案，直接弹多选）。
+    🔴 本函数在用户勾选前绝不调用 plan_runner / 二次 Coze；任何执行都等 resume。
+
+    2026-11-20 来源分流：local_need_tools = 本地 route_tool 预判命中的技能。
+    据此给每个 plan step 标 origin：本地预判命中且不在云端 plan 的 → local（走本地
+    脚本）；云端 plan 产出的 → cloud（原样走远端端点）。执行端按 origin 分流。
+    """
+    from adapters import confirm_menu as cm
+    mode = cm.mode_of(getattr(coze_result, "plan", None), candidates)
+    params_by_skill = {s: (prefetch_params if isinstance(prefetch_params, dict) else {})
+                       for s in candidates}
+    cloud_plan = getattr(coze_result, "plan", None) or []
+    cloud_skills = {s.get("skill") for s in cloud_plan if isinstance(s, dict)}
+    # 2026-11-20 用户裁定：两套标准不一致时以 Coze 为准。
+    # authoritative=cloud → Coze 已给明确判断，候选纯来自 Coze，全部标 cloud
+    #   （走远端端点，最终结果 = Coze 端返回），本地预判一律不介入。
+    # authoritative=local_fallback → Coze 只回散文无判断，本地预判兜底标 local。
+    if authoritative == "cloud":
+        origin_of = {s: "cloud" for s in candidates}
+    else:
+        origin_of = {s: ("local" if s in set(local_need_tools or [])
+                         and s not in cloud_skills else "cloud") for s in candidates}
+    plan = cm.normalize_plan(cloud_plan, candidates, params_by_skill, origin_of)
+    # 重建 req（run_orchestrate 内的 req 就是 RefineRequest，直接取字段落盘）
+    qm = dict(getattr(req, "query_meta", None) or {})
+    state = {
+        "candidates": candidates,
+        "mode": mode,
+        "plan": plan,
+        "authoritative": authoritative,  # 2026-11-20：Coze 为准仲裁的权威源
+        "query_meta": qm,
+        "original_question": orig_q,
+        "draft_answer": getattr(coze_result, "final_answer", "") or "",
+        "prefetch_params": prefetch_params or {},
+        "conversation_history": list(getattr(req, "conversation_history", None) or []),
+        "is_followup": bool(getattr(req, "is_followup", False)),
+        "scope_hint": getattr(req, "scope_hint", "") or "",
+        "config_path": config_path,
+    }
+    token = cm.save_pending(state)
+    payload = cm.build_menu_payload(token, mode, orig_q, candidates)
+    block = cm.render_menu_block(payload)
+    # 2026-11-19 用户裁定：菜单前只给简洁选择提示。
+    # 转介句 / 快速命令行属 agent 内部指令，不输出给用户。
+    # 2026-11-20 用户裁定：Single/Multi 菜单文字统一附「快捷参考（非完整结果）」说明，
+    # 单一真源取 cm.menu_question()，避免两处文案漂移。
+    body = cm.menu_question(mode, candidates)
+    if mode == "single":
+        draft = (getattr(coze_result, "final_answer", "") or "").strip()
+        if draft:
+            body = draft + "\n\n---\n\n" + body
+    return body + "\n\n" + block
+
+
 def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> str:
     # 性能修复（L2, 2026-09-25）：在启动 Coze 线程前于主线程预预热全部重模块，使
     # _fire_coze 线程内的延迟导入变为 sys.modules 缓存命中，Coze 网络调用可立即发起，
     # 不再把 ~8s 的重模块导入串行排在 Coze 等待窗口之外（常驻服务 L1 下此处为缓存命中）。
-    from route_tool import predict as predict_tool, suggest_footer  # noqa: F401
+    from route_tool import predict as _predict, suggest_footer  # noqa: F401
     from adapters import build_refiner, RefineResult  # noqa: F401
     import refine_answer  # noqa: F401
     import handle_need_tool  # noqa: F401
@@ -565,7 +696,7 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
         _ck = ""
 
     # 1) 前端高置信预判（模式 B 预取）—— 仅高置信才触发，漏判由 Coze 兜底
-    pred = predict_tool(orig_q) if not no_prefetch else {"need_tool": None, "params": {}}
+    pred = _predict(orig_q) if not no_prefetch else {"need_tool": None, "params": {}}
     prefetch_tool = pred.get("need_tool")
     prefetch_params = pred.get("params") or {}
     # 2026-08-21：多源问题保留全部命中（need_tools），缝合主源后提示其余工具
@@ -651,6 +782,82 @@ def run_orchestrate(raw: str, config_path: str, no_prefetch: bool = False) -> st
 
     for t in threads:
         t.join()
+
+    # 2026-11-19 用户确认菜单（两阶段）：命中技能不再自动执行，改为先显示初步答案 /
+    # 直接出菜单，交由用户勾选后才 resume 执行。direct（0 技能）与开关关闭 → 原路径。
+    _cr = coze_result[0]
+    # v1.77：vague 判定上移云端。云端 plan_gate 命中 vague 时走 clarify 路由，
+    # final_answer 为空 + message 带「需要澄清以下问题」——本地零判定，只按约定渲染。
+    _msg = getattr(_cr, "message", None) if _cr is not None else None
+    _msg_text = str((_msg or {}).get("text") or "") if isinstance(_msg, dict) else str(_msg or "")
+    # v1.77 修正：云端 clarify 时会**同时**生成一段兜底 final_answer（fa_len>0），
+    # 故不能要求 final_answer 为空。只要 message 明确是澄清指令，就优先渲染澄清、
+    # 丢弃云端顺带的兜底答案——否则本地零判定形同虚设（实测 3 个 vague 问题全走兜底）。
+    if _msg_text and "需要澄清以下问题" in _msg_text:
+        sys.stderr.write("[ct-advisor] 云端 clarify 路由 → 渲染澄清问题，忽略云端兜底答案（本地零判定）\n")
+        return _finalize(_msg_text)
+
+    if _cr is not None and not any(
+            getattr(_cr, attr, None)
+            for attr in ("dependency_error", "connection_error", "internal_error")):
+        try:
+            from adapters import confirm_menu as _cm
+            if _cm.confirm_enabled():
+                # 2026-11-20 用户裁定：两套判断标准（Coze plan vs 本地预判）
+                # 不一致时一律以 Coze 为准。reconcile_candidates 做仲裁：
+                #   · Coze 有结构化判断(plan/need_tools/need_tool) → 候选纯取 Coze，
+                #     本地预判不追加；执行全走 Coze 端(origin=cloud)，输出即 Coze 结果。
+                #   · Coze 无判断(只回散文) → 本地预判兜底(origin=local)，
+                #     避免 v1.77「信迪利单抗肝癌」类问题停在 handoff 半成品。
+                _cands, _authoritative = _cm.reconcile_candidates(
+                    getattr(_cr, "plan", None),
+                    getattr(_cr, "need_tools", None),
+                    getattr(_cr, "need_tool", None),
+                    need_tools)
+                if _cands:
+                    out = _emit_confirm_menu(
+                        req, _cr, _cands, prefetch_params, orig_q, config_path,
+                        local_need_tools=need_tools, authoritative=_authoritative)
+                    sys.stderr.write(
+                        "[ct-advisor] 确认菜单已输出：mode=%s 候选=%s（等用户勾选后 resume）\n"
+                        % (_cm.mode_of(getattr(_cr, "plan", None), _cands), _cands))
+                    # 菜单态禁入答案缓存（标记块不是最终答案，缓存会跳过交互）
+                    return _finalize(out)
+        except Exception as e:  # noqa: BLE001 落盘/渲染失败 → 硬失败，不静默自动执行
+            sys.stderr.write("[ct-advisor][CONFIRM-FAIL] %s: %s\n" % (type(e).__name__, e))
+            from adapters import RefineResult as _RR
+            _err_res = _RR(final_answer="", need_tool=None)
+            _err_res.internal_error = (
+                "⚠️ 技能确认菜单生成失败（%s: %s），为安全起见未自动执行任何技能调用。\n"
+                "请稍后重试；本技能不会在未经你确认的情况下取数。" % (type(e).__name__, e))
+            coze_result[0] = _err_res
+            prefetch_out[0] = None
+
+    # 2026-11-18 Plan 驱动两阶段（自动执行兜底路径：CT_ADVISOR_CONFIRM=0 或 confirm 未命中）：
+    # Coze 判「答不了」才返回 plan；本地按 plan 调端点，默认本地顺序陈列（D4'，cloud 回滚
+    # 时走二次 Coze 综合）出最终答案。
+    try:
+        _assembled = _run_plan_and_assemble(
+            req, coze_result[0], config_path, prefetch_params, orig_q, need_tools)
+        if _assembled is not None:
+            coze_result[0] = _assembled
+            # plan 已闭环 → 清掉预取 handoff 卡，避免最终答案与 handoff 双份
+            prefetch_out[0] = None
+            prefetch_tool = None
+    except Exception as e:  # noqa: BLE001
+        # plan 执行 / 结果陈列失败 = 硬失败通道（无半成品兜底，口径同首次 Coze）。
+        # 挂 internal_error 交 build_output 渲染，绝不把草稿伪装成最终答案。
+        from adapters import RefineResult as _RR, emit_err_signal as _emit
+        _emit("PLAN_ASSEMBLE_FAIL", detail="%s: %s" % (type(e).__name__, e))
+        sys.stderr.write("[ct-advisor][PLAN-FAIL] %s: %s\n" % (type(e).__name__, e))
+        _err_res = _RR(final_answer="", need_tool=None)
+        _err_res.internal_error = (
+            "⚠️ Plan 执行或结果陈列失败，无法返回可靠答案。\n\n"
+            "本次问题的多步取数已触发，但结果整理环节出错（%s: %s）。\n"
+            "请稍后重试；本技能不做半成品兜底。"
+            % (type(e).__name__, e))
+        coze_result[0] = _err_res
+        prefetch_out[0] = None
 
     out = build_output(orig_q, coze_result[0], prefetch_out[0], prefetch_tool,
                        prefetch_params, need_tools=need_tools,
@@ -775,7 +982,23 @@ def run_self_test() -> int:
     print(f"  {'✓' if sug_ok else '✗'} [{'OK' if sug_ok else 'BADFMT'}] 软建议：先作答 + 末尾建议 ct-samplesize")
     ok += 1 if sug_ok else 0
 
-    total = len(SELF_TEST) + 1
+    # 2026-11-20 用户裁定防回归：工具调用判断冲突一律以 Coze 为准，本地仅兜底
+    _arb_cases = [
+        (resolve_need_tools(["ct-registry"], ["ct-safety"]), ["ct-registry"],
+         "冲突→纯 Coze，本地不混入"),
+        (resolve_need_tools([], ["ct-safety", "ct-registry"]),
+         ["ct-safety", "ct-registry"], "Coze 无判断→本地兜底"),
+        (resolve_need_tools(["ct-registry", "ct-safety"], ["ct-literature"]),
+         ["ct-registry", "ct-safety"], "Coze 明确判断→本地不追加"),
+    ]
+    _arb_ok = 0
+    for _got, _want, _desc in _arb_cases:
+        _pass = _got == _want
+        _arb_ok += 1 if _pass else 0
+        print(f"  {'✓' if _pass else '✗'} [{'OK' if _pass else 'BADFMT'}] 仲裁：{_desc}")
+    ok += _arb_ok
+
+    total = len(SELF_TEST) + 1 + len(_arb_cases)
     print("-" * 60)
     print(f"  准确率: {ok}/{total} = {ok / total * 100:.1f}%")
     return 0 if ok == total else 1
